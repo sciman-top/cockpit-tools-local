@@ -47,8 +47,8 @@
     }
   },
   "bundle": {
-    "active": true,
-    "targets": "all",
+    "active": false,
+    "targets": ["nsis"],
     "createUpdaterArtifacts": false,
     "icon": [
       "icons/48x48.png",

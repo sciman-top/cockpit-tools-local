@@ -2724,38 +2724,10 @@ fn resolve_subscription_expiry_ms(account: &CodexAccount) -> Option<i64> {
         .map(|parsed| parsed.timestamp_millis())
 }
 
-fn is_local_access_fallback_candidate(account: &CodexAccount) -> bool {
-    if account.requires_reauth || account.is_api_key_auth() {
-        return false;
-    }
-    let Some(quota) = account.quota.as_ref() else {
-        return false;
-    };
-    let hourly_available =
-        !quota.hourly_window_present.unwrap_or(true) || quota.hourly_percentage > 0;
-    let weekly_available =
-        !quota.weekly_window_present.unwrap_or(true) || quota.weekly_percentage > 0;
-    hourly_available && weekly_available
-}
-
 fn build_effective_local_access_account_ids(
     collection: &CodexLocalAccessCollection,
 ) -> Vec<String> {
-    let mut account_ids = collection.account_ids.clone();
-    if !collection.follow_current_account {
-        return account_ids;
-    }
-
-    let mut seen: HashSet<String> = account_ids.iter().cloned().collect();
-    for account in codex_account::list_accounts() {
-        if !is_local_access_fallback_candidate(&account) {
-            continue;
-        }
-        if seen.insert(account.id.clone()) {
-            account_ids.push(account.id);
-        }
-    }
-    account_ids
+    collection.account_ids.clone()
 }
 
 fn build_routing_candidates(ordered_account_ids: &[String]) -> Vec<RoutingCandidate> {
@@ -4036,6 +4008,7 @@ pub async fn save_local_access_accounts(
         }
         if seen.insert(account_id.clone()) {
             next_account_ids.push(account_id);
+            break;
         }
     }
 
