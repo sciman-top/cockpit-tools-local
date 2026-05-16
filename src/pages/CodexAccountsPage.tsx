@@ -4436,7 +4436,7 @@ export function CodexAccountsPage() {
             nextRuntimeMode.mode === "gateway_litellm"
               ? t(
                   "codex.localAccess.runtimeModeGatewaySuccess",
-                  "已切换为 LiteLLM Gateway 模式",
+                  "已切换为 Cockpit API 服务模式",
                 )
               : t(
                   "codex.localAccess.runtimeModeDirectSuccess",

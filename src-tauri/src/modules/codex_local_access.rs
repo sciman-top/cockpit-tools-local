@@ -30,7 +30,6 @@ const CODEX_LOCAL_ACCESS_STATS_FILE: &str = "codex_local_access_stats.json";
 const CODEX_RUNTIME_MODE_FILE: &str = "codex_runtime_mode.json";
 const CODEX_LOCAL_ACCESS_BIND_HOST: &str = "127.0.0.1";
 const CODEX_LOCAL_ACCESS_URL_HOST: &str = "127.0.0.1";
-const CODEX_LITELLM_GATEWAY_BASE_URL: &str = "http://127.0.0.1:4000/v1";
 const LITELLM_GATEWAY_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_HTTP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
@@ -394,40 +393,6 @@ fn repair_runtime_projection_history_visibility() -> Result<(), String> {
     Ok(())
 }
 
-async fn assert_litellm_gateway_ready(api_key: &str) -> Result<(), String> {
-    let models_url = format!(
-        "{}/models",
-        CODEX_LITELLM_GATEWAY_BASE_URL.trim_end_matches('/')
-    );
-    let client = Client::builder()
-        .timeout(LITELLM_GATEWAY_HEALTH_TIMEOUT)
-        .no_proxy()
-        .build()
-        .map_err(|e| format!("创建 LiteLLM gateway 健康检查客户端失败: {}", e))?;
-
-    let response = client
-        .get(&models_url)
-        .bearer_auth(api_key)
-        .send()
-        .await
-        .map_err(|e| {
-            format!(
-                "LiteLLM gateway 未就绪，无法访问 {}: {}。已保留 Direct Projection；请先启动 LiteLLM Gateway 后再切换。",
-                models_url, e
-            )
-        })?;
-
-    if !response.status().is_success() {
-        return Err(format!(
-            "LiteLLM gateway 健康检查失败: {} -> {}。已保留 Direct Projection；请先修复 Gateway 后再切换。",
-            models_url,
-            response.status()
-        ));
-    }
-
-    Ok(())
-}
-
 async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(), String> {
     let models_url = format!("http://{CODEX_LOCAL_ACCESS_URL_HOST}:{port}/v1/models");
     let client = Client::builder()
@@ -443,14 +408,14 @@ async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(
         .await
         .map_err(|e| {
             format!(
-                "Cockpit local access 未就绪，无法访问 {}: {}。已保留 Direct Projection；请先修复本地接入后再切换 LiteLLM Gateway。",
+                "Cockpit local access 未就绪，无法访问 {}: {}。已保留 Direct Projection；请先修复本地接入后再切换 API 服务模式。",
                 models_url, e
             )
         })?;
 
     if !response.status().is_success() {
         return Err(format!(
-            "Cockpit local access 健康检查失败: {} -> {}。已保留 Direct Projection；请先修复本地接入后再切换 LiteLLM Gateway。",
+            "Cockpit local access 健康检查失败: {} -> {}。已保留 Direct Projection；请先修复本地接入后再切换 API 服务模式。",
             models_url,
             response.status()
         ));
@@ -462,24 +427,28 @@ async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(
 async fn materialize_gateway_litellm_projection() -> Result<(), String> {
     let current_account_id = codex_account::get_current_account()
         .map(|account| account.id)
-        .ok_or_else(|| "未找到当前 Codex 账号，无法切到 LiteLLM gateway 模式".to_string())?;
+        .ok_or_else(|| "未找到当前 Codex 账号，无法切到 API 服务模式".to_string())?;
     let state = save_local_access_accounts(vec![current_account_id], false).await?;
     let api_key = state
         .collection
         .as_ref()
         .map(|collection| collection.api_key.clone())
-        .ok_or_else(|| "API 服务集合尚未创建，无法写入 LiteLLM gateway 投影".to_string())?;
-    assert_litellm_gateway_ready(&api_key).await?;
+        .ok_or_else(|| "API 服务集合尚未创建，无法写入 API 服务投影".to_string())?;
     let _ = set_local_access_follow_current_account(true).await?;
     let enabled_state = set_local_access_enabled(true).await?;
-    let enabled_collection = enabled_state.collection.as_ref().ok_or_else(|| {
-        "Cockpit local access 集合尚未创建，无法写入 LiteLLM gateway 投影".to_string()
-    })?;
+    let enabled_collection = enabled_state
+        .collection
+        .as_ref()
+        .ok_or_else(|| "Cockpit local access 集合尚未创建，无法写入 API 服务投影".to_string())?;
     if !enabled_state.running {
-        return Err("Cockpit local access 未启动，已保留 Direct Projection；请先修复本地接入后再切换 LiteLLM Gateway。".to_string());
+        return Err("Cockpit local access 未启动，已保留 Direct Projection；请先修复本地接入后再切换 API 服务模式。".to_string());
     }
     assert_cockpit_local_access_ready(&api_key, enabled_collection.port).await?;
-    let runtime_account = build_litellm_gateway_runtime_account(api_key);
+    let base_url = enabled_state
+        .base_url
+        .clone()
+        .unwrap_or_else(|| build_base_url(enabled_collection.port));
+    let runtime_account = build_runtime_account(base_url, api_key);
     codex_account::write_account_bundle_to_dir(&codex_account::get_codex_home(), &runtime_account)?;
     crate::modules::codex_instance::update_default_settings(None, None, Some(true), None)?;
     repair_runtime_projection_history_visibility()?;
@@ -3281,20 +3250,6 @@ fn build_runtime_account(base_url: String, api_key: String) -> CodexAccount {
         Some("Codex API Service".to_string()),
     );
     runtime_account.account_name = Some("API Service".to_string());
-    runtime_account
-}
-
-fn build_litellm_gateway_runtime_account(api_key: String) -> CodexAccount {
-    let mut runtime_account = CodexAccount::new_api_key(
-        "codex_litellm_gateway_runtime".to_string(),
-        "litellm-gateway-local".to_string(),
-        api_key,
-        CodexApiProviderMode::Custom,
-        Some(CODEX_LITELLM_GATEWAY_BASE_URL.to_string()),
-        Some("litellm_gateway".to_string()),
-        Some("LiteLLM Gateway".to_string()),
-    );
-    runtime_account.account_name = Some("LiteLLM Gateway".to_string());
     runtime_account
 }
 
