@@ -627,7 +627,7 @@ export function CodexLocalAccessModal({
         },
         {
           value: 'gateway_litellm',
-          label: t('codex.localAccess.runtimeMode.gateway', 'LiteLLM Gateway'),
+          label: t('codex.localAccess.runtimeMode.gateway', 'Cockpit API Service'),
         },
       ],
     [t],
@@ -800,7 +800,7 @@ export function CodexLocalAccessModal({
         await onSetRuntimeMode(nextMode as CodexRuntimeIntegrationMode);
       },
       nextMode === 'gateway_litellm'
-        ? t('codex.localAccess.runtimeModeGatewaySuccess', '已切换为 LiteLLM Gateway 模式')
+        ? t('codex.localAccess.runtimeModeGatewaySuccess', '已切换为 Cockpit API Service 模式')
         : t('codex.localAccess.runtimeModeDirectSuccess', '已切换为 Direct API/OAuth 模式'),
     );
   };

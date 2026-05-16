@@ -4835,13 +4835,13 @@ requires_openai_auth = false
     }
 
     #[test]
-    fn api_key_config_toml_sets_cockpit_current_model_for_litellm_gateway() {
-        let base_dir = make_temp_dir("codex-api-key-config-litellm-gateway-test");
+    fn api_key_config_toml_sets_cockpit_current_model_for_api_service() {
+        let base_dir = make_temp_dir("codex-api-key-config-api-service-test");
         let provider_config = resolve_api_provider_config(
             Some("http://127.0.0.1:4000/v1/"),
             Some(CodexApiProviderMode::Custom),
             Some("litellm_gateway"),
-            Some("LiteLLM Gateway"),
+            Some("Cockpit API Service"),
         )
         .expect("resolve provider config");
 
