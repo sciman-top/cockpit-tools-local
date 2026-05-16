@@ -2964,10 +2964,14 @@ fn build_auth_file_value(account: &CodexAccount) -> Result<serde_json::Value, St
     if account.is_api_key_auth() {
         let api_key = normalize_optional_ref(account.openai_api_key.as_deref())
             .ok_or("API Key 账号缺少 OPENAI_API_KEY")?;
-        return Ok(serde_json::json!({
+        let mut auth_file = serde_json::json!({
             "auth_mode": API_KEY_AUTH_MODE,
             "OPENAI_API_KEY": api_key,
-        }));
+        });
+        if let Some(base_url) = normalize_optional_ref(account.api_base_url.as_deref()) {
+            auth_file["base_url"] = serde_json::Value::String(base_url.to_string());
+        }
+        return Ok(auth_file);
     }
 
     if account.tokens.id_token.trim().is_empty() || account.tokens.access_token.trim().is_empty() {

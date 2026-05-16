@@ -425,9 +425,9 @@ async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(
 }
 
 async fn materialize_gateway_litellm_projection() -> Result<(), String> {
-    let current_account_id = codex_account::get_current_account()
-        .map(|account| account.id)
+    let current_account = codex_account::get_current_account()
         .ok_or_else(|| "未找到当前 Codex 账号，无法切到 API 服务模式".to_string())?;
+    let current_account_id = current_account.id.clone();
     let state = save_local_access_accounts(vec![current_account_id], false).await?;
     let api_key = state
         .collection
@@ -448,7 +448,7 @@ async fn materialize_gateway_litellm_projection() -> Result<(), String> {
         .base_url
         .clone()
         .unwrap_or_else(|| build_base_url(enabled_collection.port));
-    let runtime_account = build_runtime_account(base_url, api_key);
+    let runtime_account = build_runtime_account(base_url, api_key, &current_account);
     codex_account::write_account_bundle_to_dir(&codex_account::get_codex_home(), &runtime_account)?;
     crate::modules::codex_instance::update_default_settings(None, None, Some(true), None)?;
     repair_runtime_projection_history_visibility()?;
@@ -3239,15 +3239,27 @@ fn parse_windows_ipconfig_candidates(output: &str) -> Vec<LanIpv4Candidate> {
     candidates
 }
 
-fn build_runtime_account(base_url: String, api_key: String) -> CodexAccount {
+fn build_runtime_account(
+    base_url: String,
+    api_key: String,
+    current_account: &CodexAccount,
+) -> CodexAccount {
+    let provider_id = current_account
+        .api_provider_id
+        .clone()
+        .unwrap_or_else(|| "codex_local_access".to_string());
+    let provider_name = current_account
+        .api_provider_name
+        .clone()
+        .or_else(|| Some("Codex API Service".to_string()));
     let mut runtime_account = CodexAccount::new_api_key(
         "codex_local_access_runtime".to_string(),
         "api-service-local".to_string(),
         api_key,
         CodexApiProviderMode::Custom,
         Some(base_url),
-        Some("codex_local_access".to_string()),
-        Some("Codex API Service".to_string()),
+        Some(provider_id),
+        provider_name,
     );
     runtime_account.account_name = Some("API Service".to_string());
     runtime_account
@@ -3920,7 +3932,10 @@ pub async fn activate_local_access_for_dir(
         .base_url
         .clone()
         .unwrap_or_else(|| build_base_url(collection.port));
-    let runtime_account = build_runtime_account(base_url, collection.api_key.clone());
+    let current_account = codex_account::get_current_account()
+        .ok_or_else(|| "未找到当前 Codex 账号，无法写入 API 服务投影".to_string())?;
+    let runtime_account =
+        build_runtime_account(base_url, collection.api_key.clone(), &current_account);
     codex_account::write_account_bundle_to_dir(profile_dir, &runtime_account)?;
     Ok(state)
 }
