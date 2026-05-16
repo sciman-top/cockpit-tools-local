@@ -4020,7 +4020,6 @@ export function CodexAccountsPage() {
         const filteredAccountIds = accountIds.filter((accountId) => {
           const account = accountById.get(accountId);
           if (!account) return false;
-          if (isCodexApiKeyAccount(account)) return false;
           if (
             restrictFreeAccounts &&
             isCodexExplicitFreePlanType(account.plan_type)
@@ -4729,30 +4728,19 @@ export function CodexAccountsPage() {
     });
     return map;
   }, [customSortOrder]);
-  const overviewCurrentAccountId = localAccessLaunchCurrent
-    ? null
-    : (currentAccount?.id ?? null);
+  const localAccessRuntimeActive =
+    localAccessLaunchCurrent || codexRuntimeMode?.mode === "gateway_litellm";
+  const overviewCurrentAccountId =
+    localAccessRuntimeActive && localAccessEffectiveAccountIds.length > 0
+      ? localAccessEffectiveAccountIds[0]
+      : (currentAccount?.id ?? null);
   const localAccessPinnedAccountIds = useMemo(
-    () =>
-      localAccessLaunchCurrent
-        ? new Set(localAccessEffectiveAccountIds)
-        : new Set<string>(),
-    [localAccessEffectiveAccountIds, localAccessLaunchCurrent],
+    () => new Set(localAccessEffectiveAccountIds),
+    [localAccessEffectiveAccountIds],
   );
 
   const compareAccountsBySort = useCallback(
     (a: CodexAccount, b: CodexAccount) => {
-      if (sortBy === "custom") {
-        const aIndex =
-          customSortOrderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER;
-        const bIndex =
-          customSortOrderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER;
-        if (aIndex !== bIndex) {
-          return aIndex - bIndex;
-        }
-        return b.created_at - a.created_at;
-      }
-
       const localAccessPinnedPriority =
         Number(!localAccessPinnedAccountIds.has(a.id)) -
         Number(!localAccessPinnedAccountIds.has(b.id));
@@ -4769,6 +4757,17 @@ export function CodexAccountsPage() {
         if (currentFirstDiff !== 0) {
           return currentFirstDiff;
         }
+      }
+
+      if (sortBy === "custom") {
+        const aIndex =
+          customSortOrderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER;
+        const bIndex =
+          customSortOrderIndex.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+        if (aIndex !== bIndex) {
+          return aIndex - bIndex;
+        }
+        return b.created_at - a.created_at;
       }
 
       const isQuotaSort =
