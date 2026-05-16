@@ -723,7 +723,7 @@
       "minutes": "min",
       "refreshIntervalLimited": "Quota reset wakeup enabled, minimum refresh interval is 2 minutes",
       "currentAccountRefreshTitle": "Current Account Refresh",
-      "currentAccountRefreshItemDesc": "Refresh current account only. Default is 30 minutes, minimum is 5 minutes.",
+      "currentAccountRefreshItemDesc": "Refresh current account only. Default is 30 minutes, minimum is 30 minutes.",
       "currentAccountRefreshRequiresAutoRefresh": "Enable \"Quota Auto Refresh\" first to configure current account refresh.",
       "closeBehavior": "Close behavior",
       "closeBehaviorDesc": "Choose the default action when closing the window",

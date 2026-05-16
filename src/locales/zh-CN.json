@@ -723,7 +723,7 @@
       "minutes": "分",
       "refreshIntervalLimited": "配额重置唤醒已启用，刷新间隔最小值为 2 分钟",
       "currentAccountRefreshTitle": "当前账号刷新",
-      "currentAccountRefreshItemDesc": "仅刷新当前账号，默认 30 分钟，最低 5 分钟。",
+      "currentAccountRefreshItemDesc": "仅刷新当前账号，默认 30 分钟，最低 30 分钟。",
       "currentAccountRefreshRequiresAutoRefresh": "需先开启“配额自动刷新”后，才能设置当前账号刷新。",
       "closeBehavior": "窗口关闭行为",
       "closeBehaviorDesc": "选择关闭窗口时的默认行为",

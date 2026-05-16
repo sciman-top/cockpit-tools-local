@@ -1,6 +1,6 @@
 export const CURRENT_ACCOUNT_REFRESH_STORAGE_KEY = 'agtools.current_account_refresh_minutes.v1';
 export const DEFAULT_CURRENT_ACCOUNT_REFRESH_MINUTES = 30;
-export const MIN_CURRENT_ACCOUNT_REFRESH_MINUTES = 5;
+export const MIN_CURRENT_ACCOUNT_REFRESH_MINUTES = 30;
 export const MAX_CURRENT_ACCOUNT_REFRESH_MINUTES = 999;
 
 export type CurrentAccountRefreshPlatform =
