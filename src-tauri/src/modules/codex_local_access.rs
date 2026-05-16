@@ -425,16 +425,18 @@ async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(
 }
 
 async fn materialize_gateway_litellm_projection() -> Result<(), String> {
-    let current_account = codex_account::get_current_account()
-        .ok_or_else(|| "未找到当前 Codex 账号，无法切到 API 服务模式".to_string())?;
-    let current_account_id = current_account.id.clone();
-    let state = save_local_access_accounts(vec![current_account_id], false).await?;
+    let state = snapshot_state().await?;
     let api_key = state
         .collection
         .as_ref()
         .map(|collection| collection.api_key.clone())
         .ok_or_else(|| "API 服务集合尚未创建，无法写入 API 服务投影".to_string())?;
-    let _ = set_local_access_follow_current_account(true).await?;
+    let collection = state
+        .collection
+        .as_ref()
+        .ok_or_else(|| "API 服务集合尚未创建，无法写入 API 服务投影".to_string())?;
+    let projection_account = resolve_local_access_projection_account(collection)?;
+    let _ = set_local_access_follow_current_account(false).await?;
     let enabled_state = set_local_access_enabled(true).await?;
     let enabled_collection = enabled_state
         .collection
@@ -448,7 +450,7 @@ async fn materialize_gateway_litellm_projection() -> Result<(), String> {
         .base_url
         .clone()
         .unwrap_or_else(|| build_base_url(enabled_collection.port));
-    let runtime_account = build_runtime_account(base_url, api_key, &current_account);
+    let runtime_account = build_runtime_account(base_url, api_key, &projection_account);
     codex_account::write_account_bundle_to_dir(&codex_account::get_codex_home(), &runtime_account)?;
     crate::modules::codex_instance::update_default_settings(None, None, Some(true), None)?;
     repair_runtime_projection_history_visibility()?;
@@ -2829,6 +2831,22 @@ fn pin_account_to_front(
     ordered
 }
 
+fn resolve_local_access_projection_account(
+    collection: &CodexLocalAccessCollection,
+) -> Result<CodexAccount, String> {
+    let account_ids = build_effective_local_access_account_ids(collection);
+    let ordered_account_ids = apply_routing_strategy(&account_ids, collection.routing_strategy);
+    let first_account_id = ordered_account_ids
+        .first()
+        .ok_or_else(|| "API 服务实际调度池为空；请先把手动配置账号加入 API 服务".to_string())?;
+    codex_account::load_account(first_account_id).ok_or_else(|| {
+        format!(
+            "API 服务成员 {} 不存在，无法写入 API 服务投影",
+            first_account_id
+        )
+    })
+}
+
 fn format_retry_after_duration(wait: Duration) -> String {
     let seconds = wait.as_secs().max(1);
     format!("{} 秒", seconds)
@@ -3932,10 +3950,9 @@ pub async fn activate_local_access_for_dir(
         .base_url
         .clone()
         .unwrap_or_else(|| build_base_url(collection.port));
-    let current_account = codex_account::get_current_account()
-        .ok_or_else(|| "未找到当前 Codex 账号，无法写入 API 服务投影".to_string())?;
+    let projection_account = resolve_local_access_projection_account(&collection)?;
     let runtime_account =
-        build_runtime_account(base_url, collection.api_key.clone(), &current_account);
+        build_runtime_account(base_url, collection.api_key.clone(), &projection_account);
     codex_account::write_account_bundle_to_dir(profile_dir, &runtime_account)?;
     Ok(state)
 }
@@ -6351,12 +6368,13 @@ mod tests {
     use super::{
         build_chat_completion_payload, build_chat_completion_stream_body, build_images_api_payload,
         build_local_models_response, build_ordered_account_ids, build_request_routing_hint,
-        extract_usage_capture, is_responses_completion_event, parse_codex_retry_after,
-        parse_responses_payload_from_upstream, prepare_gateway_request,
+        build_runtime_account, extract_usage_capture, is_responses_completion_event,
+        parse_codex_retry_after, parse_responses_payload_from_upstream, prepare_gateway_request,
         resolve_supported_model_alias, should_retry_single_account_upstream_status,
         should_treat_response_as_stream, should_try_next_account, GatewayResponseAdapter,
         ParsedRequest, ResponseUsageCollector,
     };
+    use crate::models::codex::{CodexAccount, CodexApiProviderMode};
     use reqwest::StatusCode;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -6571,6 +6589,36 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .unwrap_or(false);
 
         assert!(has_image_model);
+    }
+
+    #[test]
+    fn runtime_account_preserves_manual_service_member_provider_bucket() {
+        let source = CodexAccount::new_api_key(
+            "codex_apikey_source".to_string(),
+            "api@example.com".to_string(),
+            "sk-upstream".to_string(),
+            CodexApiProviderMode::Custom,
+            Some("http://35.213.82.91:8003/v1".to_string()),
+            Some("cmp_1778165666417_1".to_string()),
+            Some("35.213.82.91".to_string()),
+        );
+
+        let runtime = build_runtime_account(
+            "http://127.0.0.1:2876/v1".to_string(),
+            "agt_codex_local".to_string(),
+            &source,
+        );
+
+        assert_eq!(
+            runtime.api_base_url.as_deref(),
+            Some("http://127.0.0.1:2876/v1")
+        );
+        assert_eq!(
+            runtime.api_provider_id.as_deref(),
+            Some("cmp_1778165666417_1")
+        );
+        assert_eq!(runtime.api_provider_name.as_deref(), Some("35.213.82.91"));
+        assert_eq!(runtime.openai_api_key.as_deref(), Some("agt_codex_local"));
     }
 
     #[test]
