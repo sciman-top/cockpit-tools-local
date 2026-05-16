@@ -186,6 +186,7 @@ pub struct CodexLocalAccessState {
     pub model_ids: Vec<String>,
     pub last_error: Option<String>,
     pub member_count: usize,
+    pub effective_account_ids: Vec<String>,
     pub stats: CodexLocalAccessStats,
 }
 

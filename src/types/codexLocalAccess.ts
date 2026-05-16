@@ -76,6 +76,7 @@ export interface CodexLocalAccessState {
   modelIds: string[];
   lastError: string | null;
   memberCount: number;
+  effectiveAccountIds: string[];
   stats: CodexLocalAccessStats;
 }
 

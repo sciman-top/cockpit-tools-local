@@ -17,6 +17,8 @@ import {
   loadCurrentAccountRefreshMinutesMap,
   type CurrentAccountRefreshPlatform,
 } from '../utils/currentAccountRefresh';
+import { isCodexApiKeyAccount } from '../types/codex';
+import * as codexLocalAccessService from '../services/codexLocalAccessService';
 import {
   createAutoRefreshScheduler,
   type AutoRefreshSchedulerHandle,
@@ -105,7 +107,7 @@ export function useAutoRefresh() {
   const fetchAccounts = useAccountStore((state) => state.fetchAccounts);
   const fetchCurrentAccount = useAccountStore((state) => state.fetchCurrentAccount);
 
-  const refreshAllCodexQuotas = useCodexAccountStore((state) => state.refreshAllQuotas);
+  const refreshCodexQuota = useCodexAccountStore((state) => state.refreshQuota);
   const fetchCodexAccounts = useCodexAccountStore((state) => state.fetchAccounts);
   const fetchCurrentCodexAccount = useCodexAccountStore((state) => state.fetchCurrentAccount);
   const refreshAllGhcpTokens = useGitHubCopilotAccountStore((state) => state.refreshAllTokens);
@@ -331,6 +333,41 @@ export function useAutoRefresh() {
             }
             await refreshProviderToken(accountId);
           };
+          const runScopedCodexQuotaRefresh = async () => {
+            if (useCodexAccountStore.getState().accounts.length === 0) {
+              await fetchCodexAccounts();
+            }
+
+            const { accounts } = useCodexAccountStore.getState();
+            const targetIds = new Set<string>();
+
+            try {
+              const state = await codexLocalAccessService.getCodexLocalAccessState();
+              for (const accountId of state.effectiveAccountIds.length > 0
+                ? state.effectiveAccountIds
+                : state.collection?.accountIds ?? []) {
+                targetIds.add(accountId);
+              }
+            } catch (error) {
+              console.warn('[AutoRefresh] Codex API 服务账号池读取失败:', error);
+            }
+
+            for (const account of accounts) {
+              if (isCodexApiKeyAccount(account)) {
+                targetIds.add(account.id);
+              }
+            }
+
+            if (targetIds.size === 0) {
+              return;
+            }
+
+            await Promise.allSettled(
+              [...targetIds].map((accountId) => refreshCodexQuota(accountId)),
+            );
+            await fetchCodexAccounts();
+            await fetchCurrentCodexAccount();
+          };
 
           const descriptors: PlatformRefreshDescriptor[] = [
             {
@@ -359,11 +396,14 @@ export function useAutoRefresh() {
               key: 'codex',
               label: 'Codex',
               intervalMinutes: config.codex_auto_refresh_minutes,
-              currentMinutes: currentRefreshMinutesMap.codex,
+              currentMinutes: Math.max(
+                currentRefreshMinutesMap.codex,
+                config.codex_auto_refresh_minutes,
+              ),
               fullRefreshingRef: codexRefreshingRef,
               currentRefreshingRef: codexCurrentRefreshingRef,
               runFullRefresh: async () => {
-                await refreshAllCodexQuotas();
+                await runScopedCodexQuotaRefresh();
               },
               runCurrentRefresh: async () => {
                 if (!useCodexAccountStore.getState().currentAccount?.id) {
@@ -631,7 +671,6 @@ export function useAutoRefresh() {
     fetchAccounts,
     refreshAllCodebuddyCnTokens,
     refreshAllCodebuddyTokens,
-    refreshAllCodexQuotas,
     refreshAllCursorTokens,
     refreshAllGeminiTokens,
     refreshAllGhcpTokens,
@@ -644,6 +683,7 @@ export function useAutoRefresh() {
     refreshAllZedTokens,
     refreshCodebuddyCnToken,
     refreshCodebuddyToken,
+    refreshCodexQuota,
     refreshCursorToken,
     refreshGeminiToken,
     refreshGhcpToken,

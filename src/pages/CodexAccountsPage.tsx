@@ -3837,14 +3837,22 @@ export function CodexAccountsPage() {
     () => new Set(localAccessCollection?.accountIds ?? []),
     [localAccessCollection?.accountIds],
   );
+  const localAccessEffectiveAccountIds =
+    localAccessState?.effectiveAccountIds ??
+    localAccessCollection?.accountIds ??
+    [];
+  const localAccessEffectiveAccountIdSet = useMemo(
+    () => new Set(localAccessEffectiveAccountIds),
+    [localAccessEffectiveAccountIds],
+  );
   const localAccessAccounts = useMemo(
     () =>
-      (localAccessCollection?.accountIds ?? [])
+      localAccessEffectiveAccountIds
         .map((accountId) =>
           accounts.find((account) => account.id === accountId),
         )
         .filter((account): account is CodexAccount => Boolean(account)),
-    [accounts, localAccessCollection?.accountIds],
+    [accounts, localAccessEffectiveAccountIds],
   );
   const localAccessQuotaPoolSummary = useMemo(
     () => summarizeCodexQuotaPool(localAccessAccounts),
@@ -4644,7 +4652,7 @@ export function CodexAccountsPage() {
 
   const handleQuickRefreshLocalAccessQuota = useCallback(async () => {
     if (!localAccessCollection) return;
-    const targetIds = localAccessCollection.accountIds.filter((accountId) => {
+    const targetIds = localAccessEffectiveAccountIds.filter((accountId) => {
       const account = accounts.find((item) => item.id === accountId);
       return Boolean(account && !isCodexApiKeyAccount(account));
     });
@@ -4707,6 +4715,7 @@ export function CodexAccountsPage() {
     fetchAccounts,
     fetchCurrentAccount,
     localAccessCollection,
+    localAccessEffectiveAccountIds,
     refreshQuota,
     setMessage,
     t,
@@ -4723,6 +4732,13 @@ export function CodexAccountsPage() {
   const overviewCurrentAccountId = localAccessLaunchCurrent
     ? null
     : (currentAccount?.id ?? null);
+  const localAccessPinnedAccountIds = useMemo(
+    () =>
+      localAccessLaunchCurrent
+        ? new Set(localAccessEffectiveAccountIds)
+        : new Set<string>(),
+    [localAccessEffectiveAccountIds, localAccessLaunchCurrent],
+  );
 
   const compareAccountsBySort = useCallback(
     (a: CodexAccount, b: CodexAccount) => {
@@ -4737,6 +4753,24 @@ export function CodexAccountsPage() {
         return b.created_at - a.created_at;
       }
 
+      const localAccessPinnedPriority =
+        Number(!localAccessPinnedAccountIds.has(a.id)) -
+        Number(!localAccessPinnedAccountIds.has(b.id));
+      if (localAccessPinnedPriority !== 0) {
+        return localAccessPinnedPriority;
+      }
+
+      if (overviewCurrentAccountId) {
+        const currentFirstDiff = compareCurrentAccountFirst(
+          a.id,
+          b.id,
+          overviewCurrentAccountId,
+        );
+        if (currentFirstDiff !== 0) {
+          return currentFirstDiff;
+        }
+      }
+
       const isQuotaSort =
         sortBy === "weekly" ||
         sortBy === "hourly" ||
@@ -4747,15 +4781,6 @@ export function CodexAccountsPage() {
           Number(!isCodexNewApiAccount(a)) - Number(!isCodexNewApiAccount(b));
         if (cockpitApiPriority !== 0) {
           return cockpitApiPriority;
-        }
-
-        const currentFirstDiff = compareCurrentAccountFirst(
-          a.id,
-          b.id,
-          overviewCurrentAccountId,
-        );
-        if (currentFirstDiff !== 0) {
-          return currentFirstDiff;
         }
       }
 
@@ -4801,6 +4826,7 @@ export function CodexAccountsPage() {
     },
     [
       customSortOrderIndex,
+      localAccessPinnedAccountIds,
       overviewCurrentAccountId,
       resolveSubscriptionPresentation,
       sortBy,
@@ -4979,11 +5005,14 @@ export function CodexAccountsPage() {
   const handleSortByChange = useCallback(
     (value: string) => {
       setSortBy(value);
+      if (value === "weekly" || value === "hourly") {
+        setSortDirection("desc");
+      }
       if (value === "custom") {
         setShowCustomSortModal(true);
       }
     },
-    [setSortBy],
+    [setSortBy, setSortDirection],
   );
   const isAllPaginatedSelected = useMemo(
     () => isEveryIdSelected(selected, paginatedIds),
@@ -5233,6 +5262,9 @@ export function CodexAccountsPage() {
       const visibleTags = accountTags.slice(0, 2);
       const moreTagCount = Math.max(0, accountTags.length - visibleTags.length);
       const isInLocalAccess = localAccessAccountIdSet.has(account.id);
+      const isEffectiveLocalAccess =
+        localAccessEffectiveAccountIdSet.has(account.id);
+      const isFallbackLocalAccess = isEffectiveLocalAccess && !isInLocalAccess;
       const subscriptionInfo = resolveSubscriptionPresentation(account);
       const isSubscriptionInfoMissing = subscriptionInfo.bucket === "missing";
       return (
@@ -5300,6 +5332,7 @@ export function CodexAccountsPage() {
           </div>
           {(meta.accountContextText ||
             isInLocalAccess ||
+            isFallbackLocalAccess ||
             account.account_note?.trim()) && (
             <div className="account-sub-line">
               {meta.accountContextText && (
@@ -5313,6 +5346,11 @@ export function CodexAccountsPage() {
               {isInLocalAccess && (
                 <span className="group-account-badge is-current">
                   {t("codex.localAccess.modal.selected", "已加入 API 服务")}
+                </span>
+              )}
+              {isFallbackLocalAccess && (
+                <span className="group-account-badge is-current">
+                  {t("codex.localAccess.effectiveMember", "实际调度中")}
                 </span>
               )}
               {renderAccountNoteButton(account)}
@@ -5619,10 +5657,19 @@ export function CodexAccountsPage() {
           ? t("codex.localAccess.statusStopped", "未运行")
           : t("codex.localAccess.statusDisabled", "已停用");
     const isLocalAccessCurrent = localAccessLaunchCurrent;
-    const localAccessSummaryMeta = t("codex.localAccess.summaryMeta", {
-      count: localAccessState?.memberCount ?? 0,
-      defaultValue: "{{count}} 个账号 · 本机/局域网",
-    });
+    const configuredMemberCount = localAccessState?.memberCount ?? 0;
+    const effectiveMemberCount = localAccessAccounts.length;
+    const localAccessSummaryMeta =
+      effectiveMemberCount > configuredMemberCount
+        ? t("codex.localAccess.summaryMetaEffective", {
+            configured: configuredMemberCount,
+            effective: effectiveMemberCount,
+            defaultValue: "{{configured}} 个配置 · {{effective}} 个实际调度",
+          })
+        : t("codex.localAccess.summaryMeta", {
+            count: configuredMemberCount,
+            defaultValue: "{{count}} 个账号 · 本机/局域网",
+          });
     const localAccessEmptyMessage = t(
       "codex.localAccess.emptyMembers",
       "当前集合暂无账号",
@@ -5846,6 +5893,9 @@ export function CodexAccountsPage() {
                 <>
                   {previewAccounts.map((account) => {
                     const presentation = resolvePresentation(account);
+                    const isConfiguredMember = localAccessAccountIdSet.has(
+                      account.id,
+                    );
                     const hourlyQuota = presentation.quotaItems.find(
                       (item) => item.key === "primary",
                     );
@@ -5878,20 +5928,27 @@ export function CodexAccountsPage() {
                         <span
                           className={`codex-local-access-member-plan tier-badge ${presentation.planClass || "unknown"}`}
                         >
-                          {presentation.planLabel}
+                          {isConfiguredMember
+                            ? presentation.planLabel
+                            : t(
+                                "codex.localAccess.effectiveMemberShort",
+                                "调度中",
+                              )}
                         </span>
-                        <button
-                          type="button"
-                          className="folder-preview-remove-btn"
-                          onClick={() =>
-                            void handleRemoveLocalAccessAccount(account.id)
-                          }
-                          title={t("accounts.groups.removeFromGroup")}
-                          aria-label={`${t("accounts.groups.removeFromGroup")}: ${maskAccountText(presentation.displayName)}`}
-                          disabled={localAccessBusy}
-                        >
-                          <LogOut size={12} />
-                        </button>
+                        {isConfiguredMember && (
+                          <button
+                            type="button"
+                            className="folder-preview-remove-btn"
+                            onClick={() =>
+                              void handleRemoveLocalAccessAccount(account.id)
+                            }
+                            title={t("accounts.groups.removeFromGroup")}
+                            aria-label={`${t("accounts.groups.removeFromGroup")}: ${maskAccountText(presentation.displayName)}`}
+                            disabled={localAccessBusy}
+                          >
+                            <LogOut size={12} />
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -6251,6 +6308,9 @@ export function CodexAccountsPage() {
       const apiBaseUrlText = (account.api_base_url || "").trim() || "-";
       const apiBaseUrlLine = `${t("codex.api.baseUrl", "Base URL")}：${apiBaseUrlText}`;
       const isInLocalAccess = localAccessAccountIdSet.has(account.id);
+      const isEffectiveLocalAccess =
+        localAccessEffectiveAccountIdSet.has(account.id);
+      const isFallbackLocalAccess = isEffectiveLocalAccess && !isInLocalAccess;
       const subscriptionInfo = resolveSubscriptionPresentation(account);
       return (
         <tr
@@ -6306,6 +6366,7 @@ export function CodexAccountsPage() {
               </div>
               {(meta.accountContextText ||
                 isInLocalAccess ||
+                isFallbackLocalAccess ||
                 account.account_note?.trim()) && (
                 <div className="account-sub-line codex-account-meta-inline">
                   {meta.accountContextText && (
@@ -6319,6 +6380,11 @@ export function CodexAccountsPage() {
                   {isInLocalAccess && (
                     <span className="group-account-badge is-current">
                       {t("codex.localAccess.modal.selected", "已加入 API 服务")}
+                    </span>
+                  )}
+                  {isFallbackLocalAccess && (
+                    <span className="group-account-badge is-current">
+                      {t("codex.localAccess.effectiveMember", "实际调度中")}
                     </span>
                   )}
                   {renderAccountNoteButton(account)}

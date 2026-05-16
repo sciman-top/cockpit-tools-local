@@ -3933,6 +3933,10 @@ async fn record_request_stats(
 
 fn build_state_snapshot(runtime: &GatewayRuntime) -> CodexLocalAccessState {
     let collection = runtime.collection.clone();
+    let effective_account_ids = collection
+        .as_ref()
+        .map(build_effective_local_access_account_ids)
+        .unwrap_or_default();
     let member_count = collection
         .as_ref()
         .map(|item| item.account_ids.len())
@@ -3957,6 +3961,7 @@ fn build_state_snapshot(runtime: &GatewayRuntime) -> CodexLocalAccessState {
         model_ids,
         last_error: runtime.last_error.clone(),
         member_count,
+        effective_account_ids,
         stats,
     }
 }
