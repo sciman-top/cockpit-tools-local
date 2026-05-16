@@ -3,6 +3,7 @@ use crate::models::codex_local_access::{
     CodexLocalAccessAccountStats, CodexLocalAccessCollection, CodexLocalAccessPortCleanupResult,
     CodexLocalAccessRoutingStrategy, CodexLocalAccessState, CodexLocalAccessStats,
     CodexLocalAccessStatsWindow, CodexLocalAccessUsageEvent, CodexLocalAccessUsageStats,
+    CodexRuntimeAccountKind, CodexRuntimeIntegrationMode, CodexRuntimeModeState,
 };
 use crate::modules::atomic_write::write_string_atomic;
 use crate::modules::{codex_account, codex_oauth, codex_wakeup, logger, process};
@@ -26,8 +27,11 @@ use tokio::time::{timeout, Duration};
 
 const CODEX_LOCAL_ACCESS_FILE: &str = "codex_local_access.json";
 const CODEX_LOCAL_ACCESS_STATS_FILE: &str = "codex_local_access_stats.json";
-const CODEX_LOCAL_ACCESS_BIND_HOST: &str = "0.0.0.0";
+const CODEX_RUNTIME_MODE_FILE: &str = "codex_runtime_mode.json";
+const CODEX_LOCAL_ACCESS_BIND_HOST: &str = "127.0.0.1";
 const CODEX_LOCAL_ACCESS_URL_HOST: &str = "127.0.0.1";
+const CODEX_LITELLM_GATEWAY_BASE_URL: &str = "http://127.0.0.1:4000/v1";
+const LITELLM_GATEWAY_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_HTTP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_REQUEST_RETRY_WAIT: Duration = Duration::from_secs(3);
@@ -39,7 +43,7 @@ const SINGLE_ACCOUNT_STATUS_RETRY_ATTEMPTS: usize = 2;
 const SINGLE_ACCOUNT_STATUS_RETRY_BASE_DELAY: Duration = Duration::from_millis(300);
 const SINGLE_ACCOUNT_STATUS_RETRY_MAX_DELAY: Duration = Duration::from_millis(1500);
 const STATS_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
-const MAX_RETRY_CREDENTIALS_PER_REQUEST: usize = 8;
+const MAX_RETRY_CREDENTIALS_PER_REQUEST: usize = 24;
 const RESPONSE_AFFINITY_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 const MAX_RESPONSE_AFFINITY_BINDINGS: usize = 4096;
 const PREPARED_ACCOUNT_CACHE_TTL_MS: i64 = 30 * 1000;
@@ -53,6 +57,8 @@ const DEFAULT_CODEX_USER_AGENT: &str =
 const DEFAULT_CODEX_ORIGINATOR: &str = "codex-tui";
 const CORS_ALLOW_HEADERS: &str = "Authorization, Content-Type, OpenAI-Beta, X-API-Key, X-Codex-Beta-Features, X-Client-Request-Id, Originator, Session_id, ChatGPT-Account-Id";
 const DEFAULT_CODEX_MODELS: &[&str] = &[
+    "gpt-5.5",
+    "gpt-5.5-mini",
     "gpt-5-codex",
     "gpt-5-codex-mini",
     "gpt-5.4",
@@ -330,8 +336,227 @@ fn local_access_stats_file_path() -> Result<PathBuf, String> {
         .join(CODEX_LOCAL_ACCESS_STATS_FILE))
 }
 
+fn runtime_mode_file_path() -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
+    Ok(home
+        .join(".antigravity_cockpit")
+        .join(CODEX_RUNTIME_MODE_FILE))
+}
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+fn current_runtime_account_kind() -> (CodexRuntimeAccountKind, Option<String>) {
+    let account = codex_account::get_current_account();
+    let account_kind = account
+        .as_ref()
+        .map(|item| {
+            if item.is_api_key_auth() {
+                CodexRuntimeAccountKind::Api
+            } else {
+                CodexRuntimeAccountKind::OAuth
+            }
+        })
+        .unwrap_or(CodexRuntimeAccountKind::Unknown);
+    let current_account_id = account.map(|item| item.id);
+    (account_kind, current_account_id)
+}
+
+fn build_runtime_mode_state(mode: CodexRuntimeIntegrationMode) -> CodexRuntimeModeState {
+    let (account_kind, current_account_id) = current_runtime_account_kind();
+    CodexRuntimeModeState {
+        mode,
+        account_kind,
+        current_account_id,
+        updated_at: now_ms(),
+    }
+}
+
+fn save_runtime_mode_state(state: &CodexRuntimeModeState) -> Result<(), String> {
+    let path = runtime_mode_file_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("创建 Codex runtime mode 目录失败: {}", e))?;
+    }
+    let content = serde_json::to_string_pretty(state)
+        .map_err(|e| format!("序列化 runtime mode 失败: {}", e))?;
+    write_string_atomic(&path, &content).map_err(|e| format!("写入 runtime mode 失败: {}", e))
+}
+
+fn repair_runtime_projection_history_visibility() -> Result<(), String> {
+    let summary =
+        crate::modules::codex_session_visibility::repair_session_visibility_across_instances()?;
+    logger::log_info(&format!(
+        "[CodexRuntimeMode] 历史会话 provider 投影已同步: {}",
+        summary.message
+    ));
+    Ok(())
+}
+
+async fn assert_litellm_gateway_ready(api_key: &str) -> Result<(), String> {
+    let models_url = format!(
+        "{}/models",
+        CODEX_LITELLM_GATEWAY_BASE_URL.trim_end_matches('/')
+    );
+    let client = Client::builder()
+        .timeout(LITELLM_GATEWAY_HEALTH_TIMEOUT)
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("创建 LiteLLM gateway 健康检查客户端失败: {}", e))?;
+
+    let response = client
+        .get(&models_url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|e| {
+            format!(
+                "LiteLLM gateway 未就绪，无法访问 {}: {}。已保留 Direct Projection；请先启动 LiteLLM Gateway 后再切换。",
+                models_url, e
+            )
+        })?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "LiteLLM gateway 健康检查失败: {} -> {}。已保留 Direct Projection；请先修复 Gateway 后再切换。",
+            models_url,
+            response.status()
+        ));
+    }
+
+    Ok(())
+}
+
+async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(), String> {
+    let models_url = format!("http://{CODEX_LOCAL_ACCESS_URL_HOST}:{port}/v1/models");
+    let client = Client::builder()
+        .timeout(LITELLM_GATEWAY_HEALTH_TIMEOUT)
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("创建 Cockpit local access 健康检查客户端失败: {}", e))?;
+
+    let response = client
+        .get(&models_url)
+        .bearer_auth(api_key)
+        .send()
+        .await
+        .map_err(|e| {
+            format!(
+                "Cockpit local access 未就绪，无法访问 {}: {}。已保留 Direct Projection；请先修复本地接入后再切换 LiteLLM Gateway。",
+                models_url, e
+            )
+        })?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "Cockpit local access 健康检查失败: {} -> {}。已保留 Direct Projection；请先修复本地接入后再切换 LiteLLM Gateway。",
+            models_url,
+            response.status()
+        ));
+    }
+
+    Ok(())
+}
+
+async fn materialize_gateway_litellm_projection() -> Result<(), String> {
+    let current_account_id = codex_account::get_current_account()
+        .map(|account| account.id)
+        .ok_or_else(|| "未找到当前 Codex 账号，无法切到 LiteLLM gateway 模式".to_string())?;
+    let state = save_local_access_accounts(vec![current_account_id], false).await?;
+    let api_key = state
+        .collection
+        .as_ref()
+        .map(|collection| collection.api_key.clone())
+        .ok_or_else(|| "API 服务集合尚未创建，无法写入 LiteLLM gateway 投影".to_string())?;
+    assert_litellm_gateway_ready(&api_key).await?;
+    let _ = set_local_access_follow_current_account(true).await?;
+    let enabled_state = set_local_access_enabled(true).await?;
+    let enabled_collection = enabled_state.collection.as_ref().ok_or_else(|| {
+        "Cockpit local access 集合尚未创建，无法写入 LiteLLM gateway 投影".to_string()
+    })?;
+    if !enabled_state.running {
+        return Err("Cockpit local access 未启动，已保留 Direct Projection；请先修复本地接入后再切换 LiteLLM Gateway。".to_string());
+    }
+    assert_cockpit_local_access_ready(&api_key, enabled_collection.port).await?;
+    let runtime_account = build_litellm_gateway_runtime_account(api_key);
+    codex_account::write_account_bundle_to_dir(&codex_account::get_codex_home(), &runtime_account)?;
+    crate::modules::codex_instance::update_default_settings(None, None, Some(true), None)?;
+    repair_runtime_projection_history_visibility()?;
+    Ok(())
+}
+
+async fn materialize_direct_projection() -> Result<(), String> {
+    let account =
+        codex_account::get_current_account().ok_or_else(|| "未找到当前 Codex 账号".to_string())?;
+    if let Ok(state) = snapshot_state().await {
+        if state.collection.is_some() {
+            let _ = set_local_access_enabled(false).await?;
+        }
+    }
+    codex_account::write_account_bundle_to_dir(&codex_account::get_codex_home(), &account)?;
+    crate::modules::codex_instance::update_default_settings(None, None, Some(true), None)?;
+    repair_runtime_projection_history_visibility()?;
+    Ok(())
+}
+
+pub fn load_runtime_mode_state() -> Result<CodexRuntimeModeState, String> {
+    let path = runtime_mode_file_path()?;
+    if !path.exists() {
+        let state = build_runtime_mode_state(CodexRuntimeIntegrationMode::DirectProjection);
+        save_runtime_mode_state(&state)?;
+        return Ok(state);
+    }
+
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("读取 runtime mode 失败: {}", e))?;
+    let mut state: CodexRuntimeModeState =
+        serde_json::from_str(&content).map_err(|e| format!("解析 runtime mode 失败: {}", e))?;
+    let (account_kind, current_account_id) = current_runtime_account_kind();
+    if state.account_kind != account_kind || state.current_account_id != current_account_id {
+        state.account_kind = account_kind;
+        state.current_account_id = current_account_id;
+        state.updated_at = now_ms();
+        save_runtime_mode_state(&state)?;
+    }
+    Ok(state)
+}
+
+pub async fn set_runtime_integration_mode(
+    mode: CodexRuntimeIntegrationMode,
+) -> Result<CodexRuntimeModeState, String> {
+    match mode {
+        CodexRuntimeIntegrationMode::GatewayLitellm => {
+            materialize_gateway_litellm_projection().await?;
+        }
+        CodexRuntimeIntegrationMode::DirectProjection => {
+            materialize_direct_projection().await?;
+        }
+    }
+
+    let state = build_runtime_mode_state(mode);
+    save_runtime_mode_state(&state)?;
+    Ok(state)
+}
+
+pub async fn sync_runtime_projection_after_account_switch(account_id: &str) -> Result<(), String> {
+    let mode = load_runtime_mode_state()
+        .map(|state| state.mode)
+        .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
+
+    match mode {
+        CodexRuntimeIntegrationMode::GatewayLitellm => {
+            sync_local_access_to_current_account_on_switch(account_id).await?;
+            materialize_gateway_litellm_projection().await?;
+        }
+        CodexRuntimeIntegrationMode::DirectProjection => {
+            materialize_direct_projection().await?;
+        }
+    }
+
+    let state = build_runtime_mode_state(mode);
+    save_runtime_mode_state(&state)?;
+    Ok(())
 }
 
 fn is_prepared_account_cache_valid(entry: &CachedPreparedAccount, now: i64) -> bool {
@@ -2499,6 +2724,40 @@ fn resolve_subscription_expiry_ms(account: &CodexAccount) -> Option<i64> {
         .map(|parsed| parsed.timestamp_millis())
 }
 
+fn is_local_access_fallback_candidate(account: &CodexAccount) -> bool {
+    if account.requires_reauth || account.is_api_key_auth() {
+        return false;
+    }
+    let Some(quota) = account.quota.as_ref() else {
+        return false;
+    };
+    let hourly_available =
+        !quota.hourly_window_present.unwrap_or(true) || quota.hourly_percentage > 0;
+    let weekly_available =
+        !quota.weekly_window_present.unwrap_or(true) || quota.weekly_percentage > 0;
+    hourly_available && weekly_available
+}
+
+fn build_effective_local_access_account_ids(
+    collection: &CodexLocalAccessCollection,
+) -> Vec<String> {
+    let mut account_ids = collection.account_ids.clone();
+    if !collection.follow_current_account {
+        return account_ids;
+    }
+
+    let mut seen: HashSet<String> = account_ids.iter().cloned().collect();
+    for account in codex_account::list_accounts() {
+        if !is_local_access_fallback_candidate(&account) {
+            continue;
+        }
+        if seen.insert(account.id.clone()) {
+            account_ids.push(account.id);
+        }
+    }
+    account_ids
+}
+
 fn build_routing_candidates(ordered_account_ids: &[String]) -> Vec<RoutingCandidate> {
     ordered_account_ids
         .iter()
@@ -3053,6 +3312,20 @@ fn build_runtime_account(base_url: String, api_key: String) -> CodexAccount {
     runtime_account
 }
 
+fn build_litellm_gateway_runtime_account(api_key: String) -> CodexAccount {
+    let mut runtime_account = CodexAccount::new_api_key(
+        "codex_litellm_gateway_runtime".to_string(),
+        "litellm-gateway-local".to_string(),
+        api_key,
+        CodexApiProviderMode::Custom,
+        Some(CODEX_LITELLM_GATEWAY_BASE_URL.to_string()),
+        Some("litellm_gateway".to_string()),
+        Some("LiteLLM Gateway".to_string()),
+    );
+    runtime_account.account_name = Some("LiteLLM Gateway".to_string());
+    runtime_account
+}
+
 fn generate_local_api_key() -> String {
     let suffix: String = rand::thread_rng()
         .sample_iter(&Alphanumeric)
@@ -3258,9 +3531,6 @@ fn is_free_plan_type(plan_type: Option<&str>) -> bool {
 }
 
 fn is_local_access_eligible_account(account: &CodexAccount, restrict_free_accounts: bool) -> bool {
-    if account.is_api_key_auth() {
-        return false;
-    }
     if restrict_free_accounts && is_free_plan_type(account.plan_type.as_deref()) {
         return false;
     }
@@ -3337,7 +3607,8 @@ async fn ensure_runtime_loaded_without_start() -> Result<(), String> {
             port: allocate_random_local_port()?,
             api_key: generate_local_api_key(),
             routing_strategy: CodexLocalAccessRoutingStrategy::default(),
-            restrict_free_accounts: true,
+            restrict_free_accounts: false,
+            follow_current_account: false,
             account_ids: Vec::new(),
             created_at: now_ms(),
             updated_at: now_ms(),
@@ -3414,7 +3685,7 @@ async fn ensure_gateway_matches_runtime() -> Result<(), String> {
         let _ = task.await;
     }
 
-    let Some(collection) = collection else {
+    let Some(mut collection) = collection else {
         stop_gateway().await;
         return Ok(());
     };
@@ -3433,12 +3704,41 @@ async fn ensure_gateway_matches_runtime() -> Result<(), String> {
     let listener = match TcpListener::bind((CODEX_LOCAL_ACCESS_BIND_HOST, collection.port)).await {
         Ok(listener) => listener,
         Err(error) => {
-            let message = format_gateway_bind_error(collection.port, &error);
-            let mut runtime = gateway_runtime().lock().await;
-            runtime.running = false;
-            runtime.actual_port = None;
-            runtime.last_error = Some(message.clone());
-            return Err(message);
+            if matches!(
+                error.kind(),
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
+            ) {
+                let original_port = collection.port;
+                collection.port = allocate_random_local_port()?;
+                collection.updated_at = now_ms();
+                save_collection_to_disk(&collection)?;
+                {
+                    let mut runtime = gateway_runtime().lock().await;
+                    sync_runtime_collection(&mut runtime, collection.clone());
+                }
+                logger::log_codex_api_warn(&format!(
+                    "[CodexLocalAccess] 端口 {} 不可绑定（{}），已自动切换到端口 {}",
+                    original_port, error, collection.port
+                ));
+                match TcpListener::bind((CODEX_LOCAL_ACCESS_BIND_HOST, collection.port)).await {
+                    Ok(listener) => listener,
+                    Err(retry_error) => {
+                        let message = format_gateway_bind_error(collection.port, &retry_error);
+                        let mut runtime = gateway_runtime().lock().await;
+                        runtime.running = false;
+                        runtime.actual_port = None;
+                        runtime.last_error = Some(message.clone());
+                        return Err(message);
+                    }
+                }
+            } else {
+                let message = format_gateway_bind_error(collection.port, &error);
+                let mut runtime = gateway_runtime().lock().await;
+                runtime.running = false;
+                runtime.actual_port = None;
+                runtime.last_error = Some(message.clone());
+                return Err(message);
+            }
         }
     };
     let (shutdown_sender, mut shutdown_receiver) = watch::channel(false);
@@ -3709,7 +4009,8 @@ pub async fn save_local_access_accounts(
                 port: allocate_random_local_port()?,
                 api_key: generate_local_api_key(),
                 routing_strategy: CodexLocalAccessRoutingStrategy::default(),
-                restrict_free_accounts: true,
+                restrict_free_accounts: false,
+                follow_current_account: false,
                 account_ids: Vec::new(),
                 created_at: now_ms(),
                 updated_at: now_ms(),
@@ -3749,6 +4050,70 @@ pub async fn save_local_access_accounts(
 
     ensure_gateway_matches_runtime().await?;
     snapshot_state().await
+}
+
+pub async fn set_local_access_follow_current_account(
+    enabled: bool,
+) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded().await?;
+
+    let maybe_collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    };
+
+    let Some(mut collection) = maybe_collection else {
+        return Err("本地接入集合尚未创建".to_string());
+    };
+
+    if collection.follow_current_account == enabled {
+        return snapshot_state().await;
+    }
+
+    collection.follow_current_account = enabled;
+    collection.updated_at = now_ms();
+    save_collection_to_disk(&collection)?;
+
+    {
+        let mut runtime = gateway_runtime().lock().await;
+        sync_runtime_collection(&mut runtime, collection);
+    }
+
+    ensure_gateway_matches_runtime().await?;
+    snapshot_state().await
+}
+
+pub async fn sync_local_access_to_current_account_on_switch(
+    account_id: &str,
+) -> Result<(), String> {
+    ensure_runtime_loaded_without_start().await?;
+
+    let maybe_collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    };
+
+    let Some(collection) = maybe_collection else {
+        return Ok(());
+    };
+
+    if !collection.follow_current_account {
+        return Ok(());
+    }
+
+    let restrict_free_accounts = collection.restrict_free_accounts;
+    let state =
+        save_local_access_accounts(vec![account_id.to_string()], restrict_free_accounts).await?;
+    let member_count = state
+        .collection
+        .as_ref()
+        .map(|collection| collection.account_ids.len())
+        .unwrap_or(0);
+    if member_count == 0 {
+        return Err("当前 Codex 账号不满足 API 服务集合条件，已按限制保存为空集合".to_string());
+    }
+
+    Ok(())
 }
 
 pub async fn update_local_access_routing_strategy(
@@ -5387,6 +5752,24 @@ fn single_account_status_retry_delay(retry_attempt: usize) -> Duration {
     }
 }
 
+fn build_api_key_upstream_url(account: &CodexAccount, target: &str) -> Result<String, String> {
+    let base_url = account
+        .api_base_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("https://api.openai.com/v1");
+    let base_url = base_url.trim_end_matches('/');
+    let target = if target.starts_with('/') {
+        target.to_string()
+    } else {
+        format!("/{}", target)
+    };
+    Url::parse(&format!("{}{}", base_url, target))
+        .map(|url| url.to_string())
+        .map_err(|err| format!("API Key 账号的 Base URL 无效: {}", err))
+}
+
 async fn send_upstream_request(
     method: &str,
     target: &str,
@@ -5396,7 +5779,17 @@ async fn send_upstream_request(
 ) -> Result<reqwest::Response, String> {
     let method =
         Method::from_bytes(method.as_bytes()).map_err(|e| format!("不支持的请求方法: {}", e))?;
-    let url = format!("{}{}", UPSTREAM_CODEX_BASE_URL, target);
+    let api_key = account
+        .openai_api_key
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let use_api_key_upstream = account.is_api_key_auth() || api_key.is_some();
+    let url = if use_api_key_upstream {
+        build_api_key_upstream_url(account, target)?
+    } else {
+        format!("{}{}", UPSTREAM_CODEX_BASE_URL, target)
+    };
     let client = upstream_http_client()?;
     for retry_attempt in 0..=UPSTREAM_SEND_RETRY_ATTEMPTS {
         let mut request = client.request(method.clone(), &url);
@@ -5420,18 +5813,27 @@ async fn send_upstream_request(
             request = request.header(header_name, header_value);
         }
 
-        request = request.header(
-            AUTHORIZATION,
-            format!("Bearer {}", account.tokens.access_token.trim()),
-        );
+        if use_api_key_upstream {
+            let Some(api_key) = api_key else {
+                return Err("API Key 账号缺少 openai_api_key".to_string());
+            };
+            request = request.header(AUTHORIZATION, format!("Bearer {}", api_key));
+        } else {
+            request = request.header(
+                AUTHORIZATION,
+                format!("Bearer {}", account.tokens.access_token.trim()),
+            );
+        }
         if !headers.contains_key("user-agent") {
             request = request.header(USER_AGENT, DEFAULT_CODEX_USER_AGENT);
         }
         if !headers.contains_key("originator") {
             request = request.header("Originator", DEFAULT_CODEX_ORIGINATOR);
         }
-        if let Some(account_id) = resolve_upstream_account_id(account) {
-            request = request.header("ChatGPT-Account-Id", account_id);
+        if !use_api_key_upstream {
+            if let Some(account_id) = resolve_upstream_account_id(account) {
+                request = request.header("ChatGPT-Account-Id", account_id);
+            }
         }
         if !headers.contains_key("accept") {
             request = request.header(
@@ -5471,7 +5873,8 @@ async fn proxy_request_with_account_pool(
     request: &ParsedRequest,
     collection: &CodexLocalAccessCollection,
 ) -> Result<ProxyDispatchSuccess, ProxyDispatchError> {
-    if collection.account_ids.is_empty() {
+    let effective_account_ids = build_effective_local_access_account_ids(collection);
+    if effective_account_ids.is_empty() {
         return Err(ProxyDispatchError {
             status: 503,
             message: "本地接入集合暂无账号".to_string(),
@@ -5488,7 +5891,7 @@ async fn proxy_request_with_account_pool(
             account_email: None,
         })?;
     let routing_hint = build_request_routing_hint(request);
-    let total = collection.account_ids.len();
+    let total = effective_account_ids.len();
     let max_credential_attempts = total.min(MAX_RETRY_CREDENTIALS_PER_REQUEST).max(1);
     let affinity_account_id = match routing_hint.previous_response_id.as_deref() {
         Some(previous_response_id) => resolve_affinity_account(previous_response_id).await,
@@ -5505,7 +5908,7 @@ async fn proxy_request_with_account_pool(
     loop {
         let start = GATEWAY_ROUND_ROBIN_CURSOR.fetch_add(1, Ordering::Relaxed);
         let ordered_account_ids = build_ordered_account_ids(
-            &collection.account_ids,
+            &effective_account_ids,
             start,
             affinity_account_id.as_deref(),
         );
@@ -5551,19 +5954,6 @@ async fn proxy_request_with_account_pool(
                 }
             };
 
-            if account.is_api_key_auth() {
-                log_codex_api_failure(
-                    None,
-                    Some(request),
-                    None,
-                    Some(account.id.as_str()),
-                    Some(account.email.as_str()),
-                    None,
-                    "API Key 账号不支持加入本地接入",
-                );
-                last_error = "API Key 账号不支持加入本地接入".to_string();
-                continue;
-            }
             if collection.restrict_free_accounts && is_free_plan_type(account.plan_type.as_deref())
             {
                 log_codex_api_failure(

@@ -63,6 +63,8 @@ import {
 import { runAutoBackupCycle } from './services/scheduledBackupService';
 import { prepareCodexLocalAccessForRestart } from './services/codexLocalAccessService';
 
+const SELF_BUILD_UPDATES_DISABLED = true;
+
 const DashboardPage = lazy(() =>
   import('./pages/DashboardPage').then((module) => ({ default: module.DashboardPage })),
 );
@@ -914,6 +916,9 @@ function MainApp() {
   }, [updateRuntimeInfo]);
 
   const runUpdaterCheck = useCallback(async () => {
+    if (SELF_BUILD_UPDATES_DISABLED) {
+      return null;
+    }
     const { check } = await import('@tauri-apps/plugin-updater');
     const target = getUpdaterCheckTarget();
     return target ? check({ target }) : check();
@@ -1634,6 +1639,13 @@ function MainApp() {
     let intervalId: number | undefined;
 
     const checkUpdates = async (trigger: 'startup' | 'hourly') => {
+      if (SELF_BUILD_UPDATES_DISABLED) {
+        writeUpdateLog(
+          'info',
+          `${trigger === 'startup' ? '启动' : '每小时轮询'}更新检查跳过：自构建版本禁用官方更新通道`,
+        );
+        return;
+      }
       if (updateCheckInFlight) {
         writeUpdateLog('info', `${trigger === 'startup' ? '启动' : '每小时轮询'}更新检查跳过：上一次尚未结束`);
         return;

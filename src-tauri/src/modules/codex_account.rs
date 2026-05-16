@@ -30,17 +30,21 @@ const API_KEY_EMAIL_PREFIX: &str = "api-key";
 const API_KEY_AUTH_MODE: &str = "apikey";
 const CODEX_CONFIG_FILE_NAME: &str = "config.toml";
 const CODEX_CONFIG_OPENAI_BASE_URL_KEY: &str = "openai_base_url";
+const CODEX_CONFIG_FORCED_LOGIN_METHOD_KEY: &str = "forced_login_method";
+const CODEX_CONFIG_MODEL_KEY: &str = "model";
 const CODEX_CONFIG_MODEL_PROVIDER_KEY: &str = "model_provider";
 const CODEX_CONFIG_MODEL_PROVIDERS_KEY: &str = "model_providers";
 const CODEX_CONFIG_MODEL_CONTEXT_WINDOW_KEY: &str = "model_context_window";
 const CODEX_CONFIG_MODEL_AUTO_COMPACT_TOKEN_LIMIT_KEY: &str = "model_auto_compact_token_limit";
+const CODEX_PROFILE_SHARED_CURRENT_PROVIDER: &str = "shared-current-provider";
+const CODEX_PROFILE_SHARED_COCKPIT_API: &str = "shared-cockpit-api";
+const CODEX_PROFILE_SHARED_COCKPIT_AUTH: &str = "shared-cockpit-auth";
 const CODEX_DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const CODEX_COCKPIT_API_BASE_URL: &str = "https://chongcodex.cn/v1";
 const CODEX_COCKPIT_API_PROVIDER_ID: &str = "cockpit_api";
 const CODEX_OPENAI_PROVIDER_ID: &str = "openai";
 const CODEX_RUNTIME_MODEL_PROVIDER_ID: &str = "codex_local_access";
 const CODEX_LEGACY_API_KEY_OPENAI_PROVIDER_ID: &str = "openai_api_key";
-const CODEX_DEFAULT_RUNTIME_PROVIDER_NAME: &str = "OpenAI Official";
 const CODEX_PROVIDER_WIRE_API: &str = "responses";
 const CODEX_CONTEXT_WINDOW_1M_VALUE: i64 = 1_000_000;
 const CODEX_AUTO_COMPACT_DEFAULT_LIMIT: i64 = 900_000;
@@ -54,6 +58,8 @@ const CODEX_TOKEN_SOURCE_MANAGED: &str = "managed";
 const CODEX_PROACTIVE_REFRESH_INTERVAL_SECONDS: i64 = 8 * 24 * 60 * 60;
 const CODEX_AUTH_PROJECTION_FILE_NAME: &str = ".cockpit_codex_auth.json";
 const CODEX_AUTH_PROJECTION_WRITER: &str = "cockpit";
+const CODEX_LITELLM_GATEWAY_PROVIDER_ID: &str = "litellm_gateway";
+const CODEX_LITELLM_GATEWAY_MODEL_ID: &str = "cockpit-current";
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -774,6 +780,15 @@ fn read_api_provider_from_config_toml(base_dir: &Path) -> ApiProviderConfig {
     );
 
     if let Some(provider_id) = model_provider {
+        if provider_id == "openai" {
+            return infer_api_provider_config(
+                openai_base_url.as_deref(),
+                Some(CodexApiProviderMode::OpenaiBuiltin),
+                Some(provider_id.as_str()),
+                None,
+            );
+        }
+
         let provider_base_url = doc
             .get(CODEX_CONFIG_MODEL_PROVIDERS_KEY)
             .and_then(|item| item.get(provider_id.as_str()))
@@ -810,10 +825,6 @@ fn write_api_provider_to_config_toml(
     let config_path = get_config_toml_path(base_dir);
     let normalized = provider_config.base_url.clone();
 
-    if !config_path.exists() && normalized.is_none() {
-        return Ok(());
-    }
-
     let existing = fs::read_to_string(&config_path).unwrap_or_default();
     let mut doc = if existing.trim().is_empty() {
         Document::new()
@@ -825,19 +836,66 @@ fn write_api_provider_to_config_toml(
 
     match provider_config.mode {
         CodexApiProviderMode::OpenaiBuiltin => {
-            let _ = doc.remove(CODEX_CONFIG_MODEL_PROVIDER_KEY);
+            if doc
+                .get(CODEX_CONFIG_MODEL_KEY)
+                .and_then(|item| item.as_str())
+                == Some(CODEX_LITELLM_GATEWAY_MODEL_ID)
+            {
+                let _ = doc.remove(CODEX_CONFIG_MODEL_KEY);
+            }
+            doc[CODEX_CONFIG_MODEL_PROVIDER_KEY] = value(CODEX_OPENAI_PROVIDER_ID);
             remove_managed_api_key_model_providers_from_doc(&mut doc);
             match normalized.as_deref() {
                 Some(base_url) => {
                     doc[CODEX_CONFIG_OPENAI_BASE_URL_KEY] = value(base_url);
+                    doc[CODEX_CONFIG_FORCED_LOGIN_METHOD_KEY] = value("api");
+                    write_profile_provider_projection(
+                        &mut doc,
+                        CODEX_PROFILE_SHARED_CURRENT_PROVIDER,
+                        "api",
+                        CODEX_OPENAI_PROVIDER_ID,
+                        Some(base_url),
+                    )?;
                 }
                 None => {
                     let _ = doc.remove(CODEX_CONFIG_OPENAI_BASE_URL_KEY);
+                    doc[CODEX_CONFIG_FORCED_LOGIN_METHOD_KEY] = value("chatgpt");
+                    write_profile_provider_projection(
+                        &mut doc,
+                        CODEX_PROFILE_SHARED_CURRENT_PROVIDER,
+                        "chatgpt",
+                        CODEX_OPENAI_PROVIDER_ID,
+                        None,
+                    )?;
                 }
+            }
+            write_profile_provider_projection(
+                &mut doc,
+                CODEX_PROFILE_SHARED_COCKPIT_AUTH,
+                "chatgpt",
+                CODEX_OPENAI_PROVIDER_ID,
+                None,
+            )?;
+            if let Some(preferred_api_provider) = collect_projectable_api_provider_configs()
+                .into_iter()
+                .next()
+            {
+                write_profile_provider_projection(
+                    &mut doc,
+                    CODEX_PROFILE_SHARED_COCKPIT_API,
+                    "api",
+                    preferred_api_provider
+                        .provider_id
+                        .as_deref()
+                        .ok_or("自定义供应商缺少 provider_id")?,
+                    None,
+                )?;
+                write_model_provider_section(&mut doc, &preferred_api_provider)?;
             }
         }
         CodexApiProviderMode::Custom => {
             let _ = doc.remove(CODEX_CONFIG_OPENAI_BASE_URL_KEY);
+            doc[CODEX_CONFIG_FORCED_LOGIN_METHOD_KEY] = value("api");
             let provider_id = provider_config
                 .provider_id
                 .as_deref()
@@ -850,23 +908,39 @@ fn write_api_provider_to_config_toml(
             let base_url = normalized.as_deref().ok_or("自定义供应商缺少 Base URL")?;
 
             doc[CODEX_CONFIG_MODEL_PROVIDER_KEY] = value(provider_id);
-            if doc.get(CODEX_CONFIG_MODEL_PROVIDERS_KEY).is_none() {
-                doc[CODEX_CONFIG_MODEL_PROVIDERS_KEY] = toml_edit::table();
+            if provider_id == CODEX_LITELLM_GATEWAY_PROVIDER_ID {
+                doc[CODEX_CONFIG_MODEL_KEY] = value(CODEX_LITELLM_GATEWAY_MODEL_ID);
             }
-            let model_providers = doc[CODEX_CONFIG_MODEL_PROVIDERS_KEY]
-                .as_table_mut()
-                .ok_or("config.toml 中 model_providers 不是合法表结构")?;
-            if !model_providers.contains_key(provider_id) {
-                model_providers[provider_id] = toml_edit::table();
-            }
-            let provider_table = model_providers[provider_id]
-                .as_table_mut()
-                .ok_or("config.toml 中目标 provider 不是合法表结构")?;
-            provider_table["name"] = value(provider_name);
-            provider_table["base_url"] = value(base_url);
-            provider_table["wire_api"] = value(CODEX_PROVIDER_WIRE_API);
-            provider_table["requires_openai_auth"] = value(false);
-            provider_table["supports_websockets"] = value(false);
+            write_profile_provider_projection(
+                &mut doc,
+                CODEX_PROFILE_SHARED_CURRENT_PROVIDER,
+                "api",
+                provider_id,
+                None,
+            )?;
+            write_profile_provider_projection(
+                &mut doc,
+                CODEX_PROFILE_SHARED_COCKPIT_API,
+                "api",
+                provider_id,
+                None,
+            )?;
+            write_profile_provider_projection(
+                &mut doc,
+                CODEX_PROFILE_SHARED_COCKPIT_AUTH,
+                "chatgpt",
+                CODEX_OPENAI_PROVIDER_ID,
+                None,
+            )?;
+            write_model_provider_section(
+                &mut doc,
+                &ApiProviderConfig {
+                    mode: CodexApiProviderMode::Custom,
+                    base_url: Some(base_url.to_string()),
+                    provider_id: Some(provider_id.to_string()),
+                    provider_name: Some(provider_name.to_string()),
+                },
+            )?;
         }
     }
 
@@ -876,6 +950,141 @@ fn write_api_provider_to_config_toml(
     let content = doc.to_string();
     crate::modules::atomic_write::write_string_atomic(&config_path, &content)
         .map_err(|e| format!("写入 config.toml 失败: {}", e))
+}
+
+fn ensure_nested_table<'a>(
+    doc: &'a mut Document,
+    parent_key: &str,
+    child_key: &str,
+) -> Result<&'a mut toml_edit::Table, String> {
+    if doc.get(parent_key).is_none() {
+        doc[parent_key] = toml_edit::table();
+    }
+    let parent = doc[parent_key]
+        .as_table_mut()
+        .ok_or_else(|| format!("config.toml 中 {} 不是合法表结构", parent_key))?;
+    if !parent.contains_key(child_key) {
+        parent[child_key] = toml_edit::table();
+    }
+    parent[child_key]
+        .as_table_mut()
+        .ok_or_else(|| format!("config.toml 中 {}.{} 不是合法表结构", parent_key, child_key))
+}
+
+fn write_profile_provider_projection(
+    doc: &mut Document,
+    profile_id: &str,
+    forced_login_method: &str,
+    model_provider: &str,
+    openai_base_url: Option<&str>,
+) -> Result<(), String> {
+    let profile = ensure_nested_table(doc, "profiles", profile_id)?;
+    profile[CODEX_CONFIG_FORCED_LOGIN_METHOD_KEY] = value(forced_login_method);
+    profile[CODEX_CONFIG_MODEL_PROVIDER_KEY] = value(model_provider);
+    match openai_base_url {
+        Some(base_url) => {
+            profile[CODEX_CONFIG_OPENAI_BASE_URL_KEY] = value(base_url);
+        }
+        None => {
+            let _ = profile.remove(CODEX_CONFIG_OPENAI_BASE_URL_KEY);
+        }
+    }
+    Ok(())
+}
+
+fn write_model_provider_section(
+    doc: &mut Document,
+    provider_config: &ApiProviderConfig,
+) -> Result<(), String> {
+    let provider_id = provider_config
+        .provider_id
+        .as_deref()
+        .ok_or("自定义供应商缺少 provider_id")?;
+    let provider_name = provider_config
+        .provider_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or(provider_id);
+    let base_url = provider_config
+        .base_url
+        .as_deref()
+        .ok_or("自定义供应商缺少 Base URL")?;
+    let provider_table = ensure_nested_table(doc, CODEX_CONFIG_MODEL_PROVIDERS_KEY, provider_id)?;
+    provider_table["name"] = value(provider_name);
+    provider_table["base_url"] = value(base_url);
+    provider_table["wire_api"] = value(CODEX_PROVIDER_WIRE_API);
+    provider_table["requires_openai_auth"] = value(false);
+    provider_table["supports_websockets"] = value(false);
+    Ok(())
+}
+
+fn collect_projectable_api_provider_configs() -> Vec<ApiProviderConfig> {
+    let mut providers = Vec::new();
+    let mut seen = HashSet::new();
+
+    for account in list_accounts() {
+        if !account.is_api_key_auth() {
+            continue;
+        }
+        let provider_config = infer_api_provider_config(
+            account.api_base_url.as_deref(),
+            Some(account.api_provider_mode.clone()),
+            account.api_provider_id.as_deref(),
+            account.api_provider_name.as_deref(),
+        );
+        if provider_config.mode != CodexApiProviderMode::Custom {
+            continue;
+        }
+        let Some(provider_id) = provider_config.provider_id.as_deref() else {
+            continue;
+        };
+        if seen.insert(provider_id.to_string()) {
+            providers.push(provider_config);
+        }
+    }
+
+    if let Ok(data_dir) = account::get_data_dir() {
+        let path = data_dir.join("codex_model_providers.json");
+        if let Ok(content) = fs::read_to_string(path) {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&content) {
+                if let Some(items) = value.as_array() {
+                    for item in items {
+                        let provider_id = item
+                            .get("id")
+                            .and_then(|value| value.as_str())
+                            .and_then(sanitize_api_provider_id);
+                        let provider_name = normalize_api_provider_name(
+                            item.get("name").and_then(|value| value.as_str()),
+                        );
+                        let base_url = normalize_api_base_url(
+                            item.get("baseUrl")
+                                .or_else(|| item.get("base_url"))
+                                .and_then(|value| value.as_str()),
+                        );
+                        let Some(provider_id) = provider_id else {
+                            continue;
+                        };
+                        if provider_id == CODEX_OPENAI_PROVIDER_ID || seen.contains(&provider_id) {
+                            continue;
+                        }
+                        let Some(base_url) = base_url else {
+                            continue;
+                        };
+                        if seen.insert(provider_id.clone()) {
+                            providers.push(ApiProviderConfig {
+                                mode: CodexApiProviderMode::Custom,
+                                base_url: Some(base_url),
+                                provider_id: Some(provider_id),
+                                provider_name,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    providers
 }
 
 fn collect_managed_api_key_provider_ids() -> HashSet<String> {
@@ -919,17 +1128,15 @@ fn write_api_key_provider_to_config_toml(
     base_dir: &Path,
     provider_config: &ApiProviderConfig,
 ) -> Result<(), String> {
+    if provider_config.mode == CodexApiProviderMode::Custom {
+        return write_api_provider_to_config_toml(base_dir, provider_config);
+    }
+
     let config_path = get_config_toml_path(base_dir);
     let base_url = provider_config
         .base_url
         .as_deref()
         .unwrap_or(CODEX_DEFAULT_OPENAI_BASE_URL);
-    let provider_name = provider_config
-        .provider_name
-        .as_deref()
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or(CODEX_DEFAULT_RUNTIME_PROVIDER_NAME);
-
     let existing = fs::read_to_string(&config_path).unwrap_or_default();
     let mut doc = if existing.trim().is_empty() {
         Document::new()
@@ -940,20 +1147,10 @@ fn write_api_key_provider_to_config_toml(
     };
 
     let _ = doc.remove(CODEX_CONFIG_OPENAI_BASE_URL_KEY);
-    doc[CODEX_CONFIG_MODEL_PROVIDER_KEY] = value(CODEX_RUNTIME_MODEL_PROVIDER_ID);
-    doc[CODEX_CONFIG_MODEL_PROVIDERS_KEY] = toml_edit::table();
-    let model_providers = doc[CODEX_CONFIG_MODEL_PROVIDERS_KEY]
-        .as_table_mut()
-        .ok_or("config.toml 中 model_providers 不是合法表结构")?;
-    model_providers[CODEX_RUNTIME_MODEL_PROVIDER_ID] = toml_edit::table();
-    let provider_table = model_providers[CODEX_RUNTIME_MODEL_PROVIDER_ID]
-        .as_table_mut()
-        .ok_or("config.toml 中目标 provider 不是合法表结构")?;
-    provider_table["name"] = value(provider_name);
-    provider_table["base_url"] = value(base_url);
-    provider_table["wire_api"] = value(CODEX_PROVIDER_WIRE_API);
-    provider_table["requires_openai_auth"] = value(false);
-    provider_table["supports_websockets"] = value(false);
+    doc[CODEX_CONFIG_MODEL_PROVIDER_KEY] = value("openai");
+    doc[CODEX_CONFIG_OPENAI_BASE_URL_KEY] = value(base_url);
+    doc[CODEX_CONFIG_FORCED_LOGIN_METHOD_KEY] = value("api");
+    remove_managed_api_key_model_providers_from_doc(&mut doc);
 
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 config.toml 目录失败: {}", e))?;
@@ -4421,7 +4618,8 @@ mod tests {
         let config_path = base_dir.join("config.toml");
         let content = fs::read_to_string(&config_path).expect("read config");
         assert!(content.contains("openai_base_url = \"https://api.example.com\""));
-        assert!(!content.contains("model_provider = "));
+        assert!(content.contains("model_provider = \"openai\""));
+        assert!(content.contains("[profiles.shared-current-provider]"));
         assert!(!content.contains("codex_local_access"));
         assert_eq!(
             read_api_provider_from_config_toml(&base_dir),
@@ -4450,7 +4648,11 @@ mod tests {
         write_api_provider_to_config_toml(&base_dir, &provider_config).expect("write config");
 
         let config_path = base_dir.join("config.toml");
-        assert!(!config_path.exists());
+        let content = fs::read_to_string(&config_path).expect("read config");
+        assert!(content.contains("model_provider = \"openai\""));
+        assert!(content.contains("forced_login_method = \"chatgpt\""));
+        assert!(content.contains("[profiles.shared-current-provider]"));
+        assert!(content.contains("[profiles.shared-cockpit-auth]"));
 
         fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
     }
@@ -4502,7 +4704,9 @@ requires_openai_auth = false
         write_api_provider_to_config_toml(&base_dir, &provider_config).expect("write config");
 
         let content = fs::read_to_string(&config_path).expect("read config");
-        assert!(!content.contains("model_provider = "));
+        assert!(content.contains("model_provider = \"openai\""));
+        assert!(content.contains("[profiles.shared-current-provider]"));
+        assert!(content.contains("[profiles.shared-cockpit-auth]"));
         assert!(!content.contains("codex_local_access"));
         assert!(!content.contains("[model_providers.cockpit_api]"));
         assert!(!content.contains("[model_providers.openai_api_key]"));
@@ -4574,21 +4778,17 @@ requires_openai_auth = false
 
         let config_path = base_dir.join("config.toml");
         let content = fs::read_to_string(&config_path).expect("read config");
-        assert!(content.contains("model_provider = \"codex_local_access\""));
-        assert!(content.contains("[model_providers.codex_local_access]"));
-        assert!(content.contains("name = \"OpenAI Official\""));
-        assert!(content.contains("base_url = \"https://api.openai.com/v1\""));
-        assert!(content.contains("wire_api = \"responses\""));
-        assert!(content.contains("requires_openai_auth = false"));
-        assert!(content.contains("supports_websockets = false"));
-        assert!(!content.contains("openai_base_url"));
+        assert!(content.contains("model_provider = \"openai\""));
+        assert!(content.contains("openai_base_url = \"https://api.openai.com/v1\""));
+        assert!(content.contains("forced_login_method = \"api\""));
+        assert!(!content.contains("[model_providers.codex_local_access]"));
         assert_eq!(
             read_api_provider_from_config_toml(&base_dir),
             ApiProviderConfig {
-                mode: CodexApiProviderMode::Custom,
-                base_url: Some("https://api.openai.com/v1".to_string()),
-                provider_id: Some("codex_local_access".to_string()),
-                provider_name: Some("OpenAI Official".to_string()),
+                mode: CodexApiProviderMode::OpenaiBuiltin,
+                base_url: None,
+                provider_id: None,
+                provider_name: None,
             }
         );
 
@@ -4596,7 +4796,7 @@ requires_openai_auth = false
     }
 
     #[test]
-    fn api_key_config_toml_uses_fixed_provider_for_custom_provider() {
+    fn api_key_config_toml_uses_custom_no_websocket_provider_for_custom_provider() {
         let base_dir = make_temp_dir("codex-api-key-config-custom-provider-test");
         let provider_config = resolve_api_provider_config(
             Some("https://relay.example.com/v1/"),
@@ -4610,12 +4810,10 @@ requires_openai_auth = false
 
         let config_path = base_dir.join("config.toml");
         let content = fs::read_to_string(&config_path).expect("read config");
-        assert!(content.contains("model_provider = \"codex_local_access\""));
-        assert!(content.contains("[model_providers.codex_local_access]"));
-        assert!(!content.contains("[model_providers.relay]"));
-        assert!(content.contains("name = \"Relay\""));
+        assert!(content.contains("model_provider = \"relay\""));
+        assert!(content.contains("forced_login_method = \"api\""));
+        assert!(content.contains("[model_providers.relay]"));
         assert!(content.contains("base_url = \"https://relay.example.com/v1\""));
-        assert!(content.contains("wire_api = \"responses\""));
         assert!(content.contains("requires_openai_auth = false"));
         assert!(content.contains("supports_websockets = false"));
         assert!(!content.contains("openai_base_url"));
@@ -4624,10 +4822,46 @@ requires_openai_auth = false
             ApiProviderConfig {
                 mode: CodexApiProviderMode::Custom,
                 base_url: Some("https://relay.example.com/v1".to_string()),
-                provider_id: Some("codex_local_access".to_string()),
+                provider_id: Some("relay".to_string()),
                 provider_name: Some("Relay".to_string()),
             }
         );
+
+        fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn api_key_config_toml_sets_cockpit_current_model_for_litellm_gateway() {
+        let base_dir = make_temp_dir("codex-api-key-config-litellm-gateway-test");
+        let provider_config = resolve_api_provider_config(
+            Some("http://127.0.0.1:4000/v1/"),
+            Some(CodexApiProviderMode::Custom),
+            Some("litellm_gateway"),
+            Some("LiteLLM Gateway"),
+        )
+        .expect("resolve provider config");
+
+        write_api_key_provider_to_config_toml(&base_dir, &provider_config).expect("write config");
+
+        let config_path = base_dir.join("config.toml");
+        let content = fs::read_to_string(&config_path).expect("read config");
+        assert!(content.contains("model_provider = \"litellm_gateway\""));
+        assert!(content.contains("model = \"cockpit-current\""));
+        assert!(content.contains("base_url = \"http://127.0.0.1:4000/v1\""));
+        assert!(content.contains("supports_websockets = false"));
+
+        let official_provider_config = resolve_api_provider_config(
+            None,
+            Some(CodexApiProviderMode::OpenaiBuiltin),
+            None,
+            None,
+        )
+        .expect("resolve official provider config");
+        write_api_provider_to_config_toml(&base_dir, &official_provider_config)
+            .expect("write official config");
+        let content = fs::read_to_string(&config_path).expect("read restored config");
+        assert!(!content.contains("model = \"cockpit-current\""));
+        assert!(content.contains("model_provider = \"openai\""));
 
         fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
     }
@@ -4667,11 +4901,12 @@ requires_openai_auth = true
         write_api_key_provider_to_config_toml(&base_dir, &provider_config).expect("write config");
 
         let content = fs::read_to_string(&config_path).expect("read config");
-        assert!(content.contains("model_provider = \"codex_local_access\""));
-        assert!(content.contains("[model_providers.codex_local_access]"));
-        assert!(!content.contains("[model_providers.mimo]"));
-        assert!(!content.contains("[model_providers.relay]"));
-        assert!(!content.contains("openai_base_url"));
+        assert!(content.contains("model_provider = \"openai\""));
+        assert!(content.contains("openai_base_url = \"https://api.openai.com/v1\""));
+        assert!(content.contains("forced_login_method = \"api\""));
+        assert!(!content.contains("[model_providers.codex_local_access]"));
+        assert!(content.contains("[model_providers.mimo]"));
+        assert!(content.contains("[model_providers.relay]"));
         assert!(content.contains("model_context_window = 1000000"));
 
         fs::remove_dir_all(&base_dir).expect("cleanup temp dir");

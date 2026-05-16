@@ -27,6 +27,8 @@ import type {
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
   CodexLocalAccessStatsWindow,
+  CodexRuntimeIntegrationMode,
+  CodexRuntimeModeState,
 } from '../types/codexLocalAccess';
 import {
   getCodexPlanFilterKey,
@@ -56,6 +58,7 @@ interface CodexLocalAccessModalProps {
   isOpen: boolean;
   mode: 'panel' | 'members';
   state: CodexLocalAccessState | null;
+  runtimeMode: CodexRuntimeModeState | null;
   addressKind: CodexLocalAccessAddressKind;
   addressOptions: Array<{ value: string; label: string }>;
   onAddressKindChange: (value: string) => void;
@@ -74,6 +77,8 @@ interface CodexLocalAccessModalProps {
   onUpdateRoutingStrategy: (
     strategy: CodexLocalAccessRoutingStrategy,
   ) => Promise<unknown> | unknown;
+  onSetFollowCurrentAccount: (enabled: boolean) => Promise<unknown> | unknown;
+  onSetRuntimeMode: (mode: CodexRuntimeIntegrationMode) => Promise<unknown> | unknown;
   onRotateApiKey: () => Promise<unknown> | unknown;
   onKillPort: () => Promise<unknown> | unknown;
   onToggleEnabled: () => Promise<unknown> | unknown;
@@ -146,6 +151,7 @@ export function CodexLocalAccessModal({
   isOpen,
   mode,
   state,
+  runtimeMode,
   addressKind,
   addressOptions,
   onAddressKindChange,
@@ -159,6 +165,8 @@ export function CodexLocalAccessModal({
   onRefreshStats,
   onUpdatePort,
   onUpdateRoutingStrategy,
+  onSetFollowCurrentAccount,
+  onSetRuntimeMode,
   onRotateApiKey,
   onKillPort,
   onToggleEnabled,
@@ -174,7 +182,7 @@ export function CodexLocalAccessModal({
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
-  const [restrictFreeAccounts, setRestrictFreeAccounts] = useState(true);
+  const [restrictFreeAccounts, setRestrictFreeAccounts] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [portInput, setPortInput] = useState('');
@@ -215,6 +223,8 @@ export function CodexLocalAccessModal({
   }, [stats, statsRange]);
   const selectedTotals = selectedStatsWindow?.totals;
   const routingStrategy = collection?.routingStrategy ?? 'auto';
+  const followCurrentAccount = collection?.followCurrentAccount ?? false;
+  const selectedRuntimeMode = runtimeMode?.mode ?? 'direct_projection';
   const modelIdOptions = useMemo(
     () => modelIds.map((modelId) => ({ value: modelId, label: modelId })),
     [modelIds],
@@ -303,7 +313,7 @@ export function CodexLocalAccessModal({
     setFilterTypes([]);
     setTagFilter([]);
     setGroupFilter([]);
-    setRestrictFreeAccounts(collection?.restrictFreeAccounts ?? true);
+    setRestrictFreeAccounts(collection?.restrictFreeAccounts ?? false);
     setError('');
     setNotice('');
     setKeyVisible(false);
@@ -541,7 +551,7 @@ export function CodexLocalAccessModal({
   const selectionDirty = useMemo(
     () =>
       !areSetsEqual(selected, new Set(normalizedInitialSelectedIds)) ||
-      restrictFreeAccounts !== (collection?.restrictFreeAccounts ?? true),
+      restrictFreeAccounts !== (collection?.restrictFreeAccounts ?? false),
     [collection?.restrictFreeAccounts, normalizedInitialSelectedIds, restrictFreeAccounts, selected],
   );
 
@@ -606,6 +616,20 @@ export function CodexLocalAccessModal({
         label: t('codex.localAccess.routingStrategy.expirySoonFirst', '优先近到期'),
       },
     ] satisfies Array<{ value: CodexLocalAccessRoutingStrategy; label: string }>,
+    [t],
+  );
+  const runtimeModeOptions = useMemo(
+    () =>
+      [
+        {
+          value: 'direct_projection',
+          label: t('codex.localAccess.runtimeMode.direct', 'Direct API/OAuth'),
+        },
+        {
+          value: 'gateway_litellm',
+          label: t('codex.localAccess.runtimeMode.gateway', 'LiteLLM Gateway'),
+        },
+      ],
     [t],
   );
 
@@ -751,6 +775,33 @@ export function CodexLocalAccessModal({
         await onUpdateRoutingStrategy(nextStrategy as CodexLocalAccessRoutingStrategy);
       },
       t('codex.localAccess.routingSaveSuccess', 'API 服务调度策略已更新'),
+    );
+  };
+
+  const handleToggleFollowCurrentAccount = async () => {
+    if (!collection) return;
+    const nextEnabled = !followCurrentAccount;
+
+    await runAction(
+      async () => {
+        await onSetFollowCurrentAccount(nextEnabled);
+      },
+      nextEnabled
+        ? t('codex.localAccess.followCurrentEnabled', '已启用跟随当前账号')
+        : t('codex.localAccess.followCurrentDisabled', '已关闭跟随当前账号'),
+    );
+  };
+
+  const handleChangeRuntimeMode = async (nextMode: string) => {
+    if (nextMode === selectedRuntimeMode) return;
+
+    await runAction(
+      async () => {
+        await onSetRuntimeMode(nextMode as CodexRuntimeIntegrationMode);
+      },
+      nextMode === 'gateway_litellm'
+        ? t('codex.localAccess.runtimeModeGatewaySuccess', '已切换为 LiteLLM Gateway 模式')
+        : t('codex.localAccess.runtimeModeDirectSuccess', '已切换为 Direct API/OAuth 模式'),
     );
   };
 
@@ -1196,6 +1247,32 @@ export function CodexLocalAccessModal({
                         />
                       </div>
                     </div>
+
+                    <div className="codex-local-access-config-card codex-local-access-config-card-runtime">
+                      <div className="codex-local-access-config-head">
+                        <span className="codex-local-access-config-label">
+                          {t('codex.localAccess.runtimeMode.title', 'Codex 模式')}
+                        </span>
+                      </div>
+                      <SingleSelectDropdown
+                        value={selectedRuntimeMode}
+                        options={runtimeModeOptions}
+                        onChange={(value) => void handleChangeRuntimeMode(value)}
+                        menuClassName="codex-local-access-runtime-mode-menu"
+                        menuWidth={190}
+                        menuMaxHeight={120}
+                        disabled={saving || testing || starting}
+                        ariaLabel={t('codex.localAccess.runtimeMode.title', 'Codex 模式')}
+                      />
+                      <div className="codex-local-access-runtime-mode-meta">
+                        {runtimeMode?.accountKind
+                          ? t('codex.localAccess.runtimeMode.accountKind', {
+                              kind: runtimeMode.accountKind,
+                              defaultValue: '账号类型：{{kind}}',
+                            })
+                          : t('codex.localAccess.runtimeMode.accountKindUnknown', '账号类型：unknown')}
+                      </div>
+                    </div>
                   </div>
                 ) : (
                   <div className="group-account-empty">
@@ -1346,6 +1423,20 @@ export function CodexLocalAccessModal({
                     {t(
                       'codex.localAccess.modal.restrictFreeToggle',
                       '限制 Free 账号使用',
+                    )}
+                  </span>
+                </label>
+                <label className="codex-local-access-free-toggle">
+                  <input
+                    type="checkbox"
+                    checked={followCurrentAccount}
+                    onChange={() => void handleToggleFollowCurrentAccount()}
+                    disabled={actionBusy || !collection}
+                  />
+                  <span>
+                    {t(
+                      'codex.localAccess.modal.followCurrentToggle',
+                      '跟随当前手动切号',
                     )}
                   </span>
                 </label>

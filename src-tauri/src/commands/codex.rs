@@ -4,6 +4,7 @@ use crate::models::codex::{
 };
 use crate::models::codex_local_access::{
     CodexLocalAccessPortCleanupResult, CodexLocalAccessRoutingStrategy, CodexLocalAccessState,
+    CodexRuntimeIntegrationMode, CodexRuntimeModeState,
 };
 use crate::modules::{
     codex_account, codex_local_access, codex_oauth, codex_quota, codex_speed, codex_wakeup,
@@ -147,25 +148,28 @@ pub async fn switch_codex_account(
     let account_speed = account.app_speed.clone();
     codex_speed::write_official_app_speed(account_speed.clone())?;
 
-    // 同步更新 Codex 默认实例的绑定账号（不同步到 Antigravity，因为账号体系不同）
-    if let Err(e) = crate::modules::codex_instance::update_default_settings(
-        Some(Some(account_id.clone())),
-        None,
-        Some(false),
-        None,
-    ) {
-        logger::log_warn(&format!("更新 Codex 默认实例绑定账号失败: {}", e));
+    // 默认实例始终跟随当前账号，具体 direct/gateway 投影由 runtime mode 决定。
+    if let Err(e) =
+        crate::modules::codex_instance::update_default_settings(None, None, Some(true), None)
+    {
+        logger::log_warn(&format!("更新 Codex 默认实例跟随当前账号失败: {}", e));
     } else {
-        logger::log_info(&format!(
-            "已同步更新 Codex 默认实例绑定账号: {}",
-            account_id
-        ));
+        logger::log_info("已同步更新 Codex 默认实例为跟随当前账号");
     }
     if let Err(e) = crate::modules::codex_instance::update_default_app_speed(account_speed) {
         logger::log_warn(&format!("更新 Codex 默认实例速度失败: {}", e));
     }
 
     let user_config = config::get_user_config();
+    if let Err(e) =
+        codex_local_access::sync_runtime_projection_after_account_switch(&account_id).await
+    {
+        logger::log_warn(&format!(
+            "同步 Codex runtime mode 投影失败，已保留账号切换结果: {}",
+            e
+        ));
+    }
+
     let mut opencode_updated = false;
     if user_config.opencode_auth_overwrite_on_switch {
         match opencode_auth::replace_openai_entry_from_codex(&account) {
@@ -299,40 +303,14 @@ async fn refresh_imported_codex_accounts(
     app: &AppHandle,
     accounts: Vec<CodexAccount>,
 ) -> Vec<CodexAccount> {
-    let mut result = Vec::with_capacity(accounts.len());
-    let mut success_count = 0;
-    let mut attempted = false;
-
-    for account in accounts {
-        if account.is_api_key_auth() {
-            result.push(account);
-            continue;
-        }
-
-        attempted = true;
-        match codex_quota::refresh_account_quota(&account.id).await {
-            Ok(_) => {
-                success_count += 1;
-            }
-            Err(error) => {
-                logger::log_warn(&format!(
-                    "Codex 导入后刷新配额失败: account_id={}, email={}, error={}",
-                    account.id, account.email, error
-                ));
-            }
-        }
-
-        result.push(codex_account::load_account(&account.id).unwrap_or(account));
-    }
-
-    if success_count > 0 {
-        run_codex_post_refresh_checks(app).await;
-    }
-    if attempted || !result.is_empty() {
+    if !accounts.is_empty() {
+        logger::log_info(&format!(
+            "Codex 自用版导入账号后跳过自动配额刷新: count={}",
+            accounts.len()
+        ));
         let _ = crate::modules::tray::update_tray_menu(app);
     }
-
-    result
+    accounts
 }
 
 /// 从本地 auth.json 导入账号
@@ -524,12 +502,11 @@ pub async fn add_codex_account_with_token(
 
     let account = codex_account::upsert_account(tokens)?;
 
-    // 刷新配额
-    if let Err(e) = codex_quota::refresh_account_quota(&account.id).await {
-        logger::log_error(&format!("刷新配额失败: {}", e));
-    }
-
-    codex_account::load_account(&account.id).ok_or_else(|| "账号保存后无法读取".to_string())
+    logger::log_info(&format!(
+        "Codex 自用版添加 Token 账号后跳过自动配额刷新: account_id={}",
+        account.id
+    ));
+    Ok(account)
 }
 
 /// 通过 API Key 添加账号
@@ -779,7 +756,7 @@ pub async fn codex_local_access_save_accounts(
 ) -> Result<CodexLocalAccessState, String> {
     codex_local_access::save_local_access_accounts(
         account_ids,
-        restrict_free_accounts.unwrap_or(true),
+        restrict_free_accounts.unwrap_or(false),
     )
     .await
 }
@@ -824,6 +801,13 @@ pub async fn codex_local_access_update_routing_strategy(
 }
 
 #[tauri::command]
+pub async fn codex_local_access_set_follow_current_account(
+    enabled: bool,
+) -> Result<CodexLocalAccessState, String> {
+    codex_local_access::set_local_access_follow_current_account(enabled).await
+}
+
+#[tauri::command]
 pub async fn codex_local_access_set_enabled(
     enabled: bool,
 ) -> Result<CodexLocalAccessState, String> {
@@ -831,28 +815,37 @@ pub async fn codex_local_access_set_enabled(
 }
 
 #[tauri::command]
+pub fn codex_runtime_mode_get() -> Result<CodexRuntimeModeState, String> {
+    codex_local_access::load_runtime_mode_state()
+}
+
+#[tauri::command]
+pub async fn codex_runtime_mode_set(
+    mode: CodexRuntimeIntegrationMode,
+) -> Result<CodexRuntimeModeState, String> {
+    codex_local_access::set_runtime_integration_mode(mode).await
+}
+
+#[tauri::command]
 pub async fn codex_local_access_activate(app: AppHandle) -> Result<CodexLocalAccessState, String> {
     let codex_home = codex_account::get_codex_home();
     let state = codex_local_access::activate_local_access_for_dir(&codex_home).await?;
+    if let Err(e) = codex_local_access::set_runtime_integration_mode(
+        CodexRuntimeIntegrationMode::GatewayLitellm,
+    )
+    .await
+    {
+        logger::log_warn(&format!(
+            "API 服务启动模式已启用，但写入 Codex runtime mode 失败: {}",
+            e
+        ));
+    }
     let api_service_speed = codex_speed::get_api_service_app_speed_config()?.speed;
     codex_speed::write_official_app_speed(api_service_speed.clone())?;
 
-    let mut index = codex_account::load_account_index();
-    index.current_account_id = None;
-    codex_account::save_account_index(&index)?;
-
-    if let Err(e) = crate::modules::codex_instance::update_default_settings(
-        Some(Some(
-            crate::modules::codex_instance::CODEX_API_SERVICE_BIND_ACCOUNT_ID.to_string(),
-        )),
-        None,
-        Some(false),
-        None,
-    ) {
-        logger::log_warn(&format!("更新 Codex 默认实例为 API 服务模式失败: {}", e));
-    } else {
-        logger::log_info("已同步更新 Codex 默认实例为 API 服务模式");
-    }
+    logger::log_info(
+        "API 服务启动模式下保留当前 Codex 账号与默认实例绑定，由本地 gateway/profile 管理",
+    );
     if let Err(e) = crate::modules::codex_instance::update_default_app_speed(api_service_speed) {
         logger::log_warn(&format!("更新 Codex 默认实例 API 服务速度失败: {}", e));
     }

@@ -8,12 +8,24 @@ export type CodexLocalAccessRoutingStrategy =
   | 'plan_low_first'
   | 'expiry_soon_first';
 
+export type CodexRuntimeIntegrationMode = 'direct_projection' | 'gateway_litellm';
+
+export type CodexRuntimeAccountKind = 'oauth' | 'api' | 'unknown';
+
+export interface CodexRuntimeModeState {
+  mode: CodexRuntimeIntegrationMode;
+  accountKind: CodexRuntimeAccountKind;
+  currentAccountId?: string | null;
+  updatedAt: number;
+}
+
 export interface CodexLocalAccessCollection {
   enabled: boolean;
   port: number;
   apiKey: string;
   routingStrategy: CodexLocalAccessRoutingStrategy;
   restrictFreeAccounts: boolean;
+  followCurrentAccount: boolean;
   accountIds: string[];
   createdAt: number;
   updatedAt: number;

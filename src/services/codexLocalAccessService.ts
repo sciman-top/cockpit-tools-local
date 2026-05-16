@@ -3,6 +3,8 @@ import type {
   CodexLocalAccessPortCleanupResult,
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
+  CodexRuntimeIntegrationMode,
+  CodexRuntimeModeState,
 } from '../types/codexLocalAccess';
 
 export async function getCodexLocalAccessState(): Promise<CodexLocalAccessState> {
@@ -53,10 +55,26 @@ export async function updateCodexLocalAccessRoutingStrategy(
   return await invoke('codex_local_access_update_routing_strategy', { strategy });
 }
 
+export async function setCodexLocalAccessFollowCurrentAccount(
+  enabled: boolean,
+): Promise<CodexLocalAccessState> {
+  return await invoke('codex_local_access_set_follow_current_account', { enabled });
+}
+
 export async function setCodexLocalAccessEnabled(
   enabled: boolean,
 ): Promise<CodexLocalAccessState> {
   return await invoke('codex_local_access_set_enabled', { enabled });
+}
+
+export async function getCodexRuntimeMode(): Promise<CodexRuntimeModeState> {
+  return await invoke('codex_runtime_mode_get');
+}
+
+export async function setCodexRuntimeMode(
+  mode: CodexRuntimeIntegrationMode,
+): Promise<CodexRuntimeModeState> {
+  return await invoke('codex_runtime_mode_set', { mode });
 }
 
 export async function activateCodexLocalAccess(): Promise<CodexLocalAccessState> {

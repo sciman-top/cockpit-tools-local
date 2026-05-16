@@ -130,6 +130,8 @@ import type {
   CodexLocalAccessAddressKind,
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
+  CodexRuntimeIntegrationMode,
+  CodexRuntimeModeState,
 } from "../types/codexLocalAccess";
 import {
   CODEX_API_SERVICE_BIND_ID,
@@ -547,6 +549,8 @@ export function CodexAccountsPage() {
   >(new Set());
   const [localAccessState, setLocalAccessState] =
     useState<CodexLocalAccessState | null>(null);
+  const [codexRuntimeMode, setCodexRuntimeMode] =
+    useState<CodexRuntimeModeState | null>(null);
   const [showLocalAccessModal, setShowLocalAccessModal] = useState(false);
   const [localAccessModalMode, setLocalAccessModalMode] = useState<
     "panel" | "members"
@@ -866,6 +870,15 @@ export function CodexAccountsPage() {
     }
   }, [setMessage, t]);
 
+  const reloadCodexRuntimeMode = useCallback(async () => {
+    try {
+      const nextState = await codexLocalAccessService.getCodexRuntimeMode();
+      setCodexRuntimeMode(nextState);
+    } catch (error) {
+      console.error("Failed to load codex runtime mode:", error);
+    }
+  }, []);
+
   const reloadLocalAccessEntryVisibility = useCallback(async () => {
     try {
       const config =
@@ -919,6 +932,10 @@ export function CodexAccountsPage() {
   }, [reloadLocalAccessState]);
 
   useEffect(() => {
+    void reloadCodexRuntimeMode();
+  }, [reloadCodexRuntimeMode]);
+
+  useEffect(() => {
     void reloadLocalAccessEntryVisibility();
   }, [reloadLocalAccessEntryVisibility]);
 
@@ -952,6 +969,7 @@ export function CodexAccountsPage() {
     const handleLocalAccessUpdated = () => {
       void reloadLocalAccessState();
       void reloadLocalAccessLaunchCurrent();
+      void reloadCodexRuntimeMode();
     };
     window.addEventListener(
       "codex-local-access-state-updated",
@@ -963,7 +981,7 @@ export function CodexAccountsPage() {
         handleLocalAccessUpdated,
       );
     };
-  }, [reloadLocalAccessLaunchCurrent, reloadLocalAccessState]);
+  }, [reloadCodexRuntimeMode, reloadLocalAccessLaunchCurrent, reloadLocalAccessState]);
 
   useEffect(() => {
     if (!localAccessEntryVisible) {
@@ -3987,7 +4005,7 @@ export function CodexAccountsPage() {
     ) => {
       setLocalAccessSaving(true);
       try {
-        const restrictFreeAccounts = options?.restrictFreeAccounts ?? true;
+        const restrictFreeAccounts = options?.restrictFreeAccounts ?? false;
         const accountById = new Map(
           accounts.map((account) => [account.id, account]),
         );
@@ -4031,7 +4049,7 @@ export function CodexAccountsPage() {
           localAccessCollection.accountIds.filter((id) => id !== accountId),
           {
             restrictFreeAccounts:
-              localAccessCollection.restrictFreeAccounts ?? true,
+              localAccessCollection.restrictFreeAccounts ?? false,
           },
         );
       } catch (error) {
@@ -4371,6 +4389,63 @@ export function CodexAccountsPage() {
     [setMessage, t],
   );
 
+  const handleSetLocalAccessFollowCurrentAccount = useCallback(
+    async (enabled: boolean) => {
+      setLocalAccessSaving(true);
+      try {
+        const nextState =
+          await codexLocalAccessService.setCodexLocalAccessFollowCurrentAccount(
+            enabled,
+          );
+        setLocalAccessState(nextState);
+        setMessage({
+          text: nextState.collection?.followCurrentAccount
+            ? t("codex.localAccess.followCurrentEnabled", "已启用跟随当前账号")
+            : t("codex.localAccess.followCurrentDisabled", "已关闭跟随当前账号"),
+        });
+        return nextState;
+      } catch (error) {
+        console.error("Failed to update local access follow-current mode:", error);
+        throw new Error(String(error).replace(/^Error:\s*/, ""));
+      } finally {
+        setLocalAccessSaving(false);
+      }
+    },
+    [setMessage, t],
+  );
+
+  const handleSetCodexRuntimeMode = useCallback(
+    async (mode: CodexRuntimeIntegrationMode) => {
+      setLocalAccessSaving(true);
+      try {
+        const nextRuntimeMode =
+          await codexLocalAccessService.setCodexRuntimeMode(mode);
+        setCodexRuntimeMode(nextRuntimeMode);
+        await reloadLocalAccessState();
+        await reloadLocalAccessLaunchCurrent();
+        setMessage({
+          text:
+            nextRuntimeMode.mode === "gateway_litellm"
+              ? t(
+                  "codex.localAccess.runtimeModeGatewaySuccess",
+                  "已切换为 LiteLLM Gateway 模式",
+                )
+              : t(
+                  "codex.localAccess.runtimeModeDirectSuccess",
+                  "已切换为 Direct API/OAuth 模式",
+                ),
+        });
+        return nextRuntimeMode;
+      } catch (error) {
+        console.error("Failed to update codex runtime mode:", error);
+        throw new Error(String(error).replace(/^Error:\s*/, ""));
+      } finally {
+        setLocalAccessSaving(false);
+      }
+    },
+    [reloadLocalAccessLaunchCurrent, reloadLocalAccessState, setMessage, t],
+  );
+
   const handleToggleLocalAccessEnabled = useCallback(async () => {
     if (!localAccessCollection) return;
     if (!localAccessCollection.enabled) {
@@ -4662,19 +4737,26 @@ export function CodexAccountsPage() {
         return b.created_at - a.created_at;
       }
 
-      const cockpitApiPriority =
-        Number(!isCodexNewApiAccount(a)) - Number(!isCodexNewApiAccount(b));
-      if (cockpitApiPriority !== 0) {
-        return cockpitApiPriority;
-      }
+      const isQuotaSort =
+        sortBy === "weekly" ||
+        sortBy === "hourly" ||
+        sortBy === "weekly_reset" ||
+        sortBy === "hourly_reset";
+      if (!isQuotaSort) {
+        const cockpitApiPriority =
+          Number(!isCodexNewApiAccount(a)) - Number(!isCodexNewApiAccount(b));
+        if (cockpitApiPriority !== 0) {
+          return cockpitApiPriority;
+        }
 
-      const currentFirstDiff = compareCurrentAccountFirst(
-        a.id,
-        b.id,
-        overviewCurrentAccountId,
-      );
-      if (currentFirstDiff !== 0) {
-        return currentFirstDiff;
+        const currentFirstDiff = compareCurrentAccountFirst(
+          a.id,
+          b.id,
+          overviewCurrentAccountId,
+        );
+        if (currentFirstDiff !== 0) {
+          return currentFirstDiff;
+        }
       }
 
       if (sortBy === "created_at") {
@@ -9597,6 +9679,7 @@ export function CodexAccountsPage() {
             isOpen={showLocalAccessModal}
             mode={localAccessModalMode}
             state={localAccessState}
+            runtimeMode={codexRuntimeMode}
             addressKind={selectedLocalAccessAddressKind}
             addressOptions={localAccessAddressOptions}
             onAddressKindChange={handleLocalAccessAddressKindChange}
@@ -9614,6 +9697,8 @@ export function CodexAccountsPage() {
             onRefreshStats={reloadLocalAccessState}
             onUpdatePort={handleUpdateLocalAccessPort}
             onUpdateRoutingStrategy={handleUpdateLocalAccessRoutingStrategy}
+            onSetFollowCurrentAccount={handleSetLocalAccessFollowCurrentAccount}
+            onSetRuntimeMode={handleSetCodexRuntimeMode}
             onRotateApiKey={handleRotateLocalAccessApiKey}
             onKillPort={handleKillLocalAccessPort}
             onToggleEnabled={handleToggleLocalAccessEnabled}

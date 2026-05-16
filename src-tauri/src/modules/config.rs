@@ -443,8 +443,8 @@ fn default_auto_refresh() -> i32 {
     10
 } // 默认 10 分钟
 fn default_codex_auto_refresh() -> i32 {
-    10
-} // 默认 10 分钟
+    -1
+} // 自用版默认关闭 Codex 配额自动刷新，降低批量 OAuth 账号刷新风险
 fn default_zed_auto_refresh() -> i32 {
     10
 }

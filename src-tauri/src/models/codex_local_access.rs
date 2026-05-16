@@ -17,8 +17,52 @@ impl Default for CodexLocalAccessRoutingStrategy {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexRuntimeIntegrationMode {
+    DirectProjection,
+    GatewayLitellm,
+}
+
+impl Default for CodexRuntimeIntegrationMode {
+    fn default() -> Self {
+        Self::DirectProjection
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CodexRuntimeAccountKind {
+    OAuth,
+    Api,
+    Unknown,
+}
+
+impl Default for CodexRuntimeAccountKind {
+    fn default() -> Self {
+        Self::Unknown
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexRuntimeModeState {
+    #[serde(default)]
+    pub mode: CodexRuntimeIntegrationMode,
+    #[serde(default)]
+    pub account_kind: CodexRuntimeAccountKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_account_id: Option<String>,
+    #[serde(default)]
+    pub updated_at: i64,
+}
+
 fn default_restrict_free_accounts() -> bool {
-    true
+    false
+}
+
+fn default_follow_current_account() -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +75,8 @@ pub struct CodexLocalAccessCollection {
     pub routing_strategy: CodexLocalAccessRoutingStrategy,
     #[serde(default = "default_restrict_free_accounts")]
     pub restrict_free_accounts: bool,
+    #[serde(default = "default_follow_current_account")]
+    pub follow_current_account: bool,
     pub account_ids: Vec<String>,
     pub created_at: i64,
     pub updated_at: i64,

@@ -607,12 +607,26 @@
 
 .codex-local-access-config-card-root,
 .codex-local-access-config-card-base,
-.codex-local-access-config-card-key {
+.codex-local-access-config-card-key,
+.codex-local-access-config-card-runtime {
   min-height: 100%;
 }
 
 .codex-local-access-config-card-model {
   gap: 14px;
+}
+
+.codex-local-access-config-card-runtime {
+  justify-content: space-between;
+}
+
+.codex-local-access-runtime-mode-meta {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .codex-local-access-port-card {
