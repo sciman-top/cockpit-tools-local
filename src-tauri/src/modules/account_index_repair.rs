@@ -39,6 +39,10 @@ fn collect_account_file_ids(accounts_dir: &Path) -> Result<Vec<String>, String> 
     Ok(account_ids)
 }
 
+pub fn count_account_detail_files(accounts_dir: &Path) -> Result<usize, String> {
+    Ok(collect_account_file_ids(accounts_dir)?.len())
+}
+
 pub fn load_accounts_from_details<TAccount, FLoad>(
     accounts_dir: &Path,
     mut load_account: FLoad,

@@ -824,7 +824,7 @@
       "codexLocalAccessEntryVisibleDesc": "仅控制 Codex 总览中的 API 服务入口显示，不会停止本地 API 服务；关闭后可在这里或快捷设置中重新打开。",
       "codexLocalAccessEnabled": "启用 API 服务",
       "codexLocalAccessEnabledDesc": "控制本地 Codex API 服务是否实际运行。",
-      "codexLocalAccessEnabledRequiresCollection": "需先把账号加入 API 服务集合，才能启用或停用服务。",
+      "codexLocalAccessEnabledRequiresCollection": "需先把账号加入 API 服务单号池，才能启用或停用服务。",
       "autoSwitchAccountScope": "自动切号账号范围",
       "autoSwitchAccountScopeDesc": "仅在该范围内监控并切换账号。",
       "autoSwitchAccountScopeAll": "全部账号",
@@ -1823,7 +1823,7 @@
       "enableBeforeActivateMessage": "API 服务当前未启用，需要先启用服务。是否启用并切号？",
       "enableAndActivateAction": "启用并切号",
       "activateSuccess": "已切换到 API 服务",
-      "saveSuccess": "API 服务集合已更新",
+      "saveSuccess": "API 服务单号池已更新",
       "removeSuccess": "账号已移出 API 服务",
       "rotateSuccess": "API 服务密钥已重置",
       "enabledSuccess": "API 服务已启用",
@@ -1833,12 +1833,12 @@
       "showKey": "显示密钥",
       "hideKey": "隐藏密钥",
       "configTitle": "服务配置",
-      "configEmpty": "先把账号保存到 API 服务集合，随后会自动生成地址、密钥和端口。",
+      "configEmpty": "先把账号保存到 API 服务单号池，随后会自动生成地址、密钥和端口。",
       "portLabel": "服务端口",
       "portSave": "保存端口",
       "portSaveSuccess": "API 服务端口已更新",
-      "routingLabel": "调度策略",
-      "routingSaveSuccess": "API 服务调度策略已更新",
+      "routingLabel": "调度账号",
+      "routingSaveSuccess": "API 服务调度账号已更新",
       "routingDescriptionAuto": "优先高订阅与高剩余额度账号，同档再轮换。",
       "routingDescriptionQuotaHighFirst": "优先选择剩余配额更高的账号。",
       "routingDescriptionQuotaLowFirst": "优先选择剩余配额更低的账号。",
@@ -1888,10 +1888,10 @@
         "hourlyShort": "5h",
         "weeklyShort": "周",
         "viewFull": "查看完整统计",
-        "modalTitle": "API 服务额度池",
+        "modalTitle": "API 服务单号池统计",
         "empty": "暂无额度统计"
       },
-      "memberTitle": "集合成员",
+      "memberTitle": "单号池成员",
       "routingStrategy": {
         "auto": "自动（推荐）",
         "quotaHighFirst": "优先高配额",
@@ -1916,7 +1916,7 @@
       },
       "modal": {
         "title": "添加至 API 服务",
-        "desc": "选择要加入 API 服务集合的 OAuth 账号。加入后，这些账号将从普通面板中隐藏，只在 API 服务卡片中管理。",
+        "desc": "选择要作为 API 服务单号池的 OAuth 账号。保存后只有该账号进入实际调度。",
         "restrictFreeToggle": "限制 Free 账号使用",
         "freeNoticeRestricted": "已限制 Free 账号，关闭后才可勾选。",
         "freeNoticeUnstable": "Free账号反代不稳定，请谨慎使用。",
@@ -1925,10 +1925,10 @@
         "freeNotice": "暂不支持 Free 账号，Free 账号不可勾选。",
         "freeUnsupported": "Free 账号受限",
         "empty": "暂无可加入的 OAuth 账号",
-        "selected": "已加入 API 服务",
+        "selected": "API 服务单号池",
         "available": "普通面板",
         "manageMembers": "管理成员",
-        "save": "保存集合"
+        "save": "保存单号池"
       }
     },
     "api": {

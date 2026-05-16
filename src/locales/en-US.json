@@ -824,7 +824,7 @@
       "codexLocalAccessEntryVisibleDesc": "Only controls whether the API service entry is shown in the Codex overview. It does not stop the local API service; you can turn it back on here or in Quick Settings.",
       "codexLocalAccessEnabled": "Enable API Service",
       "codexLocalAccessEnabledDesc": "Control whether the local Codex API service is actually running.",
-      "codexLocalAccessEnabledRequiresCollection": "Add accounts to the API service collection before enabling or disabling the service.",
+      "codexLocalAccessEnabledRequiresCollection": "Add one account to the API service single-account pool before enabling or disabling the service.",
       "autoSwitchAccountScope": "Auto switch account scope",
       "autoSwitchAccountScopeDesc": "Only monitor and switch accounts within this scope.",
       "autoSwitchAccountScopeAll": "All accounts",
@@ -1823,7 +1823,7 @@
       "enableBeforeActivateMessage": "The API service is currently disabled and must be enabled first. Enable it and switch now?",
       "enableAndActivateAction": "Enable and Switch",
       "activateSuccess": "Switched to API service",
-      "saveSuccess": "API service collection updated",
+      "saveSuccess": "API service single-account pool updated",
       "removeSuccess": "Account removed from API service",
       "rotateSuccess": "API service key reset",
       "enabledSuccess": "API service enabled",
@@ -1833,12 +1833,12 @@
       "showKey": "Show API key",
       "hideKey": "Hide API key",
       "configTitle": "Service Config",
-      "configEmpty": "Save at least one account to the API service collection before the URL, key, and port are generated.",
+      "configEmpty": "Save one account to the API service single-account pool before the URL, key, and port are generated.",
       "portLabel": "Service Port",
       "portSave": "Save Port",
       "portSaveSuccess": "API service port updated",
-      "routingLabel": "Routing",
-      "routingSaveSuccess": "API service routing updated",
+      "routingLabel": "Dispatch account",
+      "routingSaveSuccess": "API service dispatch account updated",
       "routingDescriptionAuto": "Prefer higher-tier accounts with more remaining quota, then rotate within the same tier.",
       "routingDescriptionQuotaHighFirst": "Prefer accounts with more remaining quota.",
       "routingDescriptionQuotaLowFirst": "Prefer accounts with less remaining quota.",
@@ -1888,10 +1888,10 @@
         "hourlyShort": "5h",
         "weeklyShort": "Week",
         "viewFull": "View full stats",
-        "modalTitle": "API Service Quota Pool",
+        "modalTitle": "API Service Single-Account Pool Stats",
         "empty": "No quota stats yet"
       },
-      "memberTitle": "Collection Members",
+      "memberTitle": "Single-Account Pool Member",
       "routingStrategy": {
         "auto": "Auto (Recommended)",
         "quotaHighFirst": "High Quota First",
@@ -1916,7 +1916,7 @@
       },
       "modal": {
         "title": "Add to API Service",
-        "desc": "Choose the OAuth accounts to include in the API service collection. Added accounts are hidden from the regular overview and managed only from the API service card.",
+        "desc": "Choose the OAuth account to use as the API service single-account pool. Only that account enters real dispatch after saving.",
         "restrictFreeToggle": "Limit Free Accounts",
         "freeNoticeRestricted": "Free accounts are limited. Turn this off to select them.",
         "freeNoticeUnstable": "Free-account proxying can be unstable. Use with caution.",
@@ -1925,10 +1925,10 @@
         "freeNotice": "Free accounts are not supported yet. Free accounts cannot be selected.",
         "freeUnsupported": "Free Limited",
         "empty": "No OAuth accounts available",
-        "selected": "In API Service",
+        "selected": "API Service Single-Account Pool",
         "available": "Regular Overview",
         "manageMembers": "Manage Members",
-        "save": "Save Collection"
+        "save": "Save Single-Account Pool"
       }
     },
     "api": {

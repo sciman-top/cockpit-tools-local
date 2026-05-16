@@ -1238,11 +1238,7 @@ fn migrate_codex_data_if_needed(new_data_dir: &PathBuf) {
 
 /// 获取我们的多账号存储路径（统一使用 ~/.antigravity_cockpit/）
 fn get_accounts_storage_path() -> PathBuf {
-    let data_dir = account::get_data_dir().unwrap_or_else(|_| {
-        dirs::home_dir()
-            .expect("无法获取用户目录")
-            .join(".antigravity_cockpit")
-    });
+    let data_dir = get_codex_accounts_data_dir();
     fs::create_dir_all(&data_dir).ok();
     migrate_codex_data_if_needed(&data_dir);
     data_dir.join("codex_accounts.json")
@@ -1250,14 +1246,23 @@ fn get_accounts_storage_path() -> PathBuf {
 
 /// 获取账号详情存储目录（统一使用 ~/.antigravity_cockpit/codex_accounts/）
 fn get_accounts_dir() -> PathBuf {
-    let data_dir = account::get_data_dir().unwrap_or_else(|_| {
-        dirs::home_dir()
-            .expect("无法获取用户目录")
-            .join(".antigravity_cockpit")
-    });
+    let data_dir = get_codex_accounts_data_dir();
     let accounts_dir = data_dir.join("codex_accounts");
     fs::create_dir_all(&accounts_dir).ok();
     accounts_dir
+}
+
+fn get_codex_accounts_data_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Ok(path) = std::env::var("COCKPIT_TOOLS_TEST_DATA_DIR") {
+        return PathBuf::from(path);
+    }
+
+    account::get_data_dir().unwrap_or_else(|_| {
+        dirs::home_dir()
+            .expect("无法获取用户目录")
+            .join(".antigravity_cockpit")
+    })
 }
 
 /// 解析 JWT Token 的 payload
@@ -1591,7 +1596,9 @@ pub fn load_account_index() -> CodexAccountIndex {
             repair_account_index_from_details("索引文件为空").unwrap_or_else(CodexAccountIndex::new)
         }
         Ok(content) => match serde_json::from_str::<CodexAccountIndex>(&content) {
-            Ok(index) if !index.accounts.is_empty() => index,
+            Ok(index) if !index.accounts.is_empty() => {
+                reconcile_account_index_with_details_if_needed(index, "索引账号列表少于详情文件")
+            }
             Ok(_) => repair_account_index_from_details("索引账号列表为空")
                 .unwrap_or_else(CodexAccountIndex::new),
             Err(err) => {
@@ -1666,7 +1673,9 @@ fn load_account_index_checked() -> Result<CodexAccountIndex, String> {
     }
 
     match serde_json::from_str::<CodexAccountIndex>(&content) {
-        Ok(index) if !index.accounts.is_empty() => Ok(index),
+        Ok(index) if !index.accounts.is_empty() => Ok(
+            reconcile_account_index_with_details_if_needed(index, "索引账号列表少于详情文件"),
+        ),
         Ok(index) => {
             logger::log_warn(&format!(
                 "[Codex Account][Repair] 账号索引可解析但列表为空，准备尝试自动修复: path={}",
@@ -1712,6 +1721,48 @@ pub fn save_account_index(index: &CodexAccountIndex) -> Result<(), String> {
 }
 
 fn repair_account_index_from_details(reason: &str) -> Option<CodexAccountIndex> {
+    repair_account_index_from_details_preserving_current(reason, None)
+}
+
+fn reconcile_account_index_with_details_if_needed(
+    index: CodexAccountIndex,
+    reason: &str,
+) -> CodexAccountIndex {
+    let accounts_dir = get_accounts_dir();
+    let detail_count = match crate::modules::account_index_repair::count_account_detail_files(
+        &accounts_dir,
+    ) {
+        Ok(count) => count,
+        Err(err) => {
+            logger::log_warn(&format!(
+                    "[Codex Account][Repair] 统计账号详情文件失败，跳过部分索引修复: accounts_dir={}, error={}",
+                    accounts_dir.display(),
+                    err
+                ));
+            return index;
+        }
+    };
+
+    if detail_count <= index.accounts.len() {
+        return index;
+    }
+
+    logger::log_warn(&format!(
+        "[Codex Account][Repair] 账号索引可解析但缺少详情目录中的账号，准备自动重建: reason={}, index_accounts={}, detail_accounts={}",
+        reason,
+        index.accounts.len(),
+        detail_count
+    ));
+
+    let current_account_id = index.current_account_id.clone();
+    repair_account_index_from_details_preserving_current(reason, current_account_id.as_deref())
+        .unwrap_or(index)
+}
+
+fn repair_account_index_from_details_preserving_current(
+    reason: &str,
+    preferred_current_account_id: Option<&str>,
+) -> Option<CodexAccountIndex> {
     let index_path = get_accounts_storage_path();
     let accounts_dir = get_accounts_dir();
     logger::log_warn(&format!(
@@ -1770,7 +1821,9 @@ fn repair_account_index_from_details(reason: &str) -> Option<CodexAccountIndex> 
             last_used: account.last_used,
         })
         .collect();
-    index.current_account_id = None;
+    index.current_account_id = preferred_current_account_id
+        .filter(|account_id| accounts.iter().any(|account| account.id == *account_id))
+        .map(|account_id| account_id.to_string());
 
     logger::log_info(&format!(
         "[Codex Account][Repair] 索引重建完成，准备写回本地文件: recovered_accounts={}, current_account_id={}",
@@ -4210,7 +4263,9 @@ mod tests {
     struct TestEnvGuard {
         home_dir: std::path::PathBuf,
         previous_home: Option<String>,
+        previous_user_profile: Option<String>,
         previous_codex_home: Option<String>,
+        previous_test_data_dir: Option<String>,
     }
 
     impl TestEnvGuard {
@@ -4220,14 +4275,23 @@ mod tests {
             fs::create_dir_all(&codex_home).expect("create codex home");
 
             let previous_home = std::env::var("HOME").ok();
+            let previous_user_profile = std::env::var("USERPROFILE").ok();
             let previous_codex_home = std::env::var("CODEX_HOME").ok();
+            let previous_test_data_dir = std::env::var("COCKPIT_TOOLS_TEST_DATA_DIR").ok();
             std::env::set_var("HOME", &home_dir);
+            std::env::set_var("USERPROFILE", &home_dir);
             std::env::set_var("CODEX_HOME", &codex_home);
+            std::env::set_var(
+                "COCKPIT_TOOLS_TEST_DATA_DIR",
+                home_dir.join(".antigravity_cockpit"),
+            );
 
             Self {
                 home_dir,
                 previous_home,
+                previous_user_profile,
                 previous_codex_home,
+                previous_test_data_dir,
             }
         }
 
@@ -4242,9 +4306,17 @@ mod tests {
                 Some(value) => std::env::set_var("HOME", value),
                 None => std::env::remove_var("HOME"),
             }
+            match self.previous_user_profile.as_ref() {
+                Some(value) => std::env::set_var("USERPROFILE", value),
+                None => std::env::remove_var("USERPROFILE"),
+            }
             match self.previous_codex_home.as_ref() {
                 Some(value) => std::env::set_var("CODEX_HOME", value),
                 None => std::env::remove_var("CODEX_HOME"),
+            }
+            match self.previous_test_data_dir.as_ref() {
+                Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
+                None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
             }
             let _ = fs::remove_dir_all(&self.home_dir);
         }
@@ -4319,6 +4391,61 @@ mod tests {
         save_account_index(&index).expect("save index");
 
         account
+    }
+
+    #[test]
+    fn load_account_index_repairs_partial_index_from_detail_files() {
+        let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
+        let env = TestEnvGuard::new("codex-partial-index-repair");
+
+        let first = seed_oauth_account(make_codex_tokens(
+            "first@example.com",
+            "acc-first",
+            "org-first",
+            "first",
+            "refresh-first",
+        ));
+        let mut second = CodexAccount::new(
+            "codex-second".to_string(),
+            "second@example.com".to_string(),
+            make_codex_tokens(
+                "second@example.com",
+                "acc-second",
+                "org-second",
+                "second",
+                "refresh-second",
+            ),
+        );
+        second.last_used = first.last_used + 1;
+        save_account(&second).expect("save second detail");
+
+        let mut partial_index = CodexAccountIndex::new();
+        partial_index.accounts.push(CodexAccountSummary {
+            id: first.id.clone(),
+            email: first.email.clone(),
+            plan_type: first.plan_type.clone(),
+            subscription_active_until: first.subscription_active_until.clone(),
+            created_at: first.created_at,
+            last_used: first.last_used,
+        });
+        partial_index.current_account_id = Some(first.id.clone());
+        save_account_index(&partial_index).expect("save partial index");
+
+        let repaired = load_account_index();
+        let account_ids = repaired
+            .accounts
+            .iter()
+            .map(|account| account.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(account_ids.len(), 2);
+        assert!(account_ids.contains(&first.id.as_str()));
+        assert!(account_ids.contains(&second.id.as_str()));
+        assert_eq!(
+            repaired.current_account_id.as_deref(),
+            Some(first.id.as_str())
+        );
+        assert!(get_accounts_storage_path().exists());
+        assert!(env.codex_home().exists());
     }
 
     fn write_oauth_auth_file(base_dir: &std::path::Path, tokens: &CodexTokens, account_id: &str) {

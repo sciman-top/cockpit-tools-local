@@ -2698,7 +2698,7 @@ fn resolve_subscription_expiry_ms(account: &CodexAccount) -> Option<i64> {
 fn build_effective_local_access_account_ids(
     collection: &CodexLocalAccessCollection,
 ) -> Vec<String> {
-    collection.account_ids.clone()
+    collection.account_ids.iter().take(1).cloned().collect()
 }
 
 fn build_routing_candidates(ordered_account_ids: &[String]) -> Vec<RoutingCandidate> {
@@ -3536,6 +3536,10 @@ fn sanitize_collection(
             continue;
         }
         deduped.push(account_id.clone());
+        if deduped.len() == 1 {
+            changed = changed || collection.account_ids.len() > 1;
+            break;
+        }
     }
     if deduped != collection.account_ids {
         collection.account_ids = deduped;
@@ -6366,7 +6370,8 @@ async fn handle_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        build_chat_completion_payload, build_chat_completion_stream_body, build_images_api_payload,
+        build_chat_completion_payload, build_chat_completion_stream_body,
+        build_effective_local_access_account_ids, build_images_api_payload,
         build_local_models_response, build_ordered_account_ids, build_request_routing_hint,
         build_runtime_account, extract_usage_capture, is_responses_completion_event,
         parse_codex_retry_after, parse_responses_payload_from_upstream, prepare_gateway_request,
@@ -6375,6 +6380,9 @@ mod tests {
         ParsedRequest, ResponseUsageCollector,
     };
     use crate::models::codex::{CodexAccount, CodexApiProviderMode};
+    use crate::models::codex_local_access::{
+        CodexLocalAccessCollection, CodexLocalAccessRoutingStrategy,
+    };
     use reqwest::StatusCode;
     use serde_json::{json, Value};
     use std::collections::HashMap;
@@ -6543,6 +6551,30 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         );
 
         assert_eq!(ordered, vec!["acc-c", "acc-b", "acc-a"]);
+    }
+
+    #[test]
+    fn effective_local_access_pool_is_single_account() {
+        let collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: 2876,
+            api_key: "agt_test".to_string(),
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec![
+                "acc-primary".to_string(),
+                "acc-secondary".to_string(),
+                "acc-third".to_string(),
+            ],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        assert_eq!(
+            build_effective_local_access_account_ids(&collection),
+            vec!["acc-primary".to_string()]
+        );
     }
 
     #[test]

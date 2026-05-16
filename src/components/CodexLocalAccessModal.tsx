@@ -302,7 +302,7 @@ export function CodexLocalAccessModal({
     [oauthAccounts],
   );
   const normalizedInitialSelectedIds = useMemo(
-    () => initialSelectedIds.filter((accountId) => oauthAccountIdSet.has(accountId)),
+    () => initialSelectedIds.filter((accountId) => oauthAccountIdSet.has(accountId)).slice(0, 1),
     [initialSelectedIds, oauthAccountIdSet],
   );
 
@@ -540,7 +540,7 @@ export function CodexLocalAccessModal({
 
   const allVisibleSelected =
     visibleSelectableAccounts.length > 0 &&
-    selectedVisibleCount === visibleSelectableAccounts.length;
+    selectedVisibleCount > 0;
 
   useEffect(() => {
     if (!selectAllCheckboxRef.current) return;
@@ -691,17 +691,9 @@ export function CodexLocalAccessModal({
   const toggleSelectAllVisible = () => {
     if (actionBusy || visibleSelectableAccounts.length === 0) return;
     setSelected((prev) => {
-      const next = new Set(prev);
-      if (allVisibleSelected) {
-        for (const account of visibleSelectableAccounts) {
-          next.delete(account.id);
-        }
-      } else {
-        for (const account of visibleSelectableAccounts) {
-          next.add(account.id);
-        }
-      }
-      return next;
+      if (allVisibleSelected) return new Set();
+      const firstVisible = visibleSelectableAccounts[0];
+      return firstVisible ? new Set([firstVisible.id]) : prev;
     });
   };
 
@@ -723,6 +715,7 @@ export function CodexLocalAccessModal({
       if (next.has(accountId)) {
         next.delete(accountId);
       } else {
+        next.clear();
         next.add(accountId);
       }
       return next;
@@ -740,7 +733,7 @@ export function CodexLocalAccessModal({
           return false;
         }
         return true;
-      });
+      }).slice(0, 1);
       await onSaveAccounts({
         accountIds: filtered,
         restrictFreeAccounts,
