@@ -458,8 +458,8 @@ async fn materialize_gateway_litellm_projection() -> Result<(), String> {
 }
 
 async fn materialize_direct_projection() -> Result<(), String> {
-    let account =
-        codex_account::get_current_account().ok_or_else(|| "未找到当前 Codex 账号".to_string())?;
+    let account = codex_account::get_current_or_fallback_oauth_account()
+        .ok_or_else(|| "未找到当前 Codex OAuth 账号".to_string())?;
     if let Ok(state) = snapshot_state().await {
         if state.collection.is_some() {
             let _ = set_local_access_enabled(false).await?;
@@ -6374,14 +6374,14 @@ mod tests {
         build_effective_local_access_account_ids, build_images_api_payload,
         build_local_models_response, build_ordered_account_ids, build_request_routing_hint,
         build_runtime_account, extract_usage_capture, is_responses_completion_event,
-        parse_codex_retry_after, parse_responses_payload_from_upstream, prepare_gateway_request,
-        resolve_supported_model_alias, should_retry_single_account_upstream_status,
-        should_treat_response_as_stream, should_try_next_account, GatewayResponseAdapter,
-        ParsedRequest, ResponseUsageCollector,
+        load_runtime_mode_state, parse_codex_retry_after, parse_responses_payload_from_upstream,
+        prepare_gateway_request, resolve_supported_model_alias, set_runtime_integration_mode,
+        should_retry_single_account_upstream_status, should_treat_response_as_stream,
+        should_try_next_account, GatewayResponseAdapter, ParsedRequest, ResponseUsageCollector,
     };
     use crate::models::codex::{CodexAccount, CodexApiProviderMode};
     use crate::models::codex_local_access::{
-        CodexLocalAccessCollection, CodexLocalAccessRoutingStrategy,
+        CodexLocalAccessCollection, CodexLocalAccessRoutingStrategy, CodexRuntimeIntegrationMode,
     };
     use reqwest::StatusCode;
     use serde_json::{json, Value};
@@ -6574,6 +6574,30 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(
             build_effective_local_access_account_ids(&collection),
             vec!["acc-primary".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "live test mutates local Codex/Cockpit projection; set COCKPIT_TOOLS_LIVE_RUNTIME_SWITCH=1"]
+    async fn live_runtime_mode_roundtrip_direct_and_api_service() {
+        assert_eq!(
+            std::env::var("COCKPIT_TOOLS_LIVE_RUNTIME_SWITCH").as_deref(),
+            Ok("1"),
+            "set COCKPIT_TOOLS_LIVE_RUNTIME_SWITCH=1 to run this live projection test"
+        );
+
+        let direct = set_runtime_integration_mode(CodexRuntimeIntegrationMode::DirectProjection)
+            .await
+            .expect("switch to direct projection");
+        assert_eq!(direct.mode, CodexRuntimeIntegrationMode::DirectProjection);
+
+        let gateway = set_runtime_integration_mode(CodexRuntimeIntegrationMode::GatewayLitellm)
+            .await
+            .expect("switch back to cockpit api service");
+        assert_eq!(gateway.mode, CodexRuntimeIntegrationMode::GatewayLitellm);
+        assert_eq!(
+            load_runtime_mode_state().expect("runtime mode").mode,
+            CodexRuntimeIntegrationMode::GatewayLitellm
         );
     }
 

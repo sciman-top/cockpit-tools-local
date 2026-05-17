@@ -3013,6 +3013,38 @@ pub fn get_current_account() -> Option<CodexAccount> {
     Some(account)
 }
 
+pub fn get_current_or_fallback_oauth_account() -> Option<CodexAccount> {
+    if let Some(account) = get_current_account() {
+        return Some(account);
+    }
+
+    let mut accounts = list_accounts_checked().ok()?;
+    accounts.sort_by(|left, right| {
+        right
+            .last_used
+            .cmp(&left.last_used)
+            .then_with(|| right.created_at.cmp(&left.created_at))
+            .then_with(|| left.email.cmp(&right.email))
+    });
+    let account = accounts.into_iter().find(|item| !item.is_api_key_auth())?;
+
+    let mut index = load_account_index();
+    index.current_account_id = Some(account.id.clone());
+    if let Err(err) = save_account_index(&index) {
+        logger::log_warn(&format!(
+            "[Codex Account] Direct Projection fallback 写回 current_account_id 失败: account_id={}, error={}",
+            account.id, err
+        ));
+    } else {
+        logger::log_info(&format!(
+            "[Codex Account] Direct Projection fallback 已恢复 current_account_id: account_id={}, email={}",
+            account.id, account.email
+        ));
+    }
+
+    Some(account)
+}
+
 fn build_auth_file_value(account: &CodexAccount) -> Result<serde_json::Value, String> {
     if account.is_api_key_auth() {
         let api_key = normalize_optional_ref(account.openai_api_key.as_deref())
@@ -4130,8 +4162,9 @@ mod tests {
     use super::{
         build_account_storage_id, detect_auth_file_plan_type_from_path,
         extract_codex_tokens_from_value, extract_user_info, format_refresh_error_for_user,
-        get_accounts_dir, get_accounts_storage_path, get_current_account, list_accounts_checked,
-        load_account, load_account_index, parse_auth_file_last_refresh, parse_codex_account_compat,
+        get_accounts_dir, get_accounts_storage_path, get_current_account,
+        get_current_or_fallback_oauth_account, list_accounts_checked, load_account,
+        load_account_index, parse_auth_file_last_refresh, parse_codex_account_compat,
         parse_line_delimited_json_values, read_api_provider_from_config_toml,
         read_quick_config_from_config_toml, resolve_api_provider_config, save_account,
         save_account_index, should_accept_authority_snapshot, sync_account_from_auth_dir,
@@ -4141,7 +4174,7 @@ mod tests {
         CodexAccountIndex, CodexAccountSummary, CodexAuthFile, CodexAuthTokens,
         LocalCodexOAuthSnapshot, CODEX_AUTO_COMPACT_DEFAULT_LIMIT, CODEX_CONTEXT_WINDOW_1M_VALUE,
     };
-    use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexTokens};
+    use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexAuthMode, CodexTokens};
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use std::fs;
     use std::sync::{LazyLock, Mutex};
@@ -4446,6 +4479,69 @@ mod tests {
         );
         assert!(get_accounts_storage_path().exists());
         assert!(env.codex_home().exists());
+    }
+
+    #[test]
+    fn current_oauth_fallback_repairs_missing_current_account_id() {
+        let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
+        let _env = TestEnvGuard::new("codex-current-oauth-fallback");
+
+        let older = seed_oauth_account(make_codex_tokens(
+            "older@example.com",
+            "acc-older",
+            "org-older",
+            "older",
+            "refresh-older",
+        ));
+        let mut newer = CodexAccount::new(
+            "codex-newer".to_string(),
+            "newer@example.com".to_string(),
+            make_codex_tokens(
+                "newer@example.com",
+                "acc-newer",
+                "org-newer",
+                "newer",
+                "refresh-newer",
+            ),
+        );
+        newer.last_used = older.last_used + 10;
+        save_account(&newer).expect("save newer account");
+
+        let mut api_account = CodexAccount::new(
+            "codex-api".to_string(),
+            "api-key-test".to_string(),
+            CodexTokens {
+                id_token: String::new(),
+                access_token: String::new(),
+                refresh_token: None,
+            },
+        );
+        api_account.auth_mode = CodexAuthMode::Apikey;
+        api_account.openai_api_key = Some("sk-test".to_string());
+        api_account.last_used = newer.last_used + 10;
+        save_account(&api_account).expect("save api account");
+
+        let mut index = CodexAccountIndex::new();
+        for account in [&older, &newer, &api_account] {
+            index.accounts.push(CodexAccountSummary {
+                id: account.id.clone(),
+                email: account.email.clone(),
+                plan_type: account.plan_type.clone(),
+                subscription_active_until: account.subscription_active_until.clone(),
+                created_at: account.created_at,
+                last_used: account.last_used,
+            });
+        }
+        index.current_account_id = None;
+        save_account_index(&index).expect("save missing-current index");
+
+        let selected = get_current_or_fallback_oauth_account().expect("fallback account");
+        assert_eq!(selected.id, newer.id);
+        assert!(!selected.is_api_key_auth());
+        assert_eq!(
+            load_account_index().current_account_id.as_deref(),
+            Some(newer.id.as_str())
+        );
     }
 
     fn write_oauth_auth_file(base_dir: &std::path::Path, tokens: &CodexTokens, account_id: &str) {
