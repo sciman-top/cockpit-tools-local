@@ -86,6 +86,7 @@ import {
   hasCodexAccountStructure,
   formatCodexLoginProvider,
   getCodexAuthMetadata,
+  getCodexEffectiveQuotaPercentages,
   getCodexPlanFilterKey,
   getCodexSubscriptionPresentation,
   hasCodexAccountName,
@@ -143,7 +144,6 @@ import {
 } from "../utils/codexPreferences";
 import { formatCodexSessionVisibilityRepairMessage } from "../utils/codexSessionVisibility";
 import { emitAccountsChanged } from "../utils/accountSyncEvents";
-import { compareCurrentAccountFirst } from "../utils/currentAccountSort";
 import {
   CODEX_API_PROVIDER_CUSTOM_ID,
   CODEX_API_PROVIDER_PRESETS,
@@ -257,8 +257,10 @@ const FILTER_TYPES_FIELD = "filter_types";
 const EXPIRY_FILTER_FIELD = "expiry_filter";
 const GROUP_FILTER_FIELD = "group_filter";
 const ACTIVE_GROUP_ID_FIELD = "active_group_id";
+const codexSessionActivatedAccountIds = new Set<string>();
 
 type CodexOverviewLayoutMode = "compact" | "list" | "grid";
+type CodexNumericSortDirection = "asc" | "desc";
 
 function normalizeLocalAccessAddressKind(
   value: string | null | undefined,
@@ -285,6 +287,73 @@ function persistLocalAccessAddressKind(
     // ignore storage write failures
   }
 }
+
+function toNullableSortNumber(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function toNullablePositiveSortNumber(
+  value: number | null | undefined,
+): number | null {
+  const normalized = toNullableSortNumber(value);
+  return normalized != null && normalized > 0 ? normalized : null;
+}
+
+function compareNullableSortNumber(
+  left: number | null | undefined,
+  right: number | null | undefined,
+  direction: CodexNumericSortDirection,
+): number {
+  const leftValue = toNullableSortNumber(left);
+  const rightValue = toNullableSortNumber(right);
+  if (leftValue == null && rightValue == null) return 0;
+  if (leftValue == null) return 1;
+  if (rightValue == null) return -1;
+  const diff =
+    direction === "desc" ? rightValue - leftValue : leftValue - rightValue;
+  return diff === 0 ? 0 : diff;
+}
+
+function compareCodexAccountTieBreak(left: CodexAccount, right: CodexAccount): number {
+  const createdDiff = right.created_at - left.created_at;
+  if (createdDiff !== 0) return createdDiff;
+  return left.id.localeCompare(right.id);
+}
+
+function compareCodexAccountCreatedAt(
+  left: CodexAccount,
+  right: CodexAccount,
+  direction: CodexNumericSortDirection,
+): number {
+  const diff =
+    direction === "desc"
+      ? right.created_at - left.created_at
+      : left.created_at - right.created_at;
+  return diff !== 0 ? diff : left.id.localeCompare(right.id);
+}
+
+function getCodexQuotaSortValue(
+  account: CodexAccount,
+  metric: "weekly" | "hourly",
+): number | null {
+  if (isCodexApiKeyAccount(account) && !isCodexNewApiAccount(account)) {
+    return null;
+  }
+  const percentages = getCodexEffectiveQuotaPercentages(account.quota);
+  return metric === "weekly" ? percentages.weekly : percentages.hourly;
+}
+
+function getCodexQuotaResetSortValue(
+  account: CodexAccount,
+  metric: "weekly_reset" | "hourly_reset",
+): number | null {
+  return toNullablePositiveSortNumber(
+    metric === "weekly_reset"
+      ? account.quota?.weekly_reset_time
+      : account.quota?.hourly_reset_time,
+  );
+}
+
 type CodexLaunchCredentialKind = "api-key" | "api-service" | "account";
 type CodexLaunchCredentialType = "api" | "account";
 type CodexApiSwitchNoticeContext = {
@@ -583,7 +652,7 @@ export function CodexAccountsPage() {
     "baseUrl" | "apiKey" | null
   >(null);
   const [localAccessKeyVisible, setLocalAccessKeyVisible] = useState(false);
-  const [localAccessAddressKind, setLocalAccessAddressKind] =
+  const [, setLocalAccessAddressKind] =
     useState<CodexLocalAccessAddressKind>(() =>
       readStoredLocalAccessAddressKind(),
     );
@@ -1714,6 +1783,9 @@ export function CodexAccountsPage() {
   const [oauthTokenExchangeRetryVisible, setOauthTokenExchangeRetryVisible] =
     useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
+  const [sessionActivatedAccountIds, setSessionActivatedAccountIds] = useState<
+    Set<string>
+  >(() => new Set(codexSessionActivatedAccountIds));
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyInputVisible, setApiKeyInputVisible] = useState(false);
   const [apiBaseUrlInput, setApiBaseUrlInput] = useState(
@@ -2713,6 +2785,13 @@ export function CodexAccountsPage() {
     [t],
   );
 
+  const markSessionActivatedAccount = useCallback((accountId: string) => {
+    const normalizedAccountId = accountId.trim();
+    if (!normalizedAccountId) return;
+    codexSessionActivatedAccountIds.add(normalizedAccountId);
+    setSessionActivatedAccountIds(new Set(codexSessionActivatedAccountIds));
+  }, []);
+
   const executeCodexAccountSwitch = useCallback(
     async (accountId: string, options?: { showSuccessMessage?: boolean }) => {
       const showSuccessMessage = options?.showSuccessMessage ?? true;
@@ -2720,6 +2799,7 @@ export function CodexAccountsPage() {
       setSwitching(accountId);
       try {
         const account = await switchAccount(accountId);
+        markSessionActivatedAccount(account.id);
         setLocalAccessLaunchCurrent(false);
         if (showSuccessMessage) {
           setMessage({
@@ -2733,7 +2813,7 @@ export function CodexAccountsPage() {
         setSwitching(null);
       }
     },
-    [maskAccountText, setMessage, switchAccount, t],
+    [markSessionActivatedAccount, maskAccountText, setMessage, switchAccount, t],
   );
 
   const handleSwitch = async (accountId: string) => {
@@ -3882,26 +3962,15 @@ export function CodexAccountsPage() {
     localAccessStarting ||
     localAccessRefreshing ||
     localAccessPortKilling;
-  const selectedLocalAccessAddressKind: CodexLocalAccessAddressKind =
-    localAccessAddressKind === "lan" && localAccessState?.lanBaseUrl
-      ? "lan"
-      : "local";
+  const selectedLocalAccessAddressKind: CodexLocalAccessAddressKind = "local";
   const localAccessAddressOptions = useMemo(
     () => [
       {
         value: "local",
         label: t("codex.localAccess.addressLocal", "本机"),
       },
-      ...(localAccessState?.lanBaseUrl
-        ? [
-            {
-              value: "lan",
-              label: t("codex.localAccess.addressLan", "局域网"),
-            },
-          ]
-        : []),
     ],
-    [localAccessState?.lanBaseUrl, t],
+    [t],
   );
   const handleLocalAccessAddressKindChange = useCallback((value: string) => {
     const next = normalizeLocalAccessAddressKind(value);
@@ -3910,12 +3979,6 @@ export function CodexAccountsPage() {
   }, []);
 
   const resolveLocalAccessBaseUrl = useCallback(() => {
-    if (
-      selectedLocalAccessAddressKind === "lan" &&
-      localAccessState?.lanBaseUrl
-    ) {
-      return localAccessState.lanBaseUrl;
-    }
     if (!localAccessCollection)
       return localAccessState?.baseUrl || CODEX_LOCAL_ACCESS_FALLBACK_BASE_URL;
     return (
@@ -3925,8 +3988,6 @@ export function CodexAccountsPage() {
   }, [
     localAccessCollection,
     localAccessState?.baseUrl,
-    localAccessState?.lanBaseUrl,
-    selectedLocalAccessAddressKind,
   ]);
 
   const handleCopyLocalAccessValue = useCallback(
@@ -4735,29 +4796,21 @@ export function CodexAccountsPage() {
     localAccessRuntimeActive && localAccessEffectiveAccountIds.length > 0
       ? localAccessEffectiveAccountIds[0]
       : (currentAccount?.id ?? null);
-  const localAccessPinnedAccountIds = useMemo(
-    () => new Set(localAccessEffectiveAccountIds),
-    [localAccessEffectiveAccountIds],
+  const getCodexAccountPinnedPriority = useCallback(
+    (account: CodexAccount) => {
+      if (overviewCurrentAccountId === account.id) return 0;
+      if (localAccessEffectiveAccountIdSet.has(account.id)) return 1;
+      return 2;
+    },
+    [localAccessEffectiveAccountIdSet, overviewCurrentAccountId],
   );
 
   const compareAccountsBySort = useCallback(
     (a: CodexAccount, b: CodexAccount) => {
-      const localAccessPinnedPriority =
-        Number(!localAccessPinnedAccountIds.has(a.id)) -
-        Number(!localAccessPinnedAccountIds.has(b.id));
-      if (localAccessPinnedPriority !== 0) {
-        return localAccessPinnedPriority;
-      }
-
-      if (overviewCurrentAccountId) {
-        const currentFirstDiff = compareCurrentAccountFirst(
-          a.id,
-          b.id,
-          overviewCurrentAccountId,
-        );
-        if (currentFirstDiff !== 0) {
-          return currentFirstDiff;
-        }
+      const pinnedPriority =
+        getCodexAccountPinnedPriority(a) - getCodexAccountPinnedPriority(b);
+      if (pinnedPriority !== 0) {
+        return pinnedPriority;
       }
 
       if (sortBy === "custom") {
@@ -4768,66 +4821,48 @@ export function CodexAccountsPage() {
         if (aIndex !== bIndex) {
           return aIndex - bIndex;
         }
-        return b.created_at - a.created_at;
-      }
-
-      const isQuotaSort =
-        sortBy === "weekly" ||
-        sortBy === "hourly" ||
-        sortBy === "weekly_reset" ||
-        sortBy === "hourly_reset";
-      if (!isQuotaSort) {
-        const cockpitApiPriority =
-          Number(!isCodexNewApiAccount(a)) - Number(!isCodexNewApiAccount(b));
-        if (cockpitApiPriority !== 0) {
-          return cockpitApiPriority;
-        }
+        return compareCodexAccountTieBreak(a, b);
       }
 
       if (sortBy === "created_at") {
-        const diff = b.created_at - a.created_at;
-        return sortDirection === "desc" ? diff : -diff;
+        return compareCodexAccountCreatedAt(a, b, sortDirection);
       }
       if (sortBy === "weekly_reset" || sortBy === "hourly_reset") {
-        const aR =
-          sortBy === "weekly_reset"
-            ? (a.quota?.weekly_reset_time ?? null)
-            : (a.quota?.hourly_reset_time ?? null);
-        const bR =
-          sortBy === "weekly_reset"
-            ? (b.quota?.weekly_reset_time ?? null)
-            : (b.quota?.hourly_reset_time ?? null);
-        if (aR == null && bR == null) return 0;
-        if (aR == null) return 1;
-        if (bR == null) return -1;
-        return sortDirection === "desc" ? bR - aR : aR - bR;
+        const diff = compareNullableSortNumber(
+          getCodexQuotaResetSortValue(a, sortBy),
+          getCodexQuotaResetSortValue(b, sortBy),
+          sortDirection,
+        );
+        return diff !== 0 ? diff : compareCodexAccountTieBreak(a, b);
       }
       if (sortBy === "subscription_expiry") {
         const aR = isCodexApiKeyAccount(a)
           ? null
-          : resolveSubscriptionPresentation(a).timestampMs;
+          : toNullablePositiveSortNumber(
+              resolveSubscriptionPresentation(a).timestampMs,
+            );
         const bR = isCodexApiKeyAccount(b)
           ? null
-          : resolveSubscriptionPresentation(b).timestampMs;
-        if (aR == null && bR == null) return 0;
-        if (aR == null) return 1;
-        if (bR == null) return -1;
-        return sortDirection === "desc" ? bR - aR : aR - bR;
+          : toNullablePositiveSortNumber(
+              resolveSubscriptionPresentation(b).timestampMs,
+            );
+        const diff = compareNullableSortNumber(aR, bR, sortDirection);
+        return diff !== 0 ? diff : compareCodexAccountTieBreak(a, b);
       }
-      const aV =
-        sortBy === "weekly"
-          ? (a.quota?.weekly_percentage ?? -1)
-          : (a.quota?.hourly_percentage ?? -1);
-      const bV =
-        sortBy === "weekly"
-          ? (b.quota?.weekly_percentage ?? -1)
-          : (b.quota?.hourly_percentage ?? -1);
-      return sortDirection === "desc" ? bV - aV : aV - bV;
+      if (sortBy === "weekly" || sortBy === "hourly") {
+        const diff = compareNullableSortNumber(
+          getCodexQuotaSortValue(a, sortBy),
+          getCodexQuotaSortValue(b, sortBy),
+          sortDirection,
+        );
+        return diff !== 0 ? diff : compareCodexAccountTieBreak(a, b);
+      }
+
+      return compareCodexAccountCreatedAt(a, b, sortDirection);
     },
     [
       customSortOrderIndex,
-      localAccessPinnedAccountIds,
-      overviewCurrentAccountId,
+      getCodexAccountPinnedPriority,
       resolveSubscriptionPresentation,
       sortBy,
       sortDirection,
@@ -5122,6 +5157,7 @@ export function CodexAccountsPage() {
     items.map((account) => {
       const presentation = resolvePresentation(account);
       const isCurrent = overviewCurrentAccountId === account.id;
+      const isSessionActivated = sessionActivatedAccountIds.has(account.id);
       const isSelected = selected.has(account.id);
       const isApiKeyAccount = isCodexApiKeyAccount(account);
       const compactQuotaItems = resolveCompactQuotaItems(presentation);
@@ -5131,7 +5167,7 @@ export function CodexAccountsPage() {
       return (
         <div
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`codex-compact-row ${isCurrent ? "current" : ""} ${isSelected ? "selected" : ""}`}
+          className={`codex-compact-row ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""}`}
         >
           <div className="codex-compact-select">
             <input
@@ -5146,6 +5182,15 @@ export function CodexAccountsPage() {
           >
             {maskAccountText(presentation.displayName)}
           </span>
+          {isSessionActivated && (
+            <span
+              className="codex-session-used-indicator compact"
+              title={t("codex.sessionActivated", "本次已启用")}
+              aria-label={t("codex.sessionActivated", "本次已启用")}
+            >
+              <Check size={12} />
+            </span>
+          )}
           <div className="codex-compact-quotas">
             {compactQuotaItems.map((item) => (
               <span
@@ -5203,6 +5248,7 @@ export function CodexAccountsPage() {
       const presentation = resolvePresentation(account);
       const meta = resolveAccountMeta(account);
       const isCurrent = overviewCurrentAccountId === account.id;
+      const isSessionActivated = sessionActivatedAccountIds.has(account.id);
       const isApiKeyAccount = isCodexApiKeyAccount(account);
       const isNewApiAccount = isCodexNewApiAccount(account);
       const isEditingApiKeyName =
@@ -5270,7 +5316,7 @@ export function CodexAccountsPage() {
       return (
         <div
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`codex-account-card ${isCurrent ? "current" : ""} ${isSelected ? "selected" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""}`}
+          className={`codex-account-card ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""}`}
         >
           <div className="card-top">
             <div className="card-select">
@@ -5312,6 +5358,15 @@ export function CodexAccountsPage() {
             )}
             {isCurrent && (
               <span className="current-tag">{t("codex.current", "当前")}</span>
+            )}
+            {isSessionActivated && (
+              <span
+                className="codex-session-used-indicator"
+                title={t("codex.sessionActivated", "本次已启用")}
+              >
+                <Check size={12} />
+                {t("codex.sessionActivated", "本次已启用")}
+              </span>
             )}
             {hasQuotaError && (
               <span
@@ -5668,8 +5723,12 @@ export function CodexAccountsPage() {
           })
         : t("codex.localAccess.summaryMeta", {
             count: configuredMemberCount,
-            defaultValue: "{{count}} 个账号 · 本机/局域网",
+            defaultValue: "{{count}} 个账号 · 仅本机",
           });
+    const apiKeyTitle =
+      localAccessKeyVisible && localAccessCollection
+        ? localAccessCollection.apiKey
+        : t("codex.localAccess.hiddenKeyTitle", "密钥已隐藏");
     const localAccessEmptyMessage = t(
       "codex.localAccess.emptyMembers",
       "当前集合暂无账号",
@@ -5695,7 +5754,7 @@ export function CodexAccountsPage() {
                   </span>
                 </div>
                 <span className="folder-inline-count">
-                  {t("codex.localAccess.memberOnlyLocal", "本机/局域网")}
+                    {t("codex.localAccess.memberOnlyLocal", "仅本机")}
                 </span>
               </div>
             </>
@@ -5725,7 +5784,7 @@ export function CodexAccountsPage() {
                   </span>
                 </div>
                 <span className="folder-inline-count">
-                  {t("codex.localAccess.memberOnlyLocal", "本机/局域网")}
+                  {t("codex.localAccess.memberOnlyLocal", "仅本机")}
                 </span>
               </div>
             </button>
@@ -5826,7 +5885,7 @@ export function CodexAccountsPage() {
                 </span>
                 <code
                   className="codex-local-access-code"
-                  title={localAccessCollection?.apiKey || "-"}
+                  title={apiKeyTitle}
                 >
                   {apiKeyDisplay}
                 </code>
@@ -6036,7 +6095,7 @@ export function CodexAccountsPage() {
 
             <div className="codex-card-bottom codex-local-access-card-bottom">
               <span className="card-date">
-                {t("codex.localAccess.footerHint", "监听本机与局域网")}
+                {t("codex.localAccess.footerHint", "仅监听本机")}
               </span>
               <CodexSpeedSelect
                 value={apiServiceAppSpeed}
@@ -6255,6 +6314,7 @@ export function CodexAccountsPage() {
       const presentation = resolvePresentation(account);
       const meta = resolveAccountMeta(account);
       const isCurrent = overviewCurrentAccountId === account.id;
+      const isSessionActivated = sessionActivatedAccountIds.has(account.id);
       const isApiKeyAccount = isCodexApiKeyAccount(account);
       const isNewApiAccount = isCodexNewApiAccount(account);
       const isEditingApiKeyName =
@@ -6315,7 +6375,7 @@ export function CodexAccountsPage() {
       return (
         <tr
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`${isCurrent ? "current" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""}`}
+          className={`${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""}`}
         >
           <td>
             <input
@@ -6360,6 +6420,15 @@ export function CodexAccountsPage() {
                 {isCurrent && (
                   <span className="mini-tag current">
                     {t("codex.current", "当前")}
+                  </span>
+                )}
+                {isSessionActivated && (
+                  <span
+                    className="codex-session-used-indicator table"
+                    title={t("codex.sessionActivated", "本次已启用")}
+                  >
+                    <Check size={12} />
+                    {t("codex.sessionActivated", "本次已启用")}
                   </span>
                 )}
                 {renderAccountSpeedSelect(account, true)}

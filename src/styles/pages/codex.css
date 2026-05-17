@@ -1073,6 +1073,18 @@
   box-shadow: 0 0 0 2px var(--primary-light), var(--shadow-md);
 }
 
+.codex-account-card.session-activated {
+  border-color: rgba(34, 197, 94, 0.58);
+  background:
+    linear-gradient(180deg, rgba(240, 253, 244, 0.82) 0%, rgba(255, 255, 255, 0) 72%),
+    var(--bg-card);
+}
+
+.codex-account-card.current.session-activated {
+  border-color: var(--success);
+  box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.22), var(--shadow-md);
+}
+
 .codex-account-card.selected {
   border-color: var(--primary);
   background: var(--primary-light);
@@ -1084,6 +1096,14 @@
     linear-gradient(180deg, rgba(240, 253, 250, 0.92) 0%, rgba(255, 251, 235, 0.45) 100%),
     var(--bg-card);
   box-shadow: 0 14px 34px rgba(15, 118, 110, 0.12);
+}
+
+.codex-account-card.new-api-exclusive.session-activated {
+  border-color: rgba(34, 197, 94, 0.58);
+  background:
+    linear-gradient(180deg, rgba(240, 253, 244, 0.82) 0%, rgba(240, 253, 250, 0.42) 100%),
+    var(--bg-card);
+  box-shadow: 0 14px 34px rgba(22, 163, 74, 0.12);
 }
 
 .codex-accounts-page .account-table tr.new-api-exclusive td:first-child {
@@ -1143,6 +1163,35 @@
   font-size: 11px;
   font-weight: 600;
   border-radius: var(--radius-full);
+}
+
+.codex-session-used-indicator {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid rgba(34, 197, 94, 0.28);
+  border-radius: var(--radius-full);
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.codex-session-used-indicator.compact {
+  width: 20px;
+  height: 20px;
+  justify-content: center;
+  padding: 0;
+  border-radius: var(--radius-md);
+}
+
+.codex-session-used-indicator.table {
+  padding: 2px 7px;
+  font-size: 10px;
 }
 
 .codex-account-card .tier-badge,
@@ -1652,6 +1701,16 @@
   background: rgba(29, 78, 216, 0.08);
   border-color: var(--primary);
   box-shadow: 0 0 0 1px var(--primary);
+}
+
+.codex-accounts-page .codex-compact-row.session-activated {
+  background: rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.38);
+}
+
+.codex-accounts-page .codex-compact-row.current.session-activated {
+  border-color: var(--success);
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.48);
 }
 
 .codex-accounts-page .codex-compact-row.selected {
@@ -2215,6 +2274,14 @@
 
 .codex-accounts-page .account-table tr.current {
   background: rgba(29, 78, 216, 0.08);
+}
+
+.codex-accounts-page .account-table tr.session-activated {
+  background: rgba(34, 197, 94, 0.07);
+}
+
+.codex-accounts-page .account-table tr.current.session-activated {
+  background: rgba(34, 197, 94, 0.10);
 }
 
 .codex-accounts-page .account-table .quota-item {
@@ -4577,6 +4644,27 @@
     rgba(15, 23, 42, 0.94);
   border-color: rgba(45, 212, 191, 0.38);
   box-shadow: 0 16px 36px rgba(20, 184, 166, 0.14);
+}
+
+[data-theme="dark"] .codex-account-card.session-activated {
+  background:
+    linear-gradient(180deg, rgba(22, 163, 74, 0.20) 0%, rgba(15, 23, 42, 0.72) 100%),
+    rgba(15, 23, 42, 0.94);
+  border-color: rgba(74, 222, 128, 0.42);
+}
+
+[data-theme="dark"] .codex-account-card.new-api-exclusive.session-activated {
+  background:
+    linear-gradient(180deg, rgba(22, 163, 74, 0.20) 0%, rgba(20, 184, 166, 0.12) 100%),
+    rgba(15, 23, 42, 0.94);
+  border-color: rgba(74, 222, 128, 0.42);
+  box-shadow: 0 16px 36px rgba(22, 163, 74, 0.14);
+}
+
+[data-theme="dark"] .codex-session-used-indicator {
+  background: rgba(22, 163, 74, 0.18);
+  border-color: rgba(74, 222, 128, 0.28);
+  color: #bbf7d0;
 }
 
 [data-theme="dark"] .codex-accounts-page .codex-subscription-badge.new-api-exclusive {

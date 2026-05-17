@@ -24,6 +24,29 @@ static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)\b[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}\b")
         .expect("email regex should be valid")
 });
+static BEARER_TOKEN_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\b(authorization\s*[:=]\s*bearer\s+)[^\s,;}\]]+")
+        .expect("bearer token regex should be valid")
+});
+static SECRET_FIELD_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)\b((?:x-api-key|api[-_]?key|openai_api_key|access_token|refresh_token|id_token|oauth_token)\s*[:=]\s*)("(?:\\.|[^"\\])*"|[^\s,;}\]]+)"#,
+    )
+    .expect("secret field regex should be valid")
+});
+static JSON_SENSITIVE_FIELD_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r#"(?i)("(?:authorization|x-api-key|api[-_]?key|openai_api_key|access_token|refresh_token|id_token|oauth_token|prompt|content|response|request_body|response_body|upstream_body|body|messages)"\s*:\s*)("(?:\\.|[^"\\])*"|\[[^\]]*\]|\{[^}]*\}|[^,\s}]+)"#,
+    )
+    .expect("json sensitive field regex should be valid")
+});
+static OPENAI_KEY_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\bsk-[A-Za-z0-9][A-Za-z0-9_-]{10,}\b").expect("openai key regex should be valid")
+});
+static JWT_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
+        .expect("jwt regex should be valid")
+});
 
 struct LocalTimer;
 
@@ -336,8 +359,26 @@ pub fn log_codex_api_error(message: &str) {
 }
 
 fn sanitize_message(message: &str) -> String {
+    let sanitized = BEARER_TOKEN_REGEX
+        .replace_all(message, |caps: &Captures| format!("{}[REDACTED]", &caps[1]))
+        .to_string();
+    let sanitized = SECRET_FIELD_REGEX
+        .replace_all(&sanitized, |caps: &Captures| {
+            format!("{}[REDACTED]", &caps[1])
+        })
+        .to_string();
+    let sanitized = JSON_SENSITIVE_FIELD_REGEX
+        .replace_all(&sanitized, |caps: &Captures| {
+            format!("{}\"[REDACTED]\"", &caps[1])
+        })
+        .to_string();
+    let sanitized = OPENAI_KEY_REGEX
+        .replace_all(&sanitized, "[REDACTED]")
+        .to_string();
+    let sanitized = JWT_REGEX.replace_all(&sanitized, "[REDACTED]").to_string();
+
     EMAIL_REGEX
-        .replace_all(message, |caps: &Captures| mask_email(&caps[0]))
+        .replace_all(&sanitized, |caps: &Captures| mask_email(&caps[0]))
         .to_string()
 }
 
@@ -381,5 +422,31 @@ fn mask_domain_head(head: &str) -> String {
         1 => "*".to_string(),
         2 => format!("{}*", chars[0]),
         _ => format!("{}***{}", chars[0], chars[chars.len() - 1]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_message;
+
+    #[test]
+    fn redacts_sensitive_log_values() {
+        let raw = r#"Authorization: Bearer sk-test-secret-1234567890 access_token="oauth-token-1234567890" api_key=sk-api-secret-1234567890 email=user.name@example.com body={"prompt":"raw prompt text","content":"raw response text"}"#;
+
+        let sanitized = sanitize_message(raw);
+
+        for secret in [
+            "sk-test-secret-1234567890",
+            "oauth-token-1234567890",
+            "sk-api-secret-1234567890",
+            "user.name@example.com",
+            "raw prompt text",
+            "raw response text",
+        ] {
+            assert!(
+                !sanitized.contains(secret),
+                "sanitized log should not contain {secret}: {sanitized}"
+            );
+        }
     }
 }

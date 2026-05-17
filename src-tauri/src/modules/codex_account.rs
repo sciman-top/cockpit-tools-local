@@ -21,6 +21,15 @@ static CODEX_TOKEN_REFRESH_LOCKS: std::sync::LazyLock<
     Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static CODEX_AUTO_SWITCH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CODEX_HOME_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+    static TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 const CODEX_QUOTA_ALERT_COOLDOWN_SECONDS: i64 = 300;
 const ACCOUNT_CHECK_URL: &str = "https://chatgpt.com/backend-api/wham/accounts/check";
 const API_KEY_LOGIN_PLAN_TYPE: &str = "API_KEY";
@@ -606,6 +615,11 @@ async fn fetch_remote_account_profile(
 
 /// 获取 Codex 数据目录
 pub fn get_codex_home() -> PathBuf {
+    #[cfg(test)]
+    if let Some(from_test) = TEST_CODEX_HOME_OVERRIDE.with(|value| value.borrow().clone()) {
+        return from_test;
+    }
+
     if let Some(from_env) = resolve_codex_home_from_env() {
         return from_env;
     }
@@ -1255,6 +1269,13 @@ fn get_accounts_dir() -> PathBuf {
 }
 
 fn get_codex_accounts_data_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(from_test) =
+        TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE.with(|value| value.borrow().clone())
+    {
+        return from_test;
+    }
+
     #[cfg(test)]
     if let Ok(path) = std::env::var("COCKPIT_TOOLS_TEST_DATA_DIR") {
         return PathBuf::from(path);
@@ -4297,37 +4318,24 @@ mod tests {
 
     struct TestEnvGuard {
         home_dir: std::path::PathBuf,
-        previous_home: Option<String>,
-        previous_user_profile: Option<String>,
-        previous_codex_home: Option<String>,
-        previous_test_data_dir: Option<String>,
     }
 
     impl TestEnvGuard {
         fn new(prefix: &str) -> Self {
             let home_dir = make_temp_dir(prefix);
             let codex_home = home_dir.join(".codex");
+            let accounts_data_dir = home_dir.join(".antigravity_cockpit");
             fs::create_dir_all(&codex_home).expect("create codex home");
+            fs::create_dir_all(&accounts_data_dir).expect("create accounts data dir");
 
-            let previous_home = std::env::var("HOME").ok();
-            let previous_user_profile = std::env::var("USERPROFILE").ok();
-            let previous_codex_home = std::env::var("CODEX_HOME").ok();
-            let previous_test_data_dir = std::env::var("COCKPIT_TOOLS_TEST_DATA_DIR").ok();
-            std::env::set_var("HOME", &home_dir);
-            std::env::set_var("USERPROFILE", &home_dir);
-            std::env::set_var("CODEX_HOME", &codex_home);
-            std::env::set_var(
-                "COCKPIT_TOOLS_TEST_DATA_DIR",
-                home_dir.join(".antigravity_cockpit"),
-            );
+            super::TEST_CODEX_HOME_OVERRIDE.with(|value| {
+                *value.borrow_mut() = Some(codex_home);
+            });
+            super::TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE.with(|value| {
+                *value.borrow_mut() = Some(accounts_data_dir);
+            });
 
-            Self {
-                home_dir,
-                previous_home,
-                previous_user_profile,
-                previous_codex_home,
-                previous_test_data_dir,
-            }
+            Self { home_dir }
         }
 
         fn codex_home(&self) -> std::path::PathBuf {
@@ -4337,22 +4345,12 @@ mod tests {
 
     impl Drop for TestEnvGuard {
         fn drop(&mut self) {
-            match self.previous_home.as_ref() {
-                Some(value) => std::env::set_var("HOME", value),
-                None => std::env::remove_var("HOME"),
-            }
-            match self.previous_user_profile.as_ref() {
-                Some(value) => std::env::set_var("USERPROFILE", value),
-                None => std::env::remove_var("USERPROFILE"),
-            }
-            match self.previous_codex_home.as_ref() {
-                Some(value) => std::env::set_var("CODEX_HOME", value),
-                None => std::env::remove_var("CODEX_HOME"),
-            }
-            match self.previous_test_data_dir.as_ref() {
-                Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
-                None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
-            }
+            super::TEST_CODEX_HOME_OVERRIDE.with(|value| {
+                *value.borrow_mut() = None;
+            });
+            super::TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE.with(|value| {
+                *value.borrow_mut() = None;
+            });
             let _ = fs::remove_dir_all(&self.home_dir);
         }
     }
@@ -4488,13 +4486,16 @@ mod tests {
         let _guard = TEST_ENV_LOCK.lock().expect("test env lock");
         let _env = TestEnvGuard::new("codex-current-oauth-fallback");
 
-        let older = seed_oauth_account(make_codex_tokens(
+        let mut older = seed_oauth_account(make_codex_tokens(
             "older@example.com",
             "acc-older",
             "org-older",
             "older",
             "refresh-older",
         ));
+        older.created_at = 100;
+        older.last_used = 100;
+        save_account(&older).expect("pin older account recency");
         let mut newer = CodexAccount::new(
             "codex-newer".to_string(),
             "newer@example.com".to_string(),
@@ -4506,7 +4507,8 @@ mod tests {
                 "refresh-newer",
             ),
         );
-        newer.last_used = older.last_used + 10;
+        newer.created_at = 200;
+        newer.last_used = 200;
         save_account(&newer).expect("save newer account");
 
         let mut api_account = CodexAccount::new(
@@ -4520,7 +4522,8 @@ mod tests {
         );
         api_account.auth_mode = CodexAuthMode::Apikey;
         api_account.openai_api_key = Some("sk-test".to_string());
-        api_account.last_used = newer.last_used + 10;
+        api_account.created_at = 300;
+        api_account.last_used = 300;
         save_account(&api_account).expect("save api account");
 
         let mut index = CodexAccountIndex::new();

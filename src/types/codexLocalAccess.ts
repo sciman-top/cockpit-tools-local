@@ -13,6 +13,7 @@ export type CodexRuntimeIntegrationMode =
   | 'cockpit_api_service';
 
 export type CodexRuntimeAccountKind = 'oauth' | 'api' | 'unknown';
+export type CodexLocalApiFallbackMode = 'disabled' | 'next_request_only' | 'unknown';
 
 export interface CodexRuntimeModeState {
   mode: CodexRuntimeIntegrationMode;
@@ -21,10 +22,36 @@ export interface CodexRuntimeModeState {
   updatedAt: number;
 }
 
+export interface CodexLocalApiLoggingConfig {
+  redactSensitiveValues: boolean;
+  includeRequestId: boolean;
+  includeAccountHash: boolean;
+  includeRoute: boolean;
+  includeModel: boolean;
+  includeLatency: boolean;
+  includePromptResponse: boolean;
+  includeRawUpstreamBody: boolean;
+}
+
+export interface CodexLocalApiSafetyConfig {
+  schemaVersion: number;
+  hardenedLocalMode: boolean;
+  maxConcurrentRequests: number;
+  minRequestIntervalSeconds: number;
+  maxQueueWaitSeconds: number;
+  requestTimeoutSeconds: number;
+  maxRequestBodyMb: number;
+  maxRetries: number;
+  maxRetryAccounts: number;
+  fallbackMode: CodexLocalApiFallbackMode;
+  logging: CodexLocalApiLoggingConfig;
+}
+
 export interface CodexLocalAccessCollection {
   enabled: boolean;
   port: number;
   apiKey: string;
+  safetyConfig: CodexLocalApiSafetyConfig;
   routingStrategy: CodexLocalAccessRoutingStrategy;
   restrictFreeAccounts: boolean;
   followCurrentAccount: boolean;
@@ -69,6 +96,28 @@ export interface CodexLocalAccessStats {
   monthly: CodexLocalAccessStatsWindow;
 }
 
+export interface CodexLocalAccessHealthSummary {
+  schemaVersion: number;
+  updatedAt: number;
+  unavailable: boolean;
+  loadError: string | null;
+  healthyCount: number;
+  estimatedAvailableCount: number;
+  coolingCount: number;
+  exhaustedCount: number;
+  authSuspectCount: number;
+  manualRequiredCount: number;
+  disabledCount: number;
+  activeModelCooldownCount: number;
+  stickyAccountHash: string | null;
+  stickyReason: string | null;
+  stickyExpiresAtMs: number | null;
+  nearestCooldownUntilMs: number | null;
+  lastErrorType: string | null;
+  lastStatus: number | null;
+  lastRequestId: string | null;
+}
+
 export interface CodexLocalAccessState {
   collection: CodexLocalAccessCollection | null;
   running: boolean;
@@ -80,6 +129,7 @@ export interface CodexLocalAccessState {
   memberCount: number;
   effectiveAccountIds: string[];
   stats: CodexLocalAccessStats;
+  health: CodexLocalAccessHealthSummary;
 }
 
 export interface CodexLocalAccessPortCleanupResult {

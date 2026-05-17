@@ -1101,6 +1101,7 @@ mod tests {
             .expect("read provider-only row");
         assert_eq!(provider_only, ("relay".to_string(), 0));
 
+        drop(connection);
         fs::remove_dir_all(&data_dir).expect("cleanup temp dir");
     }
 
@@ -1138,6 +1139,7 @@ mod tests {
             .expect("read old provider");
         assert_eq!(old_provider, "relay");
 
+        drop(connection);
         fs::remove_dir_all(&data_dir).expect("cleanup temp dir");
     }
 }

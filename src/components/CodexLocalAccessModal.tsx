@@ -129,6 +129,11 @@ function formatLatencyMs(value: number): string {
   return `${Math.round(value)}ms`;
 }
 
+function formatTimestampMs(value?: number | null): string {
+  if (!value || !Number.isFinite(value)) return '--';
+  return new Date(value).toLocaleString();
+}
+
 function formatQuotaPoolLabel(
   baseLabel: string,
   pool: CodexQuotaPoolItem,
@@ -195,8 +200,11 @@ export function CodexLocalAccessModal({
   const collection = state?.collection ?? null;
   const apiPortUrl = state?.apiPortUrl ?? '';
   const baseUrl = state?.baseUrl ?? '';
-  const displayBaseUrl =
-    addressKind === 'lan' && state?.lanBaseUrl ? state.lanBaseUrl : baseUrl;
+  const displayBaseUrl = baseUrl;
+  const apiKeyTitle =
+    collection && keyVisible
+      ? collection.apiKey
+      : t('codex.localAccess.hiddenKeyTitle', '密钥已隐藏');
   const modelIds = state?.modelIds ?? [];
   const stats = state?.stats;
   const statsRangeOptions = useMemo(
@@ -221,6 +229,7 @@ export function CodexLocalAccessModal({
     return stats[statsRange];
   }, [stats, statsRange]);
   const selectedTotals = selectedStatsWindow?.totals;
+  const health = state?.health ?? null;
   const routingStrategy = collection?.routingStrategy ?? 'auto';
   const followCurrentAccount = collection?.followCurrentAccount ?? false;
   const selectedRuntimeMode = runtimeMode?.mode ?? 'direct_projection';
@@ -236,6 +245,36 @@ export function CodexLocalAccessModal({
     selectedTotals && selectedTotals.requestCount > 0
       ? Math.round((selectedTotals.successCount / selectedTotals.requestCount) * 100)
       : 0;
+  const healthMetricItems = useMemo(
+    () => [
+      {
+        key: 'healthy',
+        label: t('codex.localAccess.health.healthy', '健康'),
+        value: (health?.healthyCount ?? 0) + (health?.estimatedAvailableCount ?? 0),
+      },
+      {
+        key: 'cooling',
+        label: t('codex.localAccess.health.cooling', '冷却'),
+        value: health?.coolingCount ?? 0,
+      },
+      {
+        key: 'auth',
+        label: t('codex.localAccess.health.auth', '认证'),
+        value: health?.authSuspectCount ?? 0,
+      },
+      {
+        key: 'manual',
+        label: t('codex.localAccess.health.manual', '人工'),
+        value: health?.manualRequiredCount ?? 0,
+      },
+      {
+        key: 'modelCooldown',
+        label: t('codex.localAccess.health.modelCooldown', '模型冷却'),
+        value: health?.activeModelCooldownCount ?? 0,
+      },
+    ],
+    [health, t],
+  );
   const actionBusy = saving || testing || starting || portCleanupBusy;
   const summaryStats = useMemo(
     () => [
@@ -302,7 +341,7 @@ export function CodexLocalAccessModal({
     [serviceAccounts],
   );
   const normalizedInitialSelectedIds = useMemo(
-    () => initialSelectedIds.filter((accountId) => serviceAccountIdSet.has(accountId)).slice(0, 1),
+    () => initialSelectedIds.filter((accountId) => serviceAccountIdSet.has(accountId)),
     [initialSelectedIds, serviceAccountIdSet],
   );
 
@@ -710,7 +749,6 @@ export function CodexLocalAccessModal({
       if (next.has(accountId)) {
         next.delete(accountId);
       } else {
-        next.clear();
         next.add(accountId);
       }
       return next;
@@ -728,7 +766,7 @@ export function CodexLocalAccessModal({
           return false;
         }
         return true;
-      }).slice(0, 1);
+      });
       await onSaveAccounts({
         accountIds: filtered,
         restrictFreeAccounts,
@@ -930,7 +968,7 @@ export function CodexLocalAccessModal({
                       : t('codex.localAccess.statusDisabled', '已停用')}
                   </span>
                   <span className="codex-local-access-subtle-badge">
-                    {t('codex.localAccess.memberOnlyLocal', '本机/局域网')}
+                    {t('codex.localAccess.memberOnlyLocal', '仅本机')}
                   </span>
                 </div>
                 <div className="codex-local-access-header-tools">
@@ -1089,6 +1127,49 @@ export function CodexLocalAccessModal({
                   </div>
                 ))}
               </div>
+              {health && (
+                <div className="codex-local-access-health-panel">
+                  <div className="codex-local-access-health-head">
+                    <span className="codex-local-access-health-title">
+                      <ShieldCheck size={15} />
+                      {t('codex.localAccess.health.title', '健康状态')}
+                    </span>
+                    {health.unavailable && (
+                      <span
+                        className="codex-local-access-health-badge is-warning"
+                        title={health.loadError ?? undefined}
+                      >
+                        {t('codex.localAccess.health.unavailable', '不可用')}
+                      </span>
+                    )}
+                  </div>
+                  <div className="codex-local-access-health-metrics">
+                    {healthMetricItems.map((item) => (
+                      <span
+                        key={item.key}
+                        className={`codex-local-access-health-metric codex-local-access-health-metric-${item.key}`}
+                      >
+                        <span>{item.label}</span>
+                        <strong>{formatCompactNumber(item.value)}</strong>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="codex-local-access-health-meta">
+                    <span>
+                      {t('codex.localAccess.health.sticky', 'Sticky')}:{' '}
+                      <code>{health.stickyAccountHash ?? '--'}</code>
+                    </span>
+                    <span>
+                      {t('codex.localAccess.health.lastError', '最近错误')}:{' '}
+                      <code>{health.lastErrorType ?? '--'}</code>
+                    </span>
+                    <span>
+                      {t('codex.localAccess.health.cooldownUntil', '冷却至')}:{' '}
+                      {formatTimestampMs(health.nearestCooldownUntilMs)}
+                    </span>
+                  </div>
+                </div>
+              )}
               {currentQuotaPoolSummary.visiblePlans.length > 0 && (
                 <div
                   className="codex-local-access-quota-pool-grid"
@@ -1192,7 +1273,7 @@ export function CodexLocalAccessModal({
                           </button>
                         </div>
                       </div>
-                      <code className="codex-local-access-code" title={collection.apiKey}>
+                      <code className="codex-local-access-code" title={apiKeyTitle}>
                         {keyVisible
                           ? collection.apiKey
                           : `${collection.apiKey.slice(0, 10)}••••••••••••`}

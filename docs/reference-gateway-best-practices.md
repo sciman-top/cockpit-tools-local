@@ -20,6 +20,37 @@
 3. 当前任务能否“额度耗完仍继续”取决于上游连接是否已经建立、是否已经开始流式输出、以及服务端是否还能继续发送。网关只能保证本地不因自己的重试/切号策略中断；不能把上游已经返回的 `429` 变成继续执行。
 4. 最值得借鉴的是 Sub2API 的账号状态机、CLIProxyAPI 的流式重试边界、LiteLLM 的 cooldown 决策矩阵、New API 的可配置重试和渠道禁用框架。
 5. 最不宜照搬的是面向公网/多用户网关的激进默认值：请求级轮询、跨账号扫射、无限或多凭据重试、高频额度刷新、请求/响应正文日志、LAN/public listen。
+6. local limit 与 upstream limit 必须分开：本地 backpressure 产生的 429 是保护性拒绝，上游 429 是账号/模型状态信号，两者要有不同 `error_type`、日志字段和恢复提示。
+7. 参考项目里的“自动禁用/自动切换”大多是平台级能力；Cockpit 自用版默认应该是“进入 cooldown 或人工确认态”，删除账号、禁用账号和扫完整池都必须显式 opt-in。
+
+## Cockpit Fit-Gap Matrix
+
+| Cockpit current gap | Evidence in Cockpit | Reference signal | Roadmap action |
+| --- | --- | --- | --- |
+| 多账号 UI/路由语义与后端实际单账号不一致 | 旧实现中 `build_effective_local_access_account_ids()` 只取 `take(1)`，`sanitize_collection()` 第一个账号后 `break` | Sub2API 把调度资格集中到 `IsSchedulable()`，CLIProxyAPI 有 fill-first/session affinity | 2026-05-18 已移除保存/规范化层单账号裁剪；Hardened selector 现在保留完整候选池，fill-first 不做账号快照刷新，实际上游尝试仍默认单账号 cap |
+| 没有本地 backpressure | API service 没有 global semaphore、请求启动间隔和 bounded queue | LiteLLM 在 pre-call 阶段检查 RPM/TPM/parallel limit，New API 有全局/模型限流 | `HLA-03 LocalBackpressure` |
+| 429 cooldown 解析不完整 | 只解析 `usage_limit_reached` body 的 reset 字段 | LiteLLM/New API/CLIProxyAPI/Sub2API 都把 retry/cooldown 作为独立策略面；LiteLLM 读取 header cooldown | `HLA-02 ErrorClassifier` 增加 `Retry-After` / `Retry-After-Ms` / body reset |
+| cooldown 不持久 | `GatewayRuntime.model_cooldowns` 为内存状态 | Sub2API 持久化 `RateLimitResetAt` 和模型 cooldown | `HLA-04 Persistent AccountHealthRegistry` |
+| 401/403/captcha/suspicious 没有人工确认态 | 401 刷新失败后只记录错误/失效 prepared account | Sub2API 对 OAuth 401 设置临时不可调度，403/captcha 类进入保守状态 | `HLA-04` 增加 `auth_suspect` / `manual_required` |
+| 风控关键节点不可串联回放 | 监听、认证投影、selector、上游转发、classifier、stream 写出目前分散在普通日志/内存状态 | LiteLLM callbacks/observability、New API request log、CLIProxyAPI usage logging 都把请求事件结构化，但 Cockpit 只应本地脱敏保留 | `HLA-04A SafetyObserver/AuditTrail`，被动记录 request_id 事件链，不新增主动探测；2026-05-18 已落地本地 JSONL 脱敏事件首个运行路径 |
+| 流式切号边界不够显式 | 代理层在拿到 upstream response 后才写客户端，缺少统一 stream guard 抽象 | CLIProxyAPI 单测固化“首字节后不重试” | `HLA-05 RetryFailoverController`；2026-05-18 已落地 stream write state 和默认单账号/单 retry cap |
+| UI 和日志泄露面 | UI 仍展示 LAN 口径，隐藏 API key 时 `title` 含完整 key；失败日志含 raw detail/account id | Sub2API `logredact` 做 JSON/text 脱敏；CLIProxyAPI 对 header/API key 脱敏 | `HLA-00` 先止血 |
+| 请求体/超时/retry 常量未进入 preset | `MAX_HTTP_REQUEST_BYTES`、`REQUEST_READ_TIMEOUT`、`UPSTREAM_SEND_RETRY_ATTEMPTS` 等仍是代码常量 | LiteLLM/New API 把 rate/retry limit 作为可配置面，CLIProxyAPI 暴露 request retry / retry interval | `HLA-01` 明确配置字段与内部硬上限 |
+| local 429 与 upstream 429 未分层 | 当前只有上游失败摘要和内存 cooldown | LiteLLM pre-call limiter 与 proxy limiter 返回本地 429 + `retry-after`，上游 cooldown 另走 router state | `HLA-02/HLA-03` 区分 `local_backpressure` 和 `upstream_rate_limit` |
+
+结论：Cockpit 不缺“更多路由策略”的雏形，缺的是打开多账号池前的安全状态机、冷却持久化、backpressure 和流式边界。因此路线图应先做 P0 护栏，而不是先做账号池扩容。
+
+## Deep Review Addendum
+
+- Cockpit 的 `127.0.0.1` bind 是正确基线，但 `lan_base_url` 仍会被计算并返回给前端；hardened UI 应默认不展示 LAN 入口，旧字段仅保留兼容。
+- Cockpit 的上游请求有发送层 retry、单账号 5xx retry、账号池 fallback 三层概念；后续实现必须统一到 `RetryFailoverController`，否则很容易出现“配置显示保守，但某层仍在重试”的漂移。
+- Cockpit 的流式写出路径在下游 headers 或 chunk 发出后已不能改变响应身份；stream guard 应跟随写出状态，而不是只跟随 upstream response 是否成功。
+- Sub2API 的 `IsSchedulable()` 和 CLIProxyAPI 的 `isAuthBlockedForModel()` 都把“可调度性”做成单一判定入口；Cockpit 应避免把 cooldown、auth suspect、manual pause 分散在 selector、retry 和 UI 三处各自判断。
+- 多账号池打开后，默认路由仍应是稳定起点或 sticky/fill-first；2026-05-18 已把 hardened mode 的请求起点固定为 0，加入 process sticky binding、cooldown/auth/manual sticky 清理，以及完整候选池 + 单请求尝试 cap，避免每个请求推进 round-robin cursor。
+- UI 只应展示脱敏 health summary：计数、sticky account hash、最近错误类型和 cooldown 到期时间；2026-05-18 已接入 API 服务面板首个只读切片，手动恢复仍需显式用户动作和 audit event。
+- LiteLLM 的 pre-call rate checks 提醒 Cockpit：本地限流要发生在真正调用上游前，并返回本地 `Retry-After`；不能等上游 429 后才反应。
+- 多个参考项目有 request/body logging 能力或 raw error 兜底日志。Cockpit hardened mode 应借鉴其脱敏工具和测试，不借鉴默认捕获 prompt/response 的能力。
+- CLIProxyAPI 的 usage logging、New API 的 request log 与 LiteLLM observability 都证明“结构化事件链”是成熟网关常见实践；Cockpit 的差异化边界是本机 JSONL、脱敏字段、低频被动写入，不记录正文、不把 audit 当额度探测器。
 
 ## Project Findings
 
