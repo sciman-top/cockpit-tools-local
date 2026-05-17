@@ -62,6 +62,7 @@ Run multiple Antigravity instances in parallel with different accounts. For exam
 - **Dedicated Support**: Optimized account management experience for Codex
 - **Quota Display**: Clear display of Hourly and Weekly quota status
 - **Plan Recognition**: Automatically identifies account Plan types (Basic, Plus, Team, etc.)
+- **Switching Ownership**: Cockpit Tools natively owns Codex roundtrip switching among Direct OAuth, Direct API/API Key providers, and the Local API Service, including Local API Service single-account/follow-current behavior, provider writes, session visibility repair, and managed instance launch state; no external governed-runtime repair, gateway, or guard is required.
 
 > ![Codex Accounts](docs/images/codex_list.png)
 
@@ -226,7 +227,7 @@ These are the most common security questions answered directly:
 - **This is a local desktop tool**: it does not require a separate cloud account for this project, and it does not rely on a project-hosted cloud account storage.
 - **Data is mainly stored on your machine**:
   - `~/.antigravity_cockpit`: Antigravity accounts, configs, WebSocket status, etc.
-  - `~/.codex`: official Codex current login `auth.json`
+  - `~/.codex`: official Codex current login `auth.json`, plus Codex provider/config and session state written by Cockpit
   - `~/.gemini`: Gemini Cli local session files (for example `oauth_creds.json`, `google_accounts.json`, `settings.json`)
   - local app data folder under `com.antigravity.cockpit-tools`: Codex / GitHub Copilot / Windsurf / Kiro / Cursor / Gemini Cli / CodeBuddy / CodeBuddy CN / Qoder / Trae / Zed multi-account index data, etc.
 - **WebSocket is local-only by default**: binds to `127.0.0.1`, default port `19528`; you can disable it or change the port in Settings.

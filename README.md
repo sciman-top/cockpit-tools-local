@@ -63,6 +63,7 @@
 - **专属支持**：专为 Codex 优化的账号管理体验
 - **配额展示**：清晰展示 Hourly 和 Weekly 配额状态
 - **计划识别**：自动识别账号 Plan 类型 (Basic, Plus, Team 等)
+- **切换归属**：Cockpit Tools 原生负责 Codex Direct OAuth、Direct API/API Key provider 与本地 API Service 的往返切换，包括 Local API Service 单账号池/跟随当前账号、provider 写入、会话可见性修复与托管实例启动状态；不需要外部 governed-runtime repair、gateway 或 guard 参与。
 
 > ![Codex Accounts](docs/images/codex_list.png)
 
@@ -227,7 +228,7 @@ Codex 同样支持多账号多实例并行运行。比如同时打开两个 Code
 - **这是本地桌面工具**：不需要单独注册平台账号，也不依赖项目自建云端来存你的账号列表。
 - **数据主要保存在本机**：
   - `~/.antigravity_cockpit`：Antigravity 账号、配置、WebSocket 状态等
-  - `~/.codex`：Codex 官方当前登录 `auth.json`
+  - `~/.codex`：Codex 官方当前登录 `auth.json`、Cockpit 写入的 Codex provider/config 与会话状态
   - `~/.gemini`：Gemini Cli 本地会话文件（如 `oauth_creds.json`、`google_accounts.json`、`settings.json`）
   - 系统本地应用数据目录下 `com.antigravity.cockpit-tools`：Codex / GitHub Copilot / Windsurf / Kiro / Cursor / Gemini Cli / CodeBuddy / CodeBuddy CN / Qoder / Trae / Zed 多账号索引等
 - **WebSocket 默认仅本机访问**：监听 `127.0.0.1`，默认端口 `19528`，可在设置中关闭或改端口。
