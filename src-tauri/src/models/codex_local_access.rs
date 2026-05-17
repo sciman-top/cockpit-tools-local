@@ -21,7 +21,8 @@ impl Default for CodexLocalAccessRoutingStrategy {
 #[serde(rename_all = "snake_case")]
 pub enum CodexRuntimeIntegrationMode {
     DirectProjection,
-    GatewayLitellm,
+    #[serde(alias = "gateway_litellm")]
+    CockpitApiService,
 }
 
 impl Default for CodexRuntimeIntegrationMode {
@@ -33,6 +34,7 @@ impl Default for CodexRuntimeIntegrationMode {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CodexRuntimeAccountKind {
+    #[serde(rename = "oauth", alias = "o_auth")]
     OAuth,
     Api,
     Unknown,

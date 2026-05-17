@@ -11,6 +11,7 @@ use tokio::sync::{broadcast, oneshot, Mutex, RwLock};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::config::{get_preferred_port, init_server_status, PORT_RANGE};
+use crate::models::codex_local_access::{CodexRuntimeIntegrationMode, CodexRuntimeModeState};
 
 /// 消息类型
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,6 +82,24 @@ pub enum WsMessage {
         source: Option<String>,
     },
 
+    /// 请求获取 Codex runtime mode
+    #[serde(rename = "request.codex_runtime_mode_get")]
+    CodexRuntimeModeGet { request_id: String },
+
+    /// 请求切换 Codex runtime mode
+    #[serde(rename = "request.codex_runtime_mode_set")]
+    CodexRuntimeModeSet {
+        request_id: String,
+        mode: CodexRuntimeIntegrationMode,
+    },
+
+    /// 请求切换 Codex 账号
+    #[serde(rename = "request.codex_account_switch")]
+    CodexAccountSwitch {
+        request_id: String,
+        account_id: String,
+    },
+
     /// 请求添加/更新账号（扩展端登录后同步）
     #[serde(rename = "request.add_account")]
     AddAccount {
@@ -129,6 +148,13 @@ pub enum WsMessage {
     CurrentAccountResponse {
         request_id: String,
         account: Option<AccountInfo>,
+    },
+
+    /// Codex runtime mode 响应
+    #[serde(rename = "response.codex_runtime_mode")]
+    CodexRuntimeModeResponse {
+        request_id: String,
+        state: CodexRuntimeModeState,
     },
 
     /// 操作成功响应
@@ -674,6 +700,98 @@ async fn handle_client_message(
             }
         }
 
+        WsMessage::CodexRuntimeModeGet { request_id } => {
+            crate::modules::logger::log_info("[WS] 收到获取 Codex runtime mode 请求");
+
+            let response = match crate::modules::codex_local_access::load_runtime_mode_state() {
+                Ok(state) => WsMessage::CodexRuntimeModeResponse { request_id, state },
+                Err(e) => WsMessage::ErrorResponse {
+                    request_id,
+                    error: e,
+                },
+            };
+
+            if let Ok(json) = serde_json::to_string(&response) {
+                sender
+                    .send(Message::Text(json.into()))
+                    .await
+                    .map_err(|e| format!("发送响应失败: {}", e))?;
+            }
+        }
+
+        WsMessage::CodexRuntimeModeSet { request_id, mode } => {
+            crate::modules::logger::log_info(&format!(
+                "[WS] 收到切换 Codex runtime mode 请求: {:?}",
+                mode
+            ));
+
+            let response = match crate::modules::codex_local_access::set_runtime_integration_mode(
+                mode,
+            )
+            .await
+            {
+                Ok(state) => {
+                    broadcast_data_changed("ws_codex_runtime_mode_set");
+                    WsMessage::CodexRuntimeModeResponse { request_id, state }
+                }
+                Err(e) => WsMessage::ErrorResponse {
+                    request_id,
+                    error: e,
+                },
+            };
+
+            if let Ok(json) = serde_json::to_string(&response) {
+                sender
+                    .send(Message::Text(json.into()))
+                    .await
+                    .map_err(|e| format!("发送响应失败: {}", e))?;
+            }
+        }
+
+        WsMessage::CodexAccountSwitch {
+            request_id,
+            account_id,
+        } => {
+            crate::modules::logger::log_info(&format!(
+                "[WS] 收到切换 Codex 账号请求: account_id={}",
+                account_id
+            ));
+
+            let response = match crate::get_app_handle() {
+                Some(app) => {
+                    match crate::commands::codex::switch_codex_account(app.clone(), account_id)
+                        .await
+                    {
+                        Ok(_) => match get_current_account_info() {
+                            Ok(account) => WsMessage::CurrentAccountResponse {
+                                request_id,
+                                account,
+                            },
+                            Err(e) => WsMessage::ErrorResponse {
+                                request_id,
+                                error: e,
+                            },
+                        },
+                        Err(e) => WsMessage::ErrorResponse {
+                            request_id,
+                            error: e,
+                        },
+                    }
+                }
+                None => WsMessage::ErrorResponse {
+                    request_id,
+                    error: "Cockpit AppHandle 不可用，无法切换 Codex 账号".to_string(),
+                },
+            };
+
+            if let Ok(json) = serde_json::to_string(&response) {
+                sender
+                    .send(Message::Text(json.into()))
+                    .await
+                    .map_err(|e| format!("发送响应失败: {}", e))?;
+            }
+        }
+
         WsMessage::SwitchAccount {
             account_id,
             request_id,
@@ -955,23 +1073,20 @@ fn get_accounts_with_tokens_info() -> Result<(Vec<AccountTokenInfo>, Option<Stri
 
 /// 获取当前账号信息
 fn get_current_account_info() -> Result<Option<AccountInfo>, String> {
-    use crate::modules::account;
+    use crate::modules::codex_account;
 
-    let current = account::get_current_account()?;
-    let current_id = account::get_current_account_id()?;
+    let current = codex_account::get_current_account();
+    let current_id = codex_account::load_account_index().current_account_id;
 
     Ok(current.map(|acc| {
-        let subscription_tier = acc
-            .quota
-            .as_ref()
-            .and_then(|quota| quota.subscription_tier.clone());
+        let subscription_tier = acc.plan_type.clone();
         AccountInfo {
             id: acc.id.clone(),
             email: acc.email.clone(),
-            name: acc.name.clone(),
+            name: acc.account_name.clone(),
             is_current: current_id.as_ref() == Some(&acc.id),
-            disabled: acc.disabled,
-            has_fingerprint: acc.fingerprint_id.is_some(),
+            disabled: acc.requires_reauth,
+            has_fingerprint: false,
             last_used: acc.last_used,
             subscription_tier,
         }

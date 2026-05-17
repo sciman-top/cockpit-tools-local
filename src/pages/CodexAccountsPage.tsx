@@ -4432,7 +4432,7 @@ export function CodexAccountsPage() {
         await reloadLocalAccessLaunchCurrent();
         setMessage({
           text:
-            nextRuntimeMode.mode === "gateway_litellm"
+            nextRuntimeMode.mode === "cockpit_api_service"
               ? t(
                   "codex.localAccess.runtimeModeGatewaySuccess",
                   "已切换为 Cockpit API 服务模式",
@@ -4729,7 +4729,8 @@ export function CodexAccountsPage() {
     return map;
   }, [customSortOrder]);
   const localAccessRuntimeActive =
-    localAccessLaunchCurrent || codexRuntimeMode?.mode === "gateway_litellm";
+    localAccessLaunchCurrent ||
+    codexRuntimeMode?.mode === "cockpit_api_service";
   const overviewCurrentAccountId =
     localAccessRuntimeActive && localAccessEffectiveAccountIds.length > 0
       ? localAccessEffectiveAccountIds[0]

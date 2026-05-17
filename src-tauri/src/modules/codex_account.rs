@@ -44,6 +44,7 @@ const CODEX_COCKPIT_API_BASE_URL: &str = "https://chongcodex.cn/v1";
 const CODEX_COCKPIT_API_PROVIDER_ID: &str = "cockpit_api";
 const CODEX_OPENAI_PROVIDER_ID: &str = "openai";
 const CODEX_RUNTIME_MODEL_PROVIDER_ID: &str = "codex_local_access";
+const CODEX_LEGACY_COCKPIT_API_SERVICE_PROVIDER_ID: &str = "cockpit_api_service";
 const CODEX_LEGACY_API_KEY_OPENAI_PROVIDER_ID: &str = "openai_api_key";
 const CODEX_PROVIDER_WIRE_API: &str = "responses";
 const CODEX_CONTEXT_WINDOW_1M_VALUE: i64 = 1_000_000;
@@ -1090,6 +1091,7 @@ fn collect_projectable_api_provider_configs() -> Vec<ApiProviderConfig> {
 fn collect_managed_api_key_provider_ids() -> HashSet<String> {
     let mut ids = HashSet::from([
         CODEX_RUNTIME_MODEL_PROVIDER_ID.to_string(),
+        CODEX_LEGACY_COCKPIT_API_SERVICE_PROVIDER_ID.to_string(),
         CODEX_COCKPIT_API_PROVIDER_ID.to_string(),
         CODEX_LEGACY_API_KEY_OPENAI_PROVIDER_ID.to_string(),
     ]);

@@ -8,7 +8,9 @@ export type CodexLocalAccessRoutingStrategy =
   | 'plan_low_first'
   | 'expiry_soon_first';
 
-export type CodexRuntimeIntegrationMode = 'direct_projection' | 'gateway_litellm';
+export type CodexRuntimeIntegrationMode =
+  | 'direct_projection'
+  | 'cockpit_api_service';
 
 export type CodexRuntimeAccountKind = 'oauth' | 'api' | 'unknown';
 

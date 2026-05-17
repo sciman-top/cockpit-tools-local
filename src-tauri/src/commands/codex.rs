@@ -148,7 +148,7 @@ pub async fn switch_codex_account(
     let account_speed = account.app_speed.clone();
     codex_speed::write_official_app_speed(account_speed.clone())?;
 
-    // 默认实例始终跟随当前账号，具体 direct/gateway 投影由 runtime mode 决定。
+    // 默认实例始终跟随当前账号，具体 direct/API Service 投影由 runtime mode 决定。
     if let Err(e) =
         crate::modules::codex_instance::update_default_settings(None, None, Some(true), None)
     {
@@ -831,7 +831,7 @@ pub async fn codex_local_access_activate(app: AppHandle) -> Result<CodexLocalAcc
     let codex_home = codex_account::get_codex_home();
     let state = codex_local_access::activate_local_access_for_dir(&codex_home).await?;
     if let Err(e) = codex_local_access::set_runtime_integration_mode(
-        CodexRuntimeIntegrationMode::GatewayLitellm,
+        CodexRuntimeIntegrationMode::CockpitApiService,
     )
     .await
     {

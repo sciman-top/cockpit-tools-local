@@ -54,6 +54,11 @@ const UPSTREAM_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_CODEX_USER_AGENT: &str =
     "codex-tui/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.118.0)";
 const DEFAULT_CODEX_ORIGINATOR: &str = "codex-tui";
+const LEGACY_DEFAULT_CODEX_LOCAL_ACCESS_PORT: u16 = 5335;
+const PREFERRED_CODEX_LOCAL_ACCESS_PORTS: &[u16] =
+    &[45335, 45336, 45435, 45436, 45535, 45536, 46335, 47335];
+const CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID: &str = "codex_local_access";
+const CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME: &str = "Cockpit API Service";
 const CORS_ALLOW_HEADERS: &str = "Authorization, Content-Type, OpenAI-Beta, X-API-Key, X-Codex-Beta-Features, X-Client-Request-Id, Originator, Session_id, ChatGPT-Account-Id";
 const DEFAULT_CODEX_MODELS: &[&str] = &[
     "gpt-5.5",
@@ -346,24 +351,38 @@ fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
 
+fn runtime_account_identity(account: &CodexAccount) -> (CodexRuntimeAccountKind, Option<String>) {
+    let account_kind = if account.is_api_key_auth() {
+        CodexRuntimeAccountKind::Api
+    } else {
+        CodexRuntimeAccountKind::OAuth
+    };
+    (account_kind, Some(account.id.clone()))
+}
+
 fn current_runtime_account_kind() -> (CodexRuntimeAccountKind, Option<String>) {
     let account = codex_account::get_current_account();
-    let account_kind = account
+    account
         .as_ref()
-        .map(|item| {
-            if item.is_api_key_auth() {
-                CodexRuntimeAccountKind::Api
-            } else {
-                CodexRuntimeAccountKind::OAuth
+        .map(runtime_account_identity)
+        .unwrap_or((CodexRuntimeAccountKind::Unknown, None))
+}
+
+fn runtime_account_kind_for_mode(
+    mode: CodexRuntimeIntegrationMode,
+) -> (CodexRuntimeAccountKind, Option<String>) {
+    if mode == CodexRuntimeIntegrationMode::CockpitApiService {
+        if let Ok(Some(collection)) = load_collection_from_disk() {
+            if let Ok(account) = resolve_local_access_projection_account(&collection) {
+                return runtime_account_identity(&account);
             }
-        })
-        .unwrap_or(CodexRuntimeAccountKind::Unknown);
-    let current_account_id = account.map(|item| item.id);
-    (account_kind, current_account_id)
+        }
+    }
+    current_runtime_account_kind()
 }
 
 fn build_runtime_mode_state(mode: CodexRuntimeIntegrationMode) -> CodexRuntimeModeState {
-    let (account_kind, current_account_id) = current_runtime_account_kind();
+    let (account_kind, current_account_id) = runtime_account_kind_for_mode(mode);
     CodexRuntimeModeState {
         mode,
         account_kind,
@@ -381,6 +400,13 @@ fn save_runtime_mode_state(state: &CodexRuntimeModeState) -> Result<(), String> 
     let content = serde_json::to_string_pretty(state)
         .map_err(|e| format!("序列化 runtime mode 失败: {}", e))?;
     write_string_atomic(&path, &content).map_err(|e| format!("写入 runtime mode 失败: {}", e))
+}
+
+fn should_sync_local_access_collection_on_account_switch(
+    mode: CodexRuntimeIntegrationMode,
+    collection: &CodexLocalAccessCollection,
+) -> bool {
+    mode == CodexRuntimeIntegrationMode::CockpitApiService || collection.follow_current_account
 }
 
 fn repair_runtime_projection_history_visibility() -> Result<(), String> {
@@ -424,7 +450,21 @@ async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(
     Ok(())
 }
 
-async fn materialize_gateway_litellm_projection() -> Result<(), String> {
+async fn materialize_cockpit_api_service_projection() -> Result<(), String> {
+    if let Some(current_account) = codex_account::get_current_account() {
+        let restrict_free_accounts = {
+            let runtime = gateway_runtime().lock().await;
+            runtime
+                .collection
+                .as_ref()
+                .map(|collection| collection.restrict_free_accounts)
+                .unwrap_or(false)
+        };
+        let _ =
+            save_local_access_accounts(vec![current_account.id.clone()], restrict_free_accounts)
+                .await?;
+    }
+
     let state = snapshot_state().await?;
     let api_key = state
         .collection
@@ -458,8 +498,9 @@ async fn materialize_gateway_litellm_projection() -> Result<(), String> {
 }
 
 async fn materialize_direct_projection() -> Result<(), String> {
-    let account = codex_account::get_current_or_fallback_oauth_account()
-        .ok_or_else(|| "未找到当前 Codex OAuth 账号".to_string())?;
+    let account = codex_account::get_current_account()
+        .or_else(codex_account::get_current_or_fallback_oauth_account)
+        .ok_or_else(|| "未找到当前 Codex 账号".to_string())?;
     if let Ok(state) = snapshot_state().await {
         if state.collection.is_some() {
             let _ = set_local_access_enabled(false).await?;
@@ -483,7 +524,7 @@ pub fn load_runtime_mode_state() -> Result<CodexRuntimeModeState, String> {
         std::fs::read_to_string(&path).map_err(|e| format!("读取 runtime mode 失败: {}", e))?;
     let mut state: CodexRuntimeModeState =
         serde_json::from_str(&content).map_err(|e| format!("解析 runtime mode 失败: {}", e))?;
-    let (account_kind, current_account_id) = current_runtime_account_kind();
+    let (account_kind, current_account_id) = runtime_account_kind_for_mode(state.mode);
     if state.account_kind != account_kind || state.current_account_id != current_account_id {
         state.account_kind = account_kind;
         state.current_account_id = current_account_id;
@@ -497,8 +538,8 @@ pub async fn set_runtime_integration_mode(
     mode: CodexRuntimeIntegrationMode,
 ) -> Result<CodexRuntimeModeState, String> {
     match mode {
-        CodexRuntimeIntegrationMode::GatewayLitellm => {
-            materialize_gateway_litellm_projection().await?;
+        CodexRuntimeIntegrationMode::CockpitApiService => {
+            materialize_cockpit_api_service_projection().await?;
         }
         CodexRuntimeIntegrationMode::DirectProjection => {
             materialize_direct_projection().await?;
@@ -516,9 +557,9 @@ pub async fn sync_runtime_projection_after_account_switch(account_id: &str) -> R
         .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
 
     match mode {
-        CodexRuntimeIntegrationMode::GatewayLitellm => {
+        CodexRuntimeIntegrationMode::CockpitApiService => {
             sync_local_access_to_current_account_on_switch(account_id).await?;
-            materialize_gateway_litellm_projection().await?;
+            materialize_cockpit_api_service_projection().await?;
         }
         CodexRuntimeIntegrationMode::DirectProjection => {
             materialize_direct_projection().await?;
@@ -3262,22 +3303,15 @@ fn build_runtime_account(
     api_key: String,
     current_account: &CodexAccount,
 ) -> CodexAccount {
-    let provider_id = current_account
-        .api_provider_id
-        .clone()
-        .unwrap_or_else(|| "codex_local_access".to_string());
-    let provider_name = current_account
-        .api_provider_name
-        .clone()
-        .or_else(|| Some("Codex API Service".to_string()));
+    let _ = current_account;
     let mut runtime_account = CodexAccount::new_api_key(
         "codex_local_access_runtime".to_string(),
         "api-service-local".to_string(),
         api_key,
         CodexApiProviderMode::Custom,
         Some(base_url),
-        Some(provider_id),
-        provider_name,
+        Some(CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID.to_string()),
+        Some(CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME.to_string()),
     );
     runtime_account.account_name = Some("API Service".to_string());
     runtime_account
@@ -3299,6 +3333,27 @@ fn allocate_random_local_port() -> Result<u16, String> {
         .local_addr()
         .map(|addr| addr.port())
         .map_err(|e| format!("读取本地接入端口失败: {}", e))
+}
+
+fn is_local_port_bindable(port: u16) -> bool {
+    port != 0 && StdTcpListener::bind((CODEX_LOCAL_ACCESS_BIND_HOST, port)).is_ok()
+}
+
+fn first_stable_local_access_port(
+    exclude_port: Option<u16>,
+    is_bindable: impl Fn(u16) -> bool,
+) -> Option<u16> {
+    PREFERRED_CODEX_LOCAL_ACCESS_PORTS
+        .iter()
+        .copied()
+        .filter(|port| Some(*port) != exclude_port)
+        .find(|port| is_bindable(*port))
+}
+
+fn allocate_stable_local_access_port(exclude_port: Option<u16>) -> Result<u16, String> {
+    first_stable_local_access_port(exclude_port, is_local_port_bindable)
+        .map(Ok)
+        .unwrap_or_else(allocate_random_local_port)
 }
 
 fn load_collection_from_disk() -> Result<Option<CodexLocalAccessCollection>, String> {
@@ -3499,8 +3554,8 @@ fn sanitize_collection(
 ) -> Result<(bool, HashSet<String>), String> {
     let mut changed = false;
 
-    if collection.port == 0 {
-        collection.port = allocate_random_local_port()?;
+    if collection.port == 0 || collection.port == LEGACY_DEFAULT_CODEX_LOCAL_ACCESS_PORT {
+        collection.port = allocate_stable_local_access_port(None)?;
         changed = true;
     }
     if collection.api_key.trim().is_empty() {
@@ -3565,7 +3620,7 @@ async fn ensure_runtime_loaded_without_start() -> Result<(), String> {
     if next_collection.is_none() {
         next_collection = Some(CodexLocalAccessCollection {
             enabled: false,
-            port: allocate_random_local_port()?,
+            port: allocate_stable_local_access_port(None)?,
             api_key: generate_local_api_key(),
             routing_strategy: CodexLocalAccessRoutingStrategy::default(),
             restrict_free_accounts: false,
@@ -3670,7 +3725,7 @@ async fn ensure_gateway_matches_runtime() -> Result<(), String> {
                 std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
             ) {
                 let original_port = collection.port;
-                collection.port = allocate_random_local_port()?;
+                collection.port = allocate_stable_local_access_port(Some(original_port))?;
                 collection.updated_at = now_ms();
                 save_collection_to_disk(&collection)?;
                 {
@@ -3974,7 +4029,7 @@ pub async fn save_local_access_accounts(
             .clone()
             .unwrap_or(CodexLocalAccessCollection {
                 enabled: false,
-                port: allocate_random_local_port()?,
+                port: allocate_stable_local_access_port(None)?,
                 api_key: generate_local_api_key(),
                 routing_strategy: CodexLocalAccessRoutingStrategy::default(),
                 restrict_free_accounts: false,
@@ -4066,7 +4121,10 @@ pub async fn sync_local_access_to_current_account_on_switch(
         return Ok(());
     };
 
-    if !collection.follow_current_account {
+    let mode = load_runtime_mode_state()
+        .map(|state| state.mode)
+        .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
+    if !should_sync_local_access_collection_on_account_switch(mode, &collection) {
         return Ok(());
     }
 
@@ -6373,15 +6431,20 @@ mod tests {
         build_chat_completion_payload, build_chat_completion_stream_body,
         build_effective_local_access_account_ids, build_images_api_payload,
         build_local_models_response, build_ordered_account_ids, build_request_routing_hint,
-        build_runtime_account, extract_usage_capture, is_responses_completion_event,
-        load_runtime_mode_state, parse_codex_retry_after, parse_responses_payload_from_upstream,
-        prepare_gateway_request, resolve_supported_model_alias, set_runtime_integration_mode,
-        should_retry_single_account_upstream_status, should_treat_response_as_stream,
+        build_runtime_account, build_runtime_mode_state, extract_usage_capture,
+        first_stable_local_access_port, is_responses_completion_event, load_runtime_mode_state,
+        parse_codex_retry_after, parse_responses_payload_from_upstream, prepare_gateway_request,
+        resolve_supported_model_alias, set_runtime_integration_mode,
+        should_retry_single_account_upstream_status,
+        should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, GatewayResponseAdapter, ParsedRequest, ResponseUsageCollector,
+        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME,
+        PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
     };
     use crate::models::codex::{CodexAccount, CodexApiProviderMode};
     use crate::models::codex_local_access::{
-        CodexLocalAccessCollection, CodexLocalAccessRoutingStrategy, CodexRuntimeIntegrationMode,
+        CodexLocalAccessCollection, CodexLocalAccessRoutingStrategy, CodexRuntimeAccountKind,
+        CodexRuntimeIntegrationMode,
     };
     use reqwest::StatusCode;
     use serde_json::{json, Value};
@@ -6577,6 +6640,47 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         );
     }
 
+    #[test]
+    fn cockpit_api_service_account_switch_replaces_single_account_pool_even_without_follow_toggle()
+    {
+        let collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "agt_test".to_string(),
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec!["acc-old".to_string()],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        assert!(should_sync_local_access_collection_on_account_switch(
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            &collection
+        ));
+    }
+
+    #[test]
+    fn direct_projection_account_switch_does_not_replace_pool_without_follow_toggle() {
+        let collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "agt_test".to_string(),
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec!["acc-old".to_string()],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        assert!(!should_sync_local_access_collection_on_account_switch(
+            CodexRuntimeIntegrationMode::DirectProjection,
+            &collection
+        ));
+    }
+
     #[tokio::test]
     #[ignore = "live test mutates local Codex/Cockpit projection; set COCKPIT_TOOLS_LIVE_RUNTIME_SWITCH=1"]
     async fn live_runtime_mode_roundtrip_direct_and_api_service() {
@@ -6591,13 +6695,13 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("switch to direct projection");
         assert_eq!(direct.mode, CodexRuntimeIntegrationMode::DirectProjection);
 
-        let gateway = set_runtime_integration_mode(CodexRuntimeIntegrationMode::GatewayLitellm)
+        let gateway = set_runtime_integration_mode(CodexRuntimeIntegrationMode::CockpitApiService)
             .await
             .expect("switch back to cockpit api service");
-        assert_eq!(gateway.mode, CodexRuntimeIntegrationMode::GatewayLitellm);
+        assert_eq!(gateway.mode, CodexRuntimeIntegrationMode::CockpitApiService);
         assert_eq!(
             load_runtime_mode_state().expect("runtime mode").mode,
-            CodexRuntimeIntegrationMode::GatewayLitellm
+            CodexRuntimeIntegrationMode::CockpitApiService
         );
     }
 
@@ -6613,6 +6717,58 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let hint = build_request_routing_hint(&request);
         assert_eq!(hint.model_key, "gpt-5.4-mini");
         assert_eq!(hint.previous_response_id.as_deref(), Some("resp_prev"));
+    }
+
+    #[test]
+    fn runtime_mode_renames_gateway_litellm_to_cockpit_api_service() {
+        let legacy: crate::models::codex_local_access::CodexRuntimeModeState =
+            serde_json::from_value(json!({
+                "mode": "gateway_litellm",
+                "accountKind": "api",
+                "currentAccountId": "codex-test",
+                "updatedAt": 1
+            }))
+            .expect("legacy runtime mode should deserialize");
+        assert_eq!(legacy.mode, CodexRuntimeIntegrationMode::CockpitApiService);
+
+        let serialized = serde_json::to_value(build_runtime_mode_state(
+            CodexRuntimeIntegrationMode::CockpitApiService,
+        ))
+        .expect("serialize runtime mode");
+        assert_eq!(serialized["mode"], "cockpit_api_service");
+    }
+
+    #[test]
+    fn runtime_account_kind_serializes_oauth_without_acronym_split() {
+        let legacy: CodexRuntimeAccountKind =
+            serde_json::from_value(json!("o_auth")).expect("legacy oauth kind");
+        assert_eq!(legacy, CodexRuntimeAccountKind::OAuth);
+        assert_eq!(
+            serde_json::to_value(CodexRuntimeAccountKind::OAuth).expect("serialize oauth kind"),
+            json!("oauth")
+        );
+    }
+
+    #[test]
+    fn stable_local_access_port_prefers_first_available_fixed_port() {
+        let expected = PREFERRED_CODEX_LOCAL_ACCESS_PORTS[0];
+        assert_eq!(
+            first_stable_local_access_port(None, |port| port == expected),
+            Some(expected)
+        );
+    }
+
+    #[test]
+    fn stable_local_access_port_skips_occupied_fixed_port() {
+        let occupied_port = PREFERRED_CODEX_LOCAL_ACCESS_PORTS[0];
+        let expected = PREFERRED_CODEX_LOCAL_ACCESS_PORTS[1];
+
+        assert_eq!(
+            first_stable_local_access_port(Some(occupied_port), |port| {
+                port == occupied_port || port == expected
+            }),
+            Some(expected)
+        );
     }
 
     #[test]
@@ -6648,7 +6804,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn runtime_account_preserves_manual_service_member_provider_bucket() {
+    fn runtime_account_uses_dedicated_local_access_provider_bucket() {
         let source = CodexAccount::new_api_key(
             "codex_apikey_source".to_string(),
             "api@example.com".to_string(),
@@ -6671,9 +6827,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         );
         assert_eq!(
             runtime.api_provider_id.as_deref(),
-            Some("cmp_1778165666417_1")
+            Some(CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID)
         );
-        assert_eq!(runtime.api_provider_name.as_deref(), Some("35.213.82.91"));
+        assert_eq!(
+            runtime.api_provider_name.as_deref(),
+            Some(CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME)
+        );
         assert_eq!(runtime.openai_api_key.as_deref(), Some("agt_codex_local"));
     }
 
