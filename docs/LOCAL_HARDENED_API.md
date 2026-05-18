@@ -95,6 +95,16 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 
 若上一轮已把该账号/模型写入 cooldown，后续同模型 smoke 应直接返回本地 429 和 `Retry-After`，不再继续打上游。
 
+## 额度耗尽后的请求边界
+
+Hardened API Mode 的目标是接近 Direct OAuth 的稳定体验，但不伪造上游 quota grace：
+
+- 已被上游接纳的当前 stream/response 应继续 pipe 到完成、上游 terminal error、客户端断开或 transport fatal error。
+- 本地 cooldown、exhausted、health registry 或 `selection_eligible=false` 只影响新的 admission，不 retroactively cancel active stream。
+- 新的独立请求不需要等待其他 active stream 结束；调度器可以立即避开 cooldown/exhausted 账号，选择健康账号。
+- 带 `previous_response_id` 的 continuation 优先粘原账号；不能把原账号的 `previous_response_id` 直接发给新账号。
+- 如果原账号在 continuation admission 阶段真实返回 429，只能 bounded backoff、返回 429，或在有完整上下文/压缩上下文重放时把它作为新 admission 交给健康账号。
+
 单号池通过后，再放入 2-3 个账号，但第一步仍保持 `maxRetryAccounts = 1`，只验证 selector/sticky/health 不乱轮换：
 
 ```powershell

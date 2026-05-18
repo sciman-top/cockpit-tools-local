@@ -102,6 +102,7 @@ static GATEWAY_RUNTIME: OnceLock<TokioMutex<GatewayRuntime>> = OnceLock::new();
 static GATEWAY_ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
 static UPSTREAM_HTTP_CLIENT: OnceLock<Mutex<Option<CachedUpstreamHttpClient>>> = OnceLock::new();
 static LOCAL_API_BACKPRESSURE_STATE: OnceLock<Mutex<LocalApiBackpressureState>> = OnceLock::new();
+static ACTIVE_STREAM_LEASE_REGISTRY: OnceLock<Mutex<ActiveStreamLeaseRegistry>> = OnceLock::new();
 
 #[derive(Default)]
 struct GatewayRuntime {
@@ -214,6 +215,32 @@ struct LocalApiBackpressurePermit {
     released: bool,
 }
 
+#[derive(Debug, Default)]
+struct ActiveStreamLeaseRegistry {
+    next_lease_id: u64,
+    leases: BTreeMap<u64, ActiveStreamLeaseRecord>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveStreamLeaseRecord {
+    account_id: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveStreamTerminal {
+    Completed,
+    StreamError,
+    ClientAborted,
+    Dropped,
+}
+
+#[derive(Debug)]
+struct ActiveStreamLease {
+    lease_id: u64,
+    context: AuditContext,
+    released: bool,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct StreamWriteState {
     headers_written: bool,
@@ -323,8 +350,18 @@ fn local_api_backpressure_state() -> &'static Mutex<LocalApiBackpressureState> {
     LOCAL_API_BACKPRESSURE_STATE.get_or_init(|| Mutex::new(LocalApiBackpressureState::default()))
 }
 
+fn active_stream_lease_registry() -> &'static Mutex<ActiveStreamLeaseRegistry> {
+    ACTIVE_STREAM_LEASE_REGISTRY.get_or_init(|| Mutex::new(ActiveStreamLeaseRegistry::default()))
+}
+
 impl Drop for LocalApiBackpressurePermit {
     fn drop(&mut self) {
+        self.release();
+    }
+}
+
+impl LocalApiBackpressurePermit {
+    fn release(&mut self) {
         if self.released {
             return;
         }
@@ -333,6 +370,63 @@ impl Drop for LocalApiBackpressurePermit {
             return;
         };
         state.active_requests = state.active_requests.saturating_sub(1);
+    }
+}
+
+impl ActiveStreamTerminal {
+    fn phase(self) -> &'static str {
+        match self {
+            Self::Completed => "stream_completed",
+            Self::StreamError => "stream_error",
+            Self::ClientAborted => "client_aborted",
+            Self::Dropped => "stream_error",
+        }
+    }
+
+    fn outcome(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::StreamError => "error",
+            Self::ClientAborted => "aborted",
+            Self::Dropped => "dropped",
+        }
+    }
+}
+
+impl ActiveStreamLease {
+    fn release(&mut self, terminal: ActiveStreamTerminal) {
+        if self.released {
+            return;
+        }
+        self.released = true;
+        let active_count = release_active_stream_lease(self.lease_id);
+        record_audit_event_from_context(
+            &self.context,
+            terminal.phase(),
+            None,
+            None,
+            None,
+            Some(terminal.outcome()),
+            BTreeMap::from([("lease_id".to_string(), self.lease_id.to_string())]),
+        );
+        record_audit_event_from_context(
+            &self.context,
+            "lease_released",
+            None,
+            None,
+            None,
+            Some(terminal.outcome()),
+            BTreeMap::from([
+                ("lease_id".to_string(), self.lease_id.to_string()),
+                ("active_count".to_string(), active_count.to_string()),
+            ]),
+        );
+    }
+}
+
+impl Drop for ActiveStreamLease {
+    fn drop(&mut self) {
+        self.release(ActiveStreamTerminal::Dropped);
     }
 }
 
@@ -413,6 +507,107 @@ async fn acquire_local_api_backpressure(
 fn reset_local_api_backpressure_for_tests() {
     if let Ok(mut state) = local_api_backpressure_state().lock() {
         *state = LocalApiBackpressureState::default();
+    }
+}
+
+fn active_stream_lease_count_for_account(account_id: &str) -> usize {
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return 0;
+    }
+    let Ok(registry) = active_stream_lease_registry().lock() else {
+        return 0;
+    };
+    registry
+        .leases
+        .values()
+        .filter(|lease| lease.account_id == account_id)
+        .count()
+}
+
+fn grant_active_stream_lease(context: &AuditContext, account_id: &str) -> ActiveStreamLease {
+    let account_id = account_id.trim();
+    let (lease_id, active_count) = match active_stream_lease_registry().lock() {
+        Ok(mut registry) => {
+            registry.next_lease_id = registry.next_lease_id.saturating_add(1).max(1);
+            let lease_id = registry.next_lease_id;
+            registry.leases.insert(
+                lease_id,
+                ActiveStreamLeaseRecord {
+                    account_id: account_id.to_string(),
+                },
+            );
+            (
+                lease_id,
+                registry
+                    .leases
+                    .values()
+                    .filter(|lease| lease.account_id == account_id)
+                    .count(),
+            )
+        }
+        Err(_) => (0, 0),
+    };
+    record_audit_event_from_context(
+        context,
+        "lease_granted",
+        None,
+        None,
+        None,
+        Some("active"),
+        BTreeMap::from([
+            ("lease_id".to_string(), lease_id.to_string()),
+            ("active_count".to_string(), active_count.to_string()),
+        ]),
+    );
+    ActiveStreamLease {
+        lease_id,
+        context: context.clone(),
+        released: false,
+    }
+}
+
+fn release_active_stream_lease(lease_id: u64) -> usize {
+    if lease_id == 0 {
+        return 0;
+    }
+    let Ok(mut registry) = active_stream_lease_registry().lock() else {
+        return 0;
+    };
+    let account_id = registry
+        .leases
+        .remove(&lease_id)
+        .map(|lease| lease.account_id);
+    account_id
+        .as_deref()
+        .map(|account_id| {
+            registry
+                .leases
+                .values()
+                .filter(|lease| lease.account_id == account_id)
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+fn classify_active_stream_terminal_error(err: &str) -> ActiveStreamTerminal {
+    let lower = err.to_ascii_lowercase();
+    if lower.contains("写入")
+        || lower.contains("broken pipe")
+        || lower.contains("connection reset")
+        || lower.contains("connection aborted")
+        || lower.contains("early eof")
+    {
+        ActiveStreamTerminal::ClientAborted
+    } else {
+        ActiveStreamTerminal::StreamError
+    }
+}
+
+#[cfg(test)]
+fn reset_active_stream_leases_for_tests() {
+    if let Ok(mut registry) = active_stream_lease_registry().lock() {
+        *registry = ActiveStreamLeaseRegistry::default();
     }
 }
 
@@ -3107,6 +3302,23 @@ fn pin_account_to_front(
         ordered.push(account_id);
     }
     ordered
+}
+
+fn constrain_previous_response_affinity(
+    account_ids: Vec<String>,
+    affinity_account_id: Option<&str>,
+) -> Vec<String> {
+    let Some(affinity_account_id) = affinity_account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+        return account_ids;
+    };
+    if account_ids
+        .iter()
+        .any(|account_id| account_id == affinity_account_id)
+    {
+        vec![affinity_account_id.to_string()]
+    } else {
+        Vec::new()
+    }
 }
 
 fn resolve_local_access_projection_account(
@@ -6760,6 +6972,7 @@ fn persist_health_registry_with_audit(
     classified: &ClassifiedCodexUpstreamError,
 ) {
     let context = build_audit_context(request, Some(account_id));
+    let classified_detail = classified_audit_detail(classified);
     record_audit_event_from_context(
         &context,
         "classifier",
@@ -6767,20 +6980,41 @@ fn persist_health_registry_with_audit(
         Some(classified.error_type.as_str()),
         None,
         Some(classified_audit_outcome(classified)),
-        classified_audit_detail(classified),
+        classified_detail.clone(),
     );
 
     match persist_health_registry_from_classified_error(account_id, model_key, request, classified)
     {
-        Ok(()) => record_audit_event_from_context(
-            &context,
-            "health_update",
-            Some(classified.status),
-            Some(classified.error_type.as_str()),
-            None,
-            Some("recorded"),
-            classified_audit_detail(classified),
-        ),
+        Ok(()) => {
+            record_audit_event_from_context(
+                &context,
+                "health_update",
+                Some(classified.status),
+                Some(classified.error_type.as_str()),
+                None,
+                Some("recorded"),
+                classified_detail.clone(),
+            );
+            if classified.retry_after.is_some()
+                || matches!(
+                    classified.error_type,
+                    CodexLocalAccessErrorType::UpstreamRateLimit
+                        | CodexLocalAccessErrorType::UsageLimitReached
+                        | CodexLocalAccessErrorType::InsufficientQuota
+                        | CodexLocalAccessErrorType::ModelCapacity
+                )
+            {
+                record_audit_event_from_context(
+                    &context,
+                    "account_cooldown_applied",
+                    Some(classified.status),
+                    Some(classified.error_type.as_str()),
+                    None,
+                    Some("recorded"),
+                    classified_detail,
+                );
+            }
+        }
         Err(err) => {
             log_health_registry_update_error(&err);
             record_audit_event_from_context(
@@ -8101,6 +8335,8 @@ async fn proxy_request_with_account_pool(
         );
         let strategy_account_ids =
             pin_account_to_front(strategy_account_ids, affinity_account_id.as_deref());
+        let strategy_account_ids =
+            constrain_previous_response_affinity(strategy_account_ids, affinity_account_id.as_deref());
         let mut attempted_in_round = false;
         let mut round_cooldown_wait: Option<Duration> = None;
 
@@ -8179,6 +8415,19 @@ async fn proxy_request_with_account_pool(
 
             let mut single_account_status_retry_attempt = 0usize;
             loop {
+                let admission_context = build_audit_context(request, Some(account.id.as_str()));
+                record_audit_event_from_context(
+                    &admission_context,
+                    "admission_attempt",
+                    None,
+                    None,
+                    None,
+                    Some("started"),
+                    BTreeMap::from([
+                        ("attempt".to_string(), attempts.to_string()),
+                        ("model_key".to_string(), routing_hint.model_key.clone()),
+                    ]),
+                );
                 let first_response = send_upstream_request(
                     &request.method,
                     &upstream_target,
@@ -8303,6 +8552,15 @@ async fn proxy_request_with_account_pool(
                     let context = build_audit_context(request, Some(account.id.as_str()));
                     record_audit_event_from_context(
                         &context,
+                        "upstream_admitted",
+                        Some(response.status().as_u16()),
+                        None,
+                        None,
+                        Some("admitted"),
+                        BTreeMap::from([("model_key".to_string(), routing_hint.model_key.clone())]),
+                    );
+                    record_audit_event_from_context(
+                        &context,
                         "selector",
                         Some(response.status().as_u16()),
                         None,
@@ -8365,6 +8623,16 @@ async fn proxy_request_with_account_pool(
                 }
 
                 if classified.safe_for_request_failover() {
+                    let context = build_audit_context(request, Some(account.id.as_str()));
+                    record_audit_event_from_context(
+                        &context,
+                        "fallback_selected",
+                        Some(status.as_u16()),
+                        Some(classified.error_type.as_str()),
+                        None,
+                        Some("next_account"),
+                        classified_audit_detail(&classified),
+                    );
                     last_status = status.as_u16();
                     last_error =
                         format!("账号 {} 当前不可用，已尝试轮转: {}", account.email, message);
@@ -8670,7 +8938,7 @@ async fn handle_connection(
         BTreeMap::from([("method".to_string(), prepared_request.method.clone())]),
     );
 
-    let _backpressure_permit = match acquire_local_api_backpressure(&collection.safety_config).await
+    let mut backpressure_permit = match acquire_local_api_backpressure(&collection.safety_config).await
     {
         Ok(permit) => permit,
         Err(error) => {
@@ -8709,13 +8977,26 @@ async fn handle_connection(
         Ok(success) => {
             let response_audit_context =
                 build_audit_context(&prepared_request, Some(success.account_id.as_str()));
-            let response_capture = write_gateway_response(
+            let mut active_lease =
+                grant_active_stream_lease(&response_audit_context, &success.account_id);
+            backpressure_permit.release();
+            let response_capture = match write_gateway_response(
                 &mut stream,
                 success.upstream,
                 response_adapter,
                 Some(&response_audit_context),
             )
-            .await?;
+            .await
+            {
+                Ok(response_capture) => {
+                    active_lease.release(ActiveStreamTerminal::Completed);
+                    response_capture
+                }
+                Err(err) => {
+                    active_lease.release(classify_active_stream_terminal_error(&err));
+                    return Err(err);
+                }
+            };
             if let Some(response_id) = response_capture.response_id.as_deref() {
                 bind_response_affinity(response_id, &success.account_id).await;
             }
@@ -8755,30 +9036,33 @@ mod tests {
     use super::{
         acquire_local_api_backpressure, append_audit_event_to_path,
         apply_collection_routing_strategy, apply_local_api_safety_preset_to_collection,
-        build_audit_context, build_audit_event, build_chat_completion_payload,
-        build_chat_completion_stream_body, build_codex_api_failure_log,
-        build_effective_local_access_account_ids, build_health_summary_from_registry,
-        build_images_api_payload, build_local_models_response, build_ordered_account_ids,
-        build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
-        build_runtime_mode_state, classify_codex_upstream_error, empty_health_registry,
+        active_stream_lease_count_for_account, build_audit_context, build_audit_event,
+        build_chat_completion_payload, build_chat_completion_stream_body,
+        build_codex_api_failure_log, build_effective_local_access_account_ids,
+        build_health_summary_from_registry, build_images_api_payload, build_local_models_response,
+        build_ordered_account_ids, build_request_routing_hint, build_routing_pool_account_ids,
+        build_runtime_account, build_runtime_mode_state, classify_active_stream_terminal_error,
+        classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
         extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
-        health_registry_account_cooldown_wait, health_registry_account_is_schedulable,
-        health_registry_model_key, is_responses_completion_event, json_response_with_retry_after,
-        load_health_registry_from_path, load_runtime_mode_state,
+        grant_active_stream_lease, health_registry_account_cooldown_wait,
+        health_registry_account_is_schedulable, health_registry_model_key,
+        is_responses_completion_event, json_response_with_retry_after, load_health_registry_from_path,
+        load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
         parse_codex_retry_after, parse_responses_payload_from_upstream,
         parse_retry_after_header_value, pin_process_sticky_account, prepare_gateway_request,
         prune_process_sticky_binding, recover_health_registry_account,
-        reset_local_api_backpressure_for_tests, resolve_supported_model_alias,
+        reset_active_stream_leases_for_tests, reset_local_api_backpressure_for_tests,
+        resolve_supported_model_alias,
         retry_failover_account_attempt_limit, retry_failover_max_retries,
         save_health_registry_to_path, set_runtime_integration_mode,
         should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, sort_account_ids_by_health_estimate,
         update_health_registry_from_classified_error, upsert_process_sticky_binding, AuditContext,
-        CodexLocalAccessErrorType, GatewayResponseAdapter, LocalApiBackpressureState,
-        ParsedRequest, ResponseUsageCollector, StreamWriteState,
+        ActiveStreamTerminal, CodexLocalAccessErrorType, GatewayResponseAdapter,
+        LocalApiBackpressureState, ParsedRequest, ResponseUsageCollector, StreamWriteState,
         CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME,
         MAX_HTTP_REQUEST_BYTES, PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
     };

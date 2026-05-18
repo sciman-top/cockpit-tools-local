@@ -33,6 +33,7 @@
 - 多账号保存和调度放到 P1，且必须依赖 `AccountHealthRegistry` 和 `RetryFailoverController` 完成后再移除 `take(1)` / `break`。
 - 把当前硬编码常量纳入 P0 设计面：请求体上限、读取超时、上游发送重试、请求级重试等待和 fallback account 上限都要有 hardened 默认、测试和回滚口径。
 - 流式响应必须按“下游已写出 headers 或 payload 后禁止重试/切号”建模；不能只在拿到 upstream response 前做 retry 判断。
+- 额度耗尽后的 Direct OAuth 近似体验不应表述为“绕过 quota”。本地 API service 能做的是：已被上游接纳的 active stream 不被本地 cooldown/health 状态误杀；新的 independent admission 立即避开 cooldown/exhausted 账号；`previous_response_id` continuation 不跨账号伪造。
 - 实施级任务清单已下沉到 `docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md`，本路线图保持方向、阶段和验收口径。
 
 ## 已知代码事实
@@ -52,6 +53,7 @@
 - 当前没有 hardened local API 配置结构；Rust model 和 TS type 只有端口、API key、路由策略、free 限制、follow current 和账号列表。
 - 当前 401 会尝试刷新并重试，但没有持久化的 `auth_suspect` / `manual_required` 账号状态。
 - 当前成功 upstream response 会交给写出函数流式转发；一旦下游响应头或首个 chunk 已写出，本请求就不再具备安全切号空间。
+- 当前已有 `previous_response_id` affinity，但还需要补 active stream lease，让 health registry/cooldown 变化只影响新 admission，不影响已接纳 stream。
 - Codex 配额自动刷新默认值是 `-1`，即默认关闭，这是自用版友好的安全基线。
 - 配额重置类唤醒任务可能自动把刷新频率调低，应在 hardened mode 下纳入显式开关或警告。
 - 日志已有 email mask，但 API service 失败日志仍可能写入 raw upstream error detail、account id 等字段，需要结构化脱敏。
@@ -495,6 +497,7 @@ P0 必做：
 - [x] `HLA-04` Persistent AccountHealthRegistry。基础持久化/筛选已落地，只读 UI 已在 HLA-08 展示，手动恢复已接入显式本地恢复命令。
 - [x] `HLA-04A` SafetyObserver/AuditTrail 被动监察和脱敏事件链。已完成 listener/selector/classifier/health update/stream/final response 的本地 JSONL 脱敏事件；auth projection、upstream forward 细分和 UI degraded 提示待 HLA-05/HLA-08 承接。
 - [x] `HLA-05` retry/fallback/stream guard。已完成默认单账号/单 retry 控制边界、显式 fallback cap 和 stream write state；完整控制器类型拆分与 client disconnect 分类待后续增强。
+- [ ] `HLA-11` AdmissionLease/ActiveStreamLease。补齐 upstream admitted -> lease granted -> terminal/release 的生命周期，保证本地 cooldown/exhausted 不 retroactively cancel active stream，并把 new admission 切号、`previous_response_id` affinity、context replay 边界写入测试。
 
 P1 必做：
 
@@ -525,6 +528,8 @@ P2 增强：
 - [ ] request_id 可串起 listener/auth projection/selector/upstream/classifier/health update/stream write/final response 的脱敏事件。当前已覆盖 listener/selector/classifier/health update/stream write/final response；auth projection 和 upstream forward 细分待补。
 - [x] local backpressure 产生的 429/503 与 upstream 429 有不同 `error_type`，并都带可解释 `Retry-After` 或恢复提示。
 - [x] stream 已开始后不会跨账号续接；相关测试覆盖 headers/payload 已写出两种边界。
+- [ ] 已接纳 active stream 不因本地 cooldown/exhausted/selection_eligible 变化被取消；新 independent request 可立即切健康账号，不等待无关 active stream 结束。
+- [ ] `previous_response_id` 不跨账号直接复用；跨账号 fallback 只能使用 full context replay 或 compacted replay。
 - [x] 500+ 账号时 selector 不高频刷新、不扫射、不阻塞 UI。Hardened mode 下候选池可保留完整账号列表，但 fill-first 不做账号快照刷新，实际上游尝试仍受 `maxRetryAccounts` / `fallbackMode` cap 控制。
 - [ ] Codex CLI 可以通过 `http://127.0.0.1:2876/v1` 正常调用。
 - [ ] 原有账号管理、多实例、配额展示功能不被破坏。
@@ -566,4 +571,4 @@ git diff --check
 
 ## 下一步建议
 
-下一步继续 `docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md` 的 `HLA-08 状态面板与手动恢复`。AI 推荐补手动恢复单账号/单模型 cooldown、恢复审计事件和轻量 UI smoke；这样只在用户明确动作下解除冷却，不引入后台探测。
+下一步继续 `docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md` 的 `HLA-11 AdmissionLease/ActiveStreamLease`。AI 推荐先补 active stream lease runtime、审计事件和 focused Rust tests，再做 `small_pool` / `fallback_probe` 实跑；这样可以验证“已接纳继续跑完、新 admission 才切号”的真实边界，而不会把 pre-stream 429 误当成可续接。

@@ -123,6 +123,8 @@
 - `fill-first` 是个人自用更合适的“尽量用完当前账号，再转下一个”模式，比 round-robin 更低扰动。
 - 模型冷却错误应带 `Retry-After`，让 Codex CLI/App 或调用方知道何时重试。
 - 流式请求只允许在“还没有给客户端发送任何 payload”之前重试或切号；首字节之后必须保持当前上游，不跨账号续接。
+- 已被上游接纳的 active stream 应由本地 lease 保护：后续 cooldown、exhausted、health registry 或 selector 状态变化只影响新的 admission，不 retroactively cancel 当前 stream。
+- 新的 independent request 不需要等待其他 active stream 完成；但 `previous_response_id` continuation 不能跨账号直接复用，跨账号 fallback 必须走 full context replay 或 compacted replay。
 - Codex/OpenAI 429 的 body 里若有 reset 信息，应优先用于 cooldown，而不是固定 30 分钟。
 
 不宜照搬：

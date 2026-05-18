@@ -100,6 +100,9 @@ flowchart TD
   HLA07 --> HLA08["HLA-08 状态面板与手动恢复"]
   HLA08 --> HLA09["HLA-09 刷新/唤醒降噪"]
   HLA09 --> HLA10["HLA-10 preset/文档/smoke"]
+  HLA05 --> HLA11["HLA-11 AdmissionLease/ActiveStreamLease"]
+  HLA07 --> HLA11
+  HLA10 --> HLA11
 ```
 
 ## 任务清单
@@ -500,9 +503,52 @@ flowchart TD
 
 依赖：HLA-09。
 
+### HLA-11 AdmissionLease/ActiveStreamLease
+
+描述：把“已被上游接纳的 stream/response 继续跑完”和“新的 admission 才避开 cooldown/exhausted 账号”固化为 API service 运行时边界。该切片不模拟上游 quota grace，不绕过真实 pre-stream 429，不做 mid-stream 跨账号续接；只保证本地 health registry、cooldown、selector 和 fallback 决策不会 retroactively cancel active stream。
+
+状态：2026-05-18 新增待执行切片。HLA-05 已有 headers/first chunk 写出后禁止 fallback 的 stream write state；本切片补齐 lease 生命周期、active stream 观测、client abort/terminal error 释放、以及 `previous_response_id` continuation 与新请求切号的任务边界。
+
+核心规则：
+
+- `pre-stream 429`：没有 `2xx`、没有有效 SSE 首事件、没有 `response.created`、没有 background `response_id`，视为 admission rejected；标记 cooldown/backoff，按策略返回 429 或在新 admission 层选择健康账号。
+- `upstream admitted`：一旦上游已返回 `2xx` 或 stream 出现可判定接纳信号，grant lease；后续本地 cooldown、账号 exhausted 标记和 selection eligibility 变化只影响新 admission，不关闭该 stream。
+- `active stream`：不切账号、不跨账号续接，只 pipe 到 terminal event、upstream terminal error、client abort、explicit cancel 或 transport fatal error。
+- `new independent request`：不需要等待其他 active stream 完成；可立即避开 cooldown/exhausted 账号，选择健康账号。
+- `previous_response_id continuation`：优先粘原账号；不能把原账号的 `previous_response_id` 直接发给新账号。若要 fallback 到新账号，必须走 full context replay 或 compacted replay，并把它视为新 admission，不是严格 continuation。
+
+验收：
+
+- [ ] active SSE stream 被 grant lease 后，同账号随后被标记 cooldown/exhausted，stream 仍继续到 terminal 或真实 transport error。
+- [ ] pre-stream 429 会写入 health/cooldown/audit，但不会影响同账号已有 active lease。
+- [ ] active stream 期间同账号另一个请求返回 429，不 retroactively cancel active stream。
+- [ ] new admission 遇到 cooldown/exhausted 账号，会避开或返回本地 429；不等待无关 active stream 结束。
+- [ ] `previous_response_id` affinity 强绑定原 account hash/route；不会跨账号直接复用旧 `previous_response_id`。
+- [ ] client abort、upstream terminal error、normal completed 都会 release lease，不泄漏 active count。
+- [ ] health registry 状态变更只更新 `selection_eligible`，不会直接 cancel active leases。
+- [ ] 结构化 audit 能区分 `admission_attempt`、`upstream_admitted`、`lease_granted`、`stream_completed`、`stream_error`、`client_aborted`、`lease_released`、`account_cooldown_applied`、`fallback_selected`。
+- [ ] 不新增高频 refresh、全账号池扫描或 aggressive retry。
+
+验证：
+
+- [ ] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target active_stream_lease --quiet`
+- [ ] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target hardened_routing --quiet`
+- [ ] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target stream_write_state --quiet`
+- [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -WriteReport`
+- [ ] `git diff --check`
+
+可能文件：
+
+- `src-tauri/src/modules/codex_local_access.rs`
+- 后续可拆到 `src-tauri/src/modules/codex_local_access_lease.rs`
+- `docs/LOCAL_HARDENED_API.md`
+- `docs/reference-gateway-best-practices.md`
+
+依赖：HLA-05、HLA-07、HLA-10。应先完成本切片，再进入 2-3 账号真实小池和 fallback probe 放量。
+
 ## 推荐执行顺序
 
-AI 推荐：按 `HLA-00 -> HLA-01 -> HLA-02 -> HLA-03 -> HLA-04 -> HLA-05` 先完成 P0 护栏，再进入 `HLA-06` 多账号池。理由：当前代码已经有轮转雏形，但缺 persistent health、header cooldown、semaphore 和 stream guard；先打开多账号会放大 429 连撞和账号风控风险。
+AI 推荐：已完成 `HLA-00 -> HLA-10` 的主要护栏后，下一步先做 `HLA-11 AdmissionLease/ActiveStreamLease`，再进入 `small_pool` 和 `fallback_probe` 实跑。理由：多号池调度已经具备数据面和 selector 基础，但额度耗尽后的体验是否接近 Direct OAuth，取决于 admission/active stream 边界是否明确；先固化 lease，可避免把真实 pre-stream 429 误写成“可继续”。
 
 ## 完成态证据
 
