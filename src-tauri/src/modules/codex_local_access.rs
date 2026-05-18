@@ -3834,6 +3834,68 @@ fn health_registry_account_is_schedulable(
     true
 }
 
+fn cooldown_wait_from_until_ms(until_ms: Option<i64>, now: i64) -> Option<Duration> {
+    let until_ms = until_ms?;
+    let wait_ms = until_ms.saturating_sub(now);
+    if wait_ms <= 0 {
+        return None;
+    }
+    Some(Duration::from_millis(wait_ms as u64))
+}
+
+fn min_cooldown_wait(current: Option<Duration>, candidate: Duration) -> Option<Duration> {
+    Some(match current {
+        Some(existing) if existing <= candidate => existing,
+        _ => candidate,
+    })
+}
+
+fn health_registry_account_cooldown_wait(
+    registry: &CodexLocalAccessHealthRegistry,
+    account_id: &str,
+    model: Option<&str>,
+    now: i64,
+) -> Option<Duration> {
+    let mut wait: Option<Duration> = None;
+
+    if let Some(account) = registry.accounts.get(account_id.trim()) {
+        match account.status {
+            CodexLocalAccessAccountHealthStatus::CoolingDown => {
+                if let Some(candidate) = cooldown_wait_from_until_ms(account.cooldown_until_ms, now)
+                {
+                    wait = min_cooldown_wait(wait, candidate);
+                }
+            }
+            CodexLocalAccessAccountHealthStatus::Exhausted => {
+                if let Some(candidate) = cooldown_wait_from_until_ms(
+                    account.estimated_reset_at_ms.or(account.cooldown_until_ms),
+                    now,
+                ) {
+                    wait = min_cooldown_wait(wait, candidate);
+                }
+            }
+            CodexLocalAccessAccountHealthStatus::Healthy
+            | CodexLocalAccessAccountHealthStatus::EstimatedAvailable
+            | CodexLocalAccessAccountHealthStatus::AuthSuspect
+            | CodexLocalAccessAccountHealthStatus::ManualRequired
+            | CodexLocalAccessAccountHealthStatus::Disabled => {}
+        }
+    }
+
+    if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
+        let key = health_registry_model_key(account_id, model);
+        if let Some(candidate) = registry
+            .model_cooldowns
+            .get(&key)
+            .and_then(|cooldown| cooldown_wait_from_until_ms(Some(cooldown.cooldown_until_ms), now))
+        {
+            wait = min_cooldown_wait(wait, candidate);
+        }
+    }
+
+    wait
+}
+
 fn health_registry_account_sort_key(
     registry: &CodexLocalAccessHealthRegistry,
     account_id: &str,
@@ -8047,11 +8109,22 @@ async fn proxy_request_with_account_pool(
                 break;
             }
 
+            let now = now_ms();
+            if let Some(wait) = health_registry_account_cooldown_wait(
+                &health_registry,
+                &account_id,
+                Some(&routing_hint.model_key),
+                now,
+            ) {
+                round_cooldown_wait = min_cooldown_wait(round_cooldown_wait, wait);
+                continue;
+            }
+
             if !health_registry_account_is_schedulable(
                 &health_registry,
                 &account_id,
                 Some(&routing_hint.model_key),
-                now_ms(),
+                now,
             ) {
                 continue;
             }
@@ -8689,8 +8762,8 @@ mod tests {
         build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
         build_runtime_mode_state, classify_codex_upstream_error, empty_health_registry,
         extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
-        health_registry_account_is_schedulable, health_registry_model_key,
-        is_responses_completion_event, json_response_with_retry_after,
+        health_registry_account_cooldown_wait, health_registry_account_is_schedulable,
+        health_registry_model_key, is_responses_completion_event, json_response_with_retry_after,
         load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
@@ -8974,6 +9047,46 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         for secret in ["raw prompt text", "sk-secret", "user@example.com"] {
             assert!(!serialized.contains(secret), "registry leaked {secret}");
         }
+    }
+
+    #[test]
+    fn health_registry_model_cooldown_wait_is_exposed_for_scheduler() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "account-model-cooldown".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::Healthy,
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.model_cooldowns.insert(
+            health_registry_model_key("account-model-cooldown", "gpt-5.4"),
+            CodexLocalAccessModelCooldown {
+                account_id: "account-model-cooldown".to_string(),
+                model: "gpt-5.4".to_string(),
+                cooldown_until_ms: now + 60_000,
+                updated_at: now,
+                ..CodexLocalAccessModelCooldown::default()
+            },
+        );
+
+        assert_eq!(
+            health_registry_account_cooldown_wait(
+                &registry,
+                "account-model-cooldown",
+                Some("gpt-5.4"),
+                now
+            ),
+            Some(Duration::from_secs(60))
+        );
+        assert!(!health_registry_account_is_schedulable(
+            &registry,
+            "account-model-cooldown",
+            Some("gpt-5.4"),
+            now
+        ));
     }
 
     #[test]

@@ -49,6 +49,41 @@
 7. 风控监察以被动事件和低频健康快照为主，不做主动扫号、伪装探测或以规避平台识别为目标的逻辑。
 8. 每个 slice 都可单独回滚，且完成后系统仍可运行。
 
+## 单号池实跑闸门
+
+功能面可以先完成多号池、sticky/fill-first 和有限 fallback；运行面必须 staged rollout。多号池实跑只能在单号池 API service smoke 通过后继续。单号池 smoke 的当前归宿是 `scripts/smoke-local-hardened-api.ps1 -Stage single`，默认只验证本机 loopback、API key guard、`/v1/models`、单账号 hardened 配置、health registry 摘要和 audit tail 摘要；不改 live Codex provider，不调用真实上游，不保存 API key。若桌面端未启用 API service，可加 `-StartEphemeralGateway`，脚本会用同一套 Rust gateway 代码短暂拉起本地服务，跑完停止并还原 `codex_local_access.json`。当前真实上游 smoke 默认用 `gpt-5.4`，该模型已实跑到 429/cooldown/audit 链路；`gpt-5.1-codex-max` 在当前 chat/completions adapter 下返回无体 400，不能作为 429 链路默认探针。
+
+阶段顺序：
+
+1. `single`：账号池恰好 1 个账号，`maxRetryAccounts = 1`。
+2. `small_pool`：账号池 2-3 个账号，但仍保持 `maxRetryAccounts = 1`，只验证 selector/sticky/health 不乱轮换。
+3. `fallback_probe`：账号池 2-3 个账号，`fallbackMode = next_request_only` 且 `maxRetryAccounts = 2`，只验证有限 fallback 边界。
+
+显式传入 `-RunUpstreamSmoke` 后才发起一次真实 `/v1/chat/completions`。若真实请求返回 429，验收重点不是“马上换号”，而是：
+
+- upstream 429 和 local backpressure 的 `error_type` 分层清楚。
+- `Retry-After` / reset 字段进入 cooldown。
+- `codex_local_access_health.json` 被动写入账号或模型状态。
+- `codex_local_access_audit.jsonl` 能串起 listener、selector、classifier、health update、final/stream 边界。
+- 单号池仍保持 `maxRetryAccounts = 1`，不扫账号池。
+
+重点与难点：
+
+- 调度算法是重点难点，但它依赖更底层的可调度性判定；先稳定 `AccountHealthRegistry + ErrorClassifier + RetryFailoverController`，再扩展 sticky/session/fill-first。
+- 429 分类难点在于区分 `rate_limit`、`usage_limit_reached`、`insufficient_quota`、`model_capacity` 和本地 backpressure，不能只看 HTTP status。
+- stream guard 难点在于 headers 或首个 chunk 写出后不能切账号续接，只能结束当前请求并记录证据。
+- health registry 难点在于持久化和 fail-closed；状态损坏时不能默认打开全部账号。
+- audit trail 难点在于能回放关键阶段，但不能泄露 prompt、response、token、完整邮箱或 raw upstream body。
+- Codex CLI 直连难点在于验证时不能破坏 live Codex provider/history；必须用临时配置或脚本化隔离。
+
+参考方向：
+
+- 官方 OpenAI API error docs 把 429 分成请求速率过快和额度/预算耗尽，并建议 pacing/backoff、尊重 response headers；503/overload 要保持稳定低速率后再逐步恢复。
+- Sub2API 的 `IsSchedulable()`、持久化 rate-limit reset、temp unschedulable 和 sticky 清理，是 Cockpit 账号健康状态机的主要参考。
+- CLIProxyAPI 的 fill-first/session affinity、model cooldown `Retry-After` 和首字节后不重试，是 Cockpit 默认自用调度和 stream guard 的主要参考。
+- LiteLLM 的 pre-call rate checks、本地 429 `retry-after` 与 cooldown 决策矩阵，适合作为 Cockpit local backpressure 的参考。
+- New API 的 channel retry/disable 配置化思路可借鉴，但 weighted/random request-level routing 不进入 hardened 默认。
+
 ## 依赖顺序
 
 ```mermaid
@@ -430,7 +465,7 @@ flowchart TD
 
 描述：把 hardened defaults、balanced self-use、quota drain careful 做成可恢复 preset，并补最终用户文档。
 
-状态：2026-05-18 已完成文档契约与 UI/command preset 切片：新增 `docs/LOCAL_HARDENED_API.md`，写明默认安全姿态、三类 preset 目标值、Codex CLI 直连 Cockpit、可选 LiteLLM 桥接、风险边界和回滚；`codex_local_access_apply_safety_preset` 与 API 服务面板策略预设按钮已可恢复 `maximum_safety`、`balanced_self_use`、`quota_drain_careful`。本切片已通过 typecheck、build、locale check 和 safety preset 单测；直连 smoke 继续保留。
+状态：2026-05-18 已完成文档契约、UI/command preset 与单号池 smoke harness 切片：新增 `docs/LOCAL_HARDENED_API.md`，写明默认安全姿态、三类 preset 目标值、单号池实跑、Codex CLI 直连 Cockpit、可选 LiteLLM 桥接、风险边界和回滚；`codex_local_access_apply_safety_preset` 与 API 服务面板策略预设按钮已可恢复 `maximum_safety`、`balanced_self_use`、`quota_drain_careful`；`scripts/smoke-local-hardened-api.ps1` 已提供默认不耗上游额度的 preflight、短生命周期 gateway runner 和显式真实上游 smoke。单号池实跑发现 health registry model cooldown 只阻断调度但未返回 wait，导致重复请求短路为 503；已改为从 health registry 提取 cooldown wait，重复请求返回本地 429 + `Retry-After`。本切片已通过 typecheck、build、locale check、safety preset 单测和 cooldown wait 单测；直连 smoke 继续保留。
 
 验收：
 
@@ -439,6 +474,7 @@ flowchart TD
 - [x] `quota_drain_careful` 展开为 fill-first、严格 cooldown、低速率。
 - [x] 文档写明 Codex CLI 直连 Cockpit 和可选 LiteLLM 桥接两条路径。
 - [x] UI/command 级一键恢复 preset。
+- [x] 单号池/小池/fallback 分阶段 smoke harness 不改 live Codex provider，默认不调用真实上游。
 - [ ] 关闭 LiteLLM 后 Codex CLI 仍可直连 Cockpit。
 
 验证：
@@ -447,6 +483,11 @@ flowchart TD
 - [x] `npm run build`
 - [x] `cargo test --package cockpit-tools safety_preset`
 - [x] `node scripts/check_locales.cjs`
+- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -WriteReport`
+- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -RunUpstreamSmoke -Expect429 -Model gpt-5.4 -WriteReport`
+- [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target health_registry_model_cooldown_wait_is_exposed_for_scheduler --quiet`
+- [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -WriteReport`
+- [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -RunUpstreamSmoke -WriteReport`
 - [ ] 手动 smoke：Codex CLI 使用 `http://127.0.0.1:2876/v1`。
 - [ ] 2026-05-18 前置探针：`Test-NetConnection 127.0.0.1:2876` 返回未监听；未修改 live Codex provider/API key。
 

@@ -24,6 +24,71 @@ pub fn get_app_handle() -> Option<&'static tauri::AppHandle> {
     APP_HANDLE.get()
 }
 
+/// Narrow public surface for repo-owned HLA smoke tooling.
+///
+/// This lets an external short-lived binary exercise the same local access
+/// gateway code path without switching the live Codex provider.
+pub mod local_hardened_api_smoke {
+    fn summarize_state(
+        state: &crate::models::codex_local_access::CodexLocalAccessState,
+    ) -> serde_json::Value {
+        let collection = state.collection.as_ref();
+        let safety = collection.map(|item| &item.safety_config);
+
+        serde_json::json!({
+            "running": state.running,
+            "baseUrl": state.base_url,
+            "lastError": state.last_error,
+            "memberCount": state.member_count,
+            "effectiveAccountCount": state.effective_account_ids.len(),
+            "modelCount": state.model_ids.len(),
+            "collection": collection.map(|item| serde_json::json!({
+                "enabled": item.enabled,
+                "port": item.port,
+                "accountCount": item.account_ids.len(),
+                "routingStrategy": item.routing_strategy,
+                "restrictFreeAccounts": item.restrict_free_accounts,
+                "followCurrentAccount": item.follow_current_account,
+            })),
+            "safetyConfig": safety.map(|item| serde_json::json!({
+                "schemaVersion": item.schema_version,
+                "hardenedLocalMode": item.hardened_local_mode,
+                "maxConcurrentRequests": item.max_concurrent_requests,
+                "minRequestIntervalSeconds": item.min_request_interval_seconds,
+                "maxQueueWaitSeconds": item.max_queue_wait_seconds,
+                "requestTimeoutSeconds": item.request_timeout_seconds,
+                "maxRequestBodyMb": item.max_request_body_mb,
+                "maxRetries": item.max_retries,
+                "maxRetryAccounts": item.max_retry_accounts,
+                "fallbackMode": item.fallback_mode,
+            })),
+            "health": {
+                "unavailable": state.health.unavailable,
+                "healthyCount": state.health.healthy_count,
+                "coolingCount": state.health.cooling_count,
+                "exhaustedCount": state.health.exhausted_count,
+                "authSuspectCount": state.health.auth_suspect_count,
+                "manualRequiredCount": state.health.manual_required_count,
+                "activeModelCooldownCount": state.health.active_model_cooldown_count,
+                "lastErrorType": state.health.last_error_type,
+                "lastStatus": state.health.last_status,
+            },
+        })
+    }
+
+    pub async fn enable_gateway() -> Result<String, String> {
+        let state = crate::modules::codex_local_access::set_local_access_enabled(true).await?;
+        serde_json::to_string(&summarize_state(&state))
+            .map_err(|e| format!("序列化 API 服务状态失败: {}", e))
+    }
+
+    pub async fn disable_gateway() -> Result<String, String> {
+        let state = crate::modules::codex_local_access::set_local_access_enabled(false).await?;
+        serde_json::to_string(&summarize_state(&state))
+            .map_err(|e| format!("序列化 API 服务状态失败: {}", e))
+    }
+}
+
 #[cfg(target_os = "macos")]
 fn apply_macos_activation_policy(app: &tauri::AppHandle) {
     let config = modules::config::get_user_config();

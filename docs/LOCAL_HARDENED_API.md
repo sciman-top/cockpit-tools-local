@@ -67,6 +67,48 @@ API service 的默认安全配置等价于 `balanced_self_use`；需要更保守
 
 API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_safety_preset`，把当前集合恢复到对应 safety config，并重置为 hardened fill-first 起点。Preset 不会改账号池成员、端口、API key 或运行模式。
 
+## 单号池实跑优先级
+
+功能面可以先支持多号池、sticky/fill-first 和有限 fallback；运行面必须分阶段放量。先用单账号池证明 API service 全链路确实按 hardened 预期工作：
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 -Stage single -WriteReport
+```
+
+默认 smoke 只验证本机 loopback、API key guard、`/v1/models` 和本地 health/audit 文件摘要，不调用真实上游、不改 Codex provider、不保存 API key。只有在 API service 已启用、账号池恰好 1 个账号、且明确接受一次真实请求时，才运行：
+
+若桌面端当前没有启用 API service，且只想验证 gateway 代码路径而不切换 live Codex provider，可使用短生命周期 runner：
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -WriteReport
+```
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 -Stage single -RunUpstreamSmoke -WriteReport
+```
+
+当前上游 429 链路 smoke 默认使用 `gpt-5.4`；若要把 429 视为预期结果，加入 `-Expect429`：
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -RunUpstreamSmoke -Expect429 -WriteReport
+```
+
+若上一轮已把该账号/模型写入 cooldown，后续同模型 smoke 应直接返回本地 429 和 `Retry-After`，不再继续打上游。
+
+单号池通过后，再放入 2-3 个账号，但第一步仍保持 `maxRetryAccounts = 1`，只验证 selector/sticky/health 不乱轮换：
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -WriteReport
+```
+
+只有小池稳定后，才临时切到 `fallbackMode = next_request_only` 且 `maxRetryAccounts = 2`，做有限 fallback 探针：
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -RunUpstreamSmoke -WriteReport
+```
+
+若要验证 429 链路，优先使用真实业务请求自然返回的 429；脚本只记录状态码、`Retry-After`、health registry 和 audit phase，不记录 prompt/response。
+
 ## Codex CLI 直连 Cockpit
 
 在 Codex 配置中使用本机 API service：

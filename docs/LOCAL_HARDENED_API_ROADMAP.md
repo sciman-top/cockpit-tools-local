@@ -505,7 +505,7 @@ P1 必做：
 
 P2 增强：
 
-- [ ] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复已实现，并通过 typecheck、build、locale check 与 safety preset 单测，直连 smoke 仍待执行。
+- [ ] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复已实现，并补入单号池 API service smoke harness 与短生命周期 gateway runner；单号池 loopback 与 `gpt-5.4` 上游 429/cooldown/audit 链路已实跑通过，重复 cooldown 已修正为本地 429 + `Retry-After`，2-3 账号小池与 fallback probe 仍待放量。
 - [ ] 请求历史扩展和健康趋势。
 - [ ] 可选 LiteLLM 桥接。
 - [ ] 更完整端到端 smoke。

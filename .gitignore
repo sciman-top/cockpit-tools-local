@@ -29,6 +29,7 @@ dist-ssr
 AGENTS.md
 
 locale-check-report.md
+reports/local-hardened-api-smoke/
 
 docs/platform-integration-guide.md
 docs/plugin-architecture-design.md

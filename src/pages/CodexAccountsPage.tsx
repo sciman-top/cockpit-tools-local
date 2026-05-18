@@ -4867,10 +4867,9 @@ export function CodexAccountsPage() {
   const getCodexAccountPinnedPriority = useCallback(
     (account: CodexAccount) => {
       if (overviewCurrentAccountId === account.id) return 0;
-      if (localAccessEffectiveAccountIdSet.has(account.id)) return 1;
-      return 2;
+      return 1;
     },
-    [localAccessEffectiveAccountIdSet, overviewCurrentAccountId],
+    [overviewCurrentAccountId],
   );
 
   const compareAccountsBySort = useCallback(
