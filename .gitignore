@@ -43,6 +43,8 @@ src-tauri/native/macos-native-menu/.build/
 
 # Rust
 target/
+target-codex-verify/
+target-test/
 **/*.rs.bk
 docs/plugin-architecture-proposal.md
 .aitasks
