@@ -1842,6 +1842,8 @@
       "portSaveSuccess": "API service port updated",
       "routingLabel": "Dispatch account",
       "routingSaveSuccess": "API service dispatch account updated",
+      "safetyPresetSaveSuccess": "API service strategy preset restored",
+      "safetyPresetSaveFailed": "Failed to restore API service strategy preset",
       "routingDescriptionAuto": "Prefer higher-tier accounts with more remaining quota, then rotate within the same tier.",
       "routingDescriptionQuotaHighFirst": "Prefer accounts with more remaining quota.",
       "routingDescriptionQuotaLowFirst": "Prefer accounts with less remaining quota.",
@@ -1906,6 +1908,17 @@
         "planHighFirst": "High Plan First",
         "planLowFirst": "Low Plan First",
         "expirySoonFirst": "Expiry Soon First"
+      },
+      "safetyPreset": {
+        "label": "Strategy Preset",
+        "current": "Current",
+        "custom": "Custom",
+        "maximumSafety": "Maximum Safety",
+        "maximumSafetyDesc": "1 concurrent · 60s",
+        "balancedSelfUse": "Balanced Self-use",
+        "balancedSelfUseDesc": "1 concurrent · 20s",
+        "quotaDrainCareful": "Careful Quota Drain",
+        "quotaDrainCarefulDesc": "1 concurrent · 30s"
       },
       "stats": {
         "requests": "Requests",

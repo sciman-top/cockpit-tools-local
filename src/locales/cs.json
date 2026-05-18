@@ -1517,6 +1517,8 @@
       "historyTitle": "Historie spuštění",
       "taskTitleEdit": "Upravit úlohu probuzení",
       "taskTitleNew": "Nová úloha probuzení",
+      "enableTitle": "Povolit probouzení na pozadí",
+      "enableAction": "Povolit probouzení",
       "riskWarning": "⚠️ Upozornění na riziko\nKvůli nedávnému zpřísnění kontrol rizik ze strany Google může používání funkce probuzení zvýšit pravděpodobnost spuštění rizikových kontrol účtu (včetně, ale nejen, dodatečného ověření nebo dočasných omezení).\nPoužívejte ji prosím opatrně podle stavu účtu a riziko posuďte sami.\n\nPokračovat?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "Přepnout API službu",
       "showKey": "Zobrazit klíč",
       "hideKey": "Skrýt klíč",
+      "hiddenKeyTitle": "Klíč API je skrytý",
       "modal": {
         "title": "Přidat do API služby",
         "desc": "Vyberte účty OAuth, které chcete zahrnout do kolekce API služby. Přidané účty se skryjí z běžného přehledu a budou spravovány pouze z karty API služby.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "Směrování",
       "routingSaveSuccess": "Směrování služby API bylo aktualizováno",
+      "safetyPresetSaveSuccess": "Předvolba strategie služby API byla obnovena",
+      "safetyPresetSaveFailed": "Obnovení předvolby strategie služby API se nezdařilo",
       "routingDescriptionAuto": "Upřednostní účty s vyšším tarifem a větší zbývající kvótou, ve stejném tarifu pak střídá.",
       "routingDescriptionQuotaHighFirst": "Upřednostní účty s vyšší zbývající kvótou.",
       "routingDescriptionQuotaLowFirst": "Upřednostní účty s nižší zbývající kvótou.",
@@ -1806,6 +1811,10 @@
       "clearStats": "Vymazat statistiky",
       "clearStatsConfirm": "Vymazat všechny statistiky služby API?",
       "clearStatsSuccess": "Statistiky služby API byly vymazány",
+      "recoverAccount": "Obnovit stav účtu",
+      "recoverModel": "Obnovit cooldown aktuálního modelu: {{model}}",
+      "recoverAccountSuccess": "Stav účtu byl obnoven",
+      "recoverModelSuccess": "Cooldown aktuálního modelu byl obnoven",
       "killPortAction": "Vyčistit port",
       "killPortTitle": "Vyčistit port služby API",
       "killPortConfirmMessage": "Tím se vynuceně ukončí ostatní procesy používající místní port {{port}} a poté se služba API znovu spustí. Pokračovat?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "Nejvyšší tarif napřed",
         "planLowFirst": "Nejnižší tarif napřed",
         "expirySoonFirst": "Brzy končící první"
+      },
+      "safetyPreset": {
+        "label": "Předvolba strategie",
+        "current": "Aktuální",
+        "custom": "Vlastní",
+        "maximumSafety": "Maximální bezpečnost",
+        "maximumSafetyDesc": "1 souběžně · 60s",
+        "balancedSelfUse": "Vyvážené vlastní použití",
+        "balancedSelfUseDesc": "1 souběžně · 20s",
+        "quotaDrainCareful": "Opatrné čerpání kvóty",
+        "quotaDrainCarefulDesc": "1 souběžně · 30s"
+      },
+      "health": {
+        "title": "Stav",
+        "healthy": "Zdravé",
+        "cooling": "Cooldown",
+        "auth": "Ověření",
+        "manual": "Ruční zásah",
+        "modelCooldown": "Cooldown modelu",
+        "sticky": "Připnuté",
+        "lastError": "Poslední chyba",
+        "cooldownUntil": "Cooldown do",
+        "unavailable": "Nedostupné"
       },
       "statusUnconfigured": "Nenastaveno",
       "expandDetails": "Rozbalit detail",

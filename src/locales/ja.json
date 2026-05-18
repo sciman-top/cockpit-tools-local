@@ -1517,6 +1517,8 @@
       "historyTitle": "トリガー履歴",
       "taskTitleEdit": "ウェイクアップタスクを編集",
       "taskTitleNew": "ウェイクアップタスクを新規作成",
+      "enableTitle": "バックグラウンドウェイクアップを有効化",
+      "enableAction": "ウェイクアップを有効化",
       "riskWarning": "⚠️ リスク警告\n最近の Google のリスク制御強化により、ウェイクアップ機能の利用はアカウントのリスク判定（追加認証・一時制限など）にかかる可能性を高める場合があります。\nアカウントの状況に応じて慎重に利用し、リスクはご自身で判断してください。\n\n続行しますか？"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "API サービスを切り替え",
       "showKey": "キーを表示",
       "hideKey": "キーを非表示",
+      "hiddenKeyTitle": "API キーは非表示です",
       "modal": {
         "title": "API サービスに追加",
         "desc": "API サービスのコレクションに含める OAuth アカウントを選択します。追加したアカウントは通常の一覧から非表示になり、API サービスカードからのみ管理されます。",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "ルーティング",
       "routingSaveSuccess": "API サービスのルーティングを更新しました",
+      "safetyPresetSaveSuccess": "API サービスの戦略プリセットを復元しました",
+      "safetyPresetSaveFailed": "API サービスの戦略プリセットの復元に失敗しました",
       "routingDescriptionAuto": "上位プランかつ残クォータが多いアカウントを優先し、同一プラン内でローテーションします。",
       "routingDescriptionQuotaHighFirst": "残りクォータが多いアカウントを優先します。",
       "routingDescriptionQuotaLowFirst": "残りクォータが少ないアカウントを優先します。",
@@ -1806,6 +1811,10 @@
       "clearStats": "統計をクリア",
       "clearStatsConfirm": "API サービスの統計をすべてクリアしますか？",
       "clearStatsSuccess": "API サービスの統計をクリアしました",
+      "recoverAccount": "アカウントの健全性を復元",
+      "recoverModel": "現在のモデル cooldown を復元: {{model}}",
+      "recoverAccountSuccess": "アカウントの健全性を復元しました",
+      "recoverModelSuccess": "現在のモデル cooldown を復元しました",
       "killPortAction": "ポートをクリア",
       "killPortTitle": "API サービスのポートをクリア",
       "killPortConfirmMessage": "ローカルポート {{port}} を使用している他のプロセスを強制終了し、API サービスを再起動します。続行しますか？",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "上位プラン優先",
         "planLowFirst": "下位プラン優先",
         "expirySoonFirst": "期限が近い順"
+      },
+      "safetyPreset": {
+        "label": "戦略プリセット",
+        "current": "現在",
+        "custom": "カスタム",
+        "maximumSafety": "最大安全",
+        "maximumSafetyDesc": "同時 1 件 · 60s",
+        "balancedSelfUse": "自己利用バランス",
+        "balancedSelfUseDesc": "同時 1 件 · 20s",
+        "quotaDrainCareful": "慎重なクォータ消費",
+        "quotaDrainCarefulDesc": "同時 1 件 · 30s"
+      },
+      "health": {
+        "title": "健全性",
+        "healthy": "正常",
+        "cooling": "冷却中",
+        "auth": "認証",
+        "manual": "手動対応",
+        "modelCooldown": "モデル冷却",
+        "sticky": "固定",
+        "lastError": "直近のエラー",
+        "cooldownUntil": "冷却期限",
+        "unavailable": "利用不可"
       },
       "statusUnconfigured": "未設定",
       "expandDetails": "詳細を開く",

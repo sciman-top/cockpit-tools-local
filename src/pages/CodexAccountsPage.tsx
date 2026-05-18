@@ -131,6 +131,7 @@ import type {
   CodexLocalAccessAddressKind,
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
+  CodexLocalApiSafetyPresetId,
   CodexRuntimeIntegrationMode,
   CodexRuntimeModeState,
 } from "../types/codexLocalAccess";
@@ -4482,6 +4483,41 @@ export function CodexAccountsPage() {
       } catch (error) {
         console.error("Failed to update local access routing strategy:", error);
         throw new Error(String(error).replace(/^Error:\s*/, ""));
+      } finally {
+        setLocalAccessSaving(false);
+      }
+    },
+    [setMessage, t],
+  );
+
+  const handleApplyLocalAccessSafetyPreset = useCallback(
+    async (preset: CodexLocalApiSafetyPresetId) => {
+      setLocalAccessSaving(true);
+      try {
+        const nextState =
+          await codexLocalAccessService.applyCodexLocalAccessSafetyPreset(
+            preset,
+          );
+        setLocalAccessState(nextState);
+        setMessage({
+          tone: "success",
+          text: t(
+            "codex.localAccess.safetyPresetSaveSuccess",
+            "API 服务策略预设已恢复",
+          ),
+        });
+      } catch (error) {
+        setMessage({
+          tone: "error",
+          text:
+            error instanceof Error
+              ? error.message
+              : t(
+                  "codex.localAccess.safetyPresetSaveFailed",
+                  "恢复 API 服务策略预设失败",
+                ),
+        });
+        console.error("Failed to apply local access safety preset:", error);
       } finally {
         setLocalAccessSaving(false);
       }
@@ -9865,6 +9901,7 @@ export function CodexAccountsPage() {
             onRecoverHealth={handleRecoverLocalAccessHealth}
             onUpdatePort={handleUpdateLocalAccessPort}
             onUpdateRoutingStrategy={handleUpdateLocalAccessRoutingStrategy}
+            onApplySafetyPreset={handleApplyLocalAccessSafetyPreset}
             onSetFollowCurrentAccount={handleSetLocalAccessFollowCurrentAccount}
             onSetRuntimeMode={handleSetCodexRuntimeMode}
             onRotateApiKey={handleRotateLocalAccessApiKey}

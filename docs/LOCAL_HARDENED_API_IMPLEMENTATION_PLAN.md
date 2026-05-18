@@ -430,7 +430,7 @@ flowchart TD
 
 描述：把 hardened defaults、balanced self-use、quota drain careful 做成可恢复 preset，并补最终用户文档。
 
-状态：2026-05-18 已完成文档契约切片：新增 `docs/LOCAL_HARDENED_API.md`，写明默认安全姿态、三类 preset 目标值、Codex CLI 直连 Cockpit、可选 LiteLLM 桥接、风险边界和回滚。UI/command 级一键 preset 与直连 smoke 继续保留。
+状态：2026-05-18 已完成文档契约与 UI/command preset 切片：新增 `docs/LOCAL_HARDENED_API.md`，写明默认安全姿态、三类 preset 目标值、Codex CLI 直连 Cockpit、可选 LiteLLM 桥接、风险边界和回滚；`codex_local_access_apply_safety_preset` 与 API 服务面板策略预设按钮已可恢复 `maximum_safety`、`balanced_self_use`、`quota_drain_careful`。本切片已通过 typecheck、build、locale check 和 safety preset 单测；直连 smoke 继续保留。
 
 验收：
 
@@ -438,13 +438,17 @@ flowchart TD
 - [x] `balanced_self_use` 展开为单并发、20-30 秒间隔、sticky then next healthy。
 - [x] `quota_drain_careful` 展开为 fill-first、严格 cooldown、低速率。
 - [x] 文档写明 Codex CLI 直连 Cockpit 和可选 LiteLLM 桥接两条路径。
+- [x] UI/command 级一键恢复 preset。
 - [ ] 关闭 LiteLLM 后 Codex CLI 仍可直连 Cockpit。
 
 验证：
 
-- [ ] `npm run typecheck`
-- [ ] `npm run build`
+- [x] `npm run typecheck`
+- [x] `npm run build`
+- [x] `cargo test --package cockpit-tools safety_preset`
+- [x] `node scripts/check_locales.cjs`
 - [ ] 手动 smoke：Codex CLI 使用 `http://127.0.0.1:2876/v1`。
+- [ ] 2026-05-18 前置探针：`Test-NetConnection 127.0.0.1:2876` 返回未监听；未修改 live Codex provider/API key。
 
 可能文件：
 

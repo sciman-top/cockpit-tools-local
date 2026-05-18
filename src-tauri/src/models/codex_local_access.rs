@@ -20,6 +20,14 @@ impl Default for CodexLocalAccessRoutingStrategy {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum CodexLocalApiSafetyPresetId {
+    MaximumSafety,
+    BalancedSelfUse,
+    QuotaDrainCareful,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum CodexRuntimeIntegrationMode {
     DirectProjection,
     #[serde(alias = "gateway_litellm")]

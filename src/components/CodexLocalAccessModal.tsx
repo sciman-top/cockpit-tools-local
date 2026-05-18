@@ -26,6 +26,8 @@ import type {
   CodexLocalAccessAddressKind,
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
+  CodexLocalApiSafetyConfig,
+  CodexLocalApiSafetyPresetId,
   CodexLocalAccessStatsWindow,
   CodexRuntimeIntegrationMode,
   CodexRuntimeModeState,
@@ -80,6 +82,9 @@ interface CodexLocalAccessModalProps {
   onUpdateRoutingStrategy: (
     strategy: CodexLocalAccessRoutingStrategy,
   ) => Promise<unknown> | unknown;
+  onApplySafetyPreset: (
+    preset: CodexLocalApiSafetyPresetId,
+  ) => Promise<unknown> | unknown;
   onSetFollowCurrentAccount: (enabled: boolean) => Promise<unknown> | unknown;
   onSetRuntimeMode: (mode: CodexRuntimeIntegrationMode) => Promise<unknown> | unknown;
   onRotateApiKey: () => Promise<unknown> | unknown;
@@ -118,6 +123,43 @@ function persistStatsRange(value: StatsRangeKey): void {
   } catch {
     // ignore storage write failures
   }
+}
+
+function resolveSafetyPresetId(
+  config: CodexLocalApiSafetyConfig | null | undefined,
+): CodexLocalApiSafetyPresetId | 'custom' {
+  if (!config) return 'custom';
+  const isBaseHardened =
+    config.hardenedLocalMode &&
+    config.maxConcurrentRequests === 1 &&
+    config.maxQueueWaitSeconds === 10 &&
+    config.requestTimeoutSeconds === 600 &&
+    config.maxRequestBodyMb === 64 &&
+    config.maxRetries === 1 &&
+    config.maxRetryAccounts === 1 &&
+    config.logging?.redactSensitiveValues === true &&
+    config.logging?.includePromptResponse === false &&
+    config.logging?.includeRawUpstreamBody === false;
+  if (!isBaseHardened) return 'custom';
+  if (
+    config.minRequestIntervalSeconds === 60 &&
+    config.fallbackMode === 'disabled'
+  ) {
+    return 'maximum_safety';
+  }
+  if (
+    config.minRequestIntervalSeconds === 20 &&
+    config.fallbackMode === 'disabled'
+  ) {
+    return 'balanced_self_use';
+  }
+  if (
+    config.minRequestIntervalSeconds === 30 &&
+    config.fallbackMode === 'next_request_only'
+  ) {
+    return 'quota_drain_careful';
+  }
+  return 'custom';
 }
 
 function formatCompactNumber(value: number): string {
@@ -174,6 +216,7 @@ export function CodexLocalAccessModal({
   onRecoverHealth,
   onUpdatePort,
   onUpdateRoutingStrategy,
+  onApplySafetyPreset,
   onSetFollowCurrentAccount,
   onSetRuntimeMode,
   onRotateApiKey,
@@ -237,6 +280,32 @@ export function CodexLocalAccessModal({
   const health = state?.health ?? null;
   const routingStrategy = collection?.routingStrategy ?? 'auto';
   const followCurrentAccount = collection?.followCurrentAccount ?? false;
+  const safetyPresetId = resolveSafetyPresetId(collection?.safetyConfig);
+  const safetyPresetOptions = useMemo(
+    () =>
+      [
+        {
+          id: 'maximum_safety',
+          label: t('codex.localAccess.safetyPreset.maximumSafety', '最高安全'),
+          desc: t('codex.localAccess.safetyPreset.maximumSafetyDesc', '1 并发 · 60s'),
+        },
+        {
+          id: 'balanced_self_use',
+          label: t('codex.localAccess.safetyPreset.balancedSelfUse', '自用均衡'),
+          desc: t('codex.localAccess.safetyPreset.balancedSelfUseDesc', '1 并发 · 20s'),
+        },
+        {
+          id: 'quota_drain_careful',
+          label: t('codex.localAccess.safetyPreset.quotaDrainCareful', '谨慎消耗'),
+          desc: t('codex.localAccess.safetyPreset.quotaDrainCarefulDesc', '1 并发 · 30s'),
+        },
+      ] satisfies Array<{
+        id: CodexLocalApiSafetyPresetId;
+        label: string;
+        desc: string;
+      }>,
+    [t],
+  );
   const selectedRuntimeMode = runtimeMode?.mode ?? 'direct_projection';
   const modelIdOptions = useMemo(
     () => modelIds.map((modelId) => ({ value: modelId, label: modelId })),
@@ -809,6 +878,17 @@ export function CodexLocalAccessModal({
     );
   };
 
+  const handleApplySafetyPreset = async (preset: CodexLocalApiSafetyPresetId) => {
+    if (!collection) return;
+
+    await runAction(
+      async () => {
+        await onApplySafetyPreset(preset);
+      },
+      t('codex.localAccess.safetyPresetSaveSuccess', 'API 服务策略预设已恢复'),
+    );
+  };
+
   const handleToggleFollowCurrentAccount = async () => {
     if (!collection) return;
     const nextEnabled = !followCurrentAccount;
@@ -1353,6 +1433,38 @@ export function CodexLocalAccessModal({
                               defaultValue: '账号类型：{{kind}}',
                             })
                           : t('codex.localAccess.runtimeMode.accountKindUnknown', '账号类型：unknown')}
+                      </div>
+                    </div>
+
+                    <div className="codex-local-access-config-card codex-local-access-config-card-preset">
+                      <div className="codex-local-access-config-head">
+                        <span className="codex-local-access-config-label">
+                          {t('codex.localAccess.safetyPreset.label', '策略预设')}
+                        </span>
+                        <span className="codex-local-access-view-only-badge">
+                          {safetyPresetId === 'custom'
+                            ? t('codex.localAccess.safetyPreset.custom', '自定义')
+                            : t('codex.localAccess.safetyPreset.current', '当前')}
+                        </span>
+                      </div>
+                      <div className="codex-local-access-preset-grid">
+                        {safetyPresetOptions.map((option) => (
+                          <button
+                            key={option.id}
+                            type="button"
+                            className={`codex-local-access-preset-btn${
+                              safetyPresetId === option.id ? ' is-active' : ''
+                            }`}
+                            onClick={() => void handleApplySafetyPreset(option.id)}
+                            disabled={!collection || actionBusy}
+                          >
+                            <ShieldCheck size={14} />
+                            <span>
+                              <strong>{option.label}</strong>
+                              <small>{option.desc}</small>
+                            </span>
+                          </button>
+                        ))}
                       </div>
                     </div>
                   </div>

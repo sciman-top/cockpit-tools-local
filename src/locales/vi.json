@@ -1517,6 +1517,8 @@
       "historyTitle": "Lịch sử kích hoạt",
       "taskTitleEdit": "Chỉnh sửa nhiệm vụ đánh thức",
       "taskTitleNew": "Nhiệm vụ đánh thức mới",
+      "enableTitle": "Bật wakeup nền",
+      "enableAction": "Bật wakeup",
       "riskWarning": "⚠️ Cảnh báo rủi ro\nDo Google gần đây siết chặt kiểm soát rủi ro, việc sử dụng tính năng wakeup có thể làm tăng khả năng kích hoạt cơ chế kiểm soát rủi ro của tài khoản (bao gồm nhưng không giới hạn ở xác minh bổ sung hoặc giới hạn tạm thời).\nVui lòng sử dụng thận trọng theo tình trạng tài khoản và tự đánh giá rủi ro.\n\nTiếp tục?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "Chuyển dịch vụ API",
       "showKey": "Hiện khóa",
       "hideKey": "Ẩn khóa",
+      "hiddenKeyTitle": "Đã ẩn API key",
       "modal": {
         "title": "Thêm vào dịch vụ API",
         "desc": "Chọn các tài khoản OAuth muốn đưa vào bộ dịch vụ API. Các tài khoản được thêm sẽ bị ẩn khỏi bảng thông thường và chỉ được quản lý từ thẻ dịch vụ API.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "Định tuyến",
       "routingSaveSuccess": "Đã cập nhật định tuyến dịch vụ API",
+      "safetyPresetSaveSuccess": "Đã khôi phục preset chiến lược dịch vụ API",
+      "safetyPresetSaveFailed": "Không thể khôi phục preset chiến lược dịch vụ API",
       "routingDescriptionAuto": "Ưu tiên tài khoản gói cao hơn và còn nhiều hạn mức hơn, sau đó luân phiên trong cùng gói.",
       "routingDescriptionQuotaHighFirst": "Ưu tiên tài khoản còn nhiều hạn mức hơn.",
       "routingDescriptionQuotaLowFirst": "Ưu tiên tài khoản còn ít hạn mức hơn.",
@@ -1806,6 +1811,10 @@
       "clearStats": "Xóa thống kê",
       "clearStatsConfirm": "Xóa toàn bộ thống kê dịch vụ API?",
       "clearStatsSuccess": "Đã xóa thống kê dịch vụ API",
+      "recoverAccount": "Khôi phục sức khỏe tài khoản",
+      "recoverModel": "Khôi phục cooldown model hiện tại: {{model}}",
+      "recoverAccountSuccess": "Đã khôi phục sức khỏe tài khoản",
+      "recoverModelSuccess": "Đã khôi phục cooldown model hiện tại",
       "killPortAction": "Dọn cổng",
       "killPortTitle": "Dọn cổng dịch vụ API",
       "killPortConfirmMessage": "Các tiến trình khác đang dùng cổng cục bộ {{port}} sẽ bị buộc đóng, sau đó dịch vụ API sẽ khởi động lại. Tiếp tục?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "Ưu tiên gói cao",
         "planLowFirst": "Ưu tiên gói thấp",
         "expirySoonFirst": "Sắp hết hạn trước"
+      },
+      "safetyPreset": {
+        "label": "Preset chiến lược",
+        "current": "Hiện tại",
+        "custom": "Tùy chỉnh",
+        "maximumSafety": "An toàn tối đa",
+        "maximumSafetyDesc": "1 đồng thời · 60s",
+        "balancedSelfUse": "Tự dùng cân bằng",
+        "balancedSelfUseDesc": "1 đồng thời · 20s",
+        "quotaDrainCareful": "Tiêu hao quota thận trọng",
+        "quotaDrainCarefulDesc": "1 đồng thời · 30s"
+      },
+      "health": {
+        "title": "Sức khỏe",
+        "healthy": "Khỏe",
+        "cooling": "Đang cooldown",
+        "auth": "Xác thực",
+        "manual": "Thao tác thủ công",
+        "modelCooldown": "Cooldown model",
+        "sticky": "Ghim",
+        "lastError": "Lỗi gần nhất",
+        "cooldownUntil": "Cooldown đến",
+        "unavailable": "Không khả dụng"
       },
       "statusUnconfigured": "Chưa cấu hình",
       "expandDetails": "Mở chi tiết",

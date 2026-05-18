@@ -1517,6 +1517,8 @@
       "historyTitle": "Historique des déclenchements",
       "taskTitleEdit": "Modifier la tâche de réveil",
       "taskTitleNew": "Nouvelle tâche de réveil",
+      "enableTitle": "Activer le réveil en arrière-plan",
+      "enableAction": "Activer le réveil",
       "riskWarning": "⚠️ Avertissement de risque\nEn raison du récent renforcement des contrôles de risque de Google, l’utilisation de la fonction de réveil peut augmenter la probabilité de déclencher des mesures de contrôle du compte (y compris, sans s’y limiter, une vérification supplémentaire ou des limitations temporaires).\nVeuillez l’utiliser avec prudence selon l’état de votre compte et évaluer vous-même le risque.\n\nContinuer ?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "Basculer le service API",
       "showKey": "Afficher la clé",
       "hideKey": "Masquer la clé",
+      "hiddenKeyTitle": "Clé API masquée",
       "modal": {
         "title": "Ajouter au service API",
         "desc": "Choisissez les comptes OAuth à inclure dans la collection du service API. Les comptes ajoutés seront masqués de la vue normale et gérés uniquement depuis la carte du service API.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "Routage",
       "routingSaveSuccess": "Le routage du service API a été mis à jour",
+      "safetyPresetSaveSuccess": "Préréglage de stratégie du service API restauré",
+      "safetyPresetSaveFailed": "Échec de la restauration du préréglage de stratégie du service API",
       "routingDescriptionAuto": "Privilégie les comptes au forfait plus élevé et au quota restant plus important, puis alterne dans le même niveau.",
       "routingDescriptionQuotaHighFirst": "Privilégie les comptes avec le plus de quota restant.",
       "routingDescriptionQuotaLowFirst": "Privilégie les comptes avec le moins de quota restant.",
@@ -1806,6 +1811,10 @@
       "clearStats": "Effacer les stats",
       "clearStatsConfirm": "Effacer toutes les statistiques du service API ?",
       "clearStatsSuccess": "Les statistiques du service API ont été effacées",
+      "recoverAccount": "Récupérer l’état du compte",
+      "recoverModel": "Récupérer le cooldown du modèle actuel : {{model}}",
+      "recoverAccountSuccess": "L’état du compte a été récupéré",
+      "recoverModelSuccess": "Le cooldown du modèle actuel a été récupéré",
       "killPortAction": "Libérer le port",
       "killPortTitle": "Libérer le port du service API",
       "killPortConfirmMessage": "Les autres processus utilisant le port local {{port}} seront fermés de force, puis le service API sera redémarré. Continuer ?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "Forfait élevé d'abord",
         "planLowFirst": "Forfait faible d'abord",
         "expirySoonFirst": "Expiration proche d'abord"
+      },
+      "safetyPreset": {
+        "label": "Préréglage de stratégie",
+        "current": "Actuel",
+        "custom": "Personnalisé",
+        "maximumSafety": "Sécurité maximale",
+        "maximumSafetyDesc": "1 simultané · 60s",
+        "balancedSelfUse": "Usage personnel équilibré",
+        "balancedSelfUseDesc": "1 simultané · 20s",
+        "quotaDrainCareful": "Consommation prudente du quota",
+        "quotaDrainCarefulDesc": "1 simultané · 30s"
+      },
+      "health": {
+        "title": "Santé",
+        "healthy": "Sain",
+        "cooling": "Refroidissement",
+        "auth": "Authentification",
+        "manual": "Intervention manuelle",
+        "modelCooldown": "Cooldown du modèle",
+        "sticky": "Épinglé",
+        "lastError": "Dernière erreur",
+        "cooldownUntil": "Cooldown jusqu’à",
+        "unavailable": "Indisponible"
       },
       "statusUnconfigured": "Non configuré",
       "expandDetails": "Développer",

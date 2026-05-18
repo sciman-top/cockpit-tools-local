@@ -1563,6 +1563,8 @@
       "historyTitle": "Riwayat Pemicu",
       "taskTitleEdit": "Edit Tugas Wakeup",
       "taskTitleNew": "Tugas Wakeup Baru",
+      "enableTitle": "Aktifkan wakeup latar belakang",
+      "enableAction": "Aktifkan wakeup",
       "riskWarning": "Ã¢Å¡Â Ã¯Â¸Â Risk warning\nDue to recent Google risk-control tightening, using the wakeup feature may increase the chance of triggering account risk controls (including but not limited to additional verification or temporary limits).\nPlease use it with caution based on your account status and evaluate the risk yourself.\n\nContinue?"
     },
     "form": {
@@ -1792,6 +1794,7 @@
       "toggleService": "Alihkan layanan API",
       "showKey": "Tampilkan kunci",
       "hideKey": "Sembunyikan kunci",
+      "hiddenKeyTitle": "Kunci API disembunyikan",
       "modal": {
         "title": "Tambahkan ke Layanan API",
         "desc": "Pilih akun OAuth yang ingin dimasukkan ke koleksi layanan API. Akun yang ditambahkan akan disembunyikan dari tampilan biasa dan hanya dikelola dari kartu layanan API.",
@@ -1846,6 +1849,8 @@
       },
       "routingLabel": "Rute",
       "routingSaveSuccess": "Rute layanan API diperbarui",
+      "safetyPresetSaveSuccess": "Preset strategi layanan API dipulihkan",
+      "safetyPresetSaveFailed": "Gagal memulihkan preset strategi layanan API",
       "routingDescriptionAuto": "Prioritaskan akun dengan paket lebih tinggi dan kuota tersisa lebih besar, lalu lakukan rotasi dalam paket yang sama.",
       "routingDescriptionQuotaHighFirst": "Prioritaskan akun dengan kuota tersisa lebih besar.",
       "routingDescriptionQuotaLowFirst": "Prioritaskan akun dengan kuota tersisa lebih kecil.",
@@ -1855,6 +1860,10 @@
       "clearStats": "Hapus Statistik",
       "clearStatsConfirm": "Hapus semua statistik layanan API?",
       "clearStatsSuccess": "Statistik layanan API telah dihapus",
+      "recoverAccount": "Pulihkan kesehatan akun",
+      "recoverModel": "Pulihkan cooldown model saat ini: {{model}}",
+      "recoverAccountSuccess": "Kesehatan akun telah dipulihkan",
+      "recoverModelSuccess": "Cooldown model saat ini telah dipulihkan",
       "killPortAction": "Bersihkan Port",
       "killPortTitle": "Bersihkan Port Layanan API",
       "killPortConfirmMessage": "Proses lain yang memakai port lokal {{port}} akan dihentikan paksa, lalu layanan API dimulai ulang. Lanjutkan?",
@@ -1870,6 +1879,29 @@
         "planHighFirst": "Paket Tinggi Dulu",
         "planLowFirst": "Paket Rendah Dulu",
         "expirySoonFirst": "Kedaluwarsa Cepat Dulu"
+      },
+      "safetyPreset": {
+        "label": "Preset Strategi",
+        "current": "Saat ini",
+        "custom": "Kustom",
+        "maximumSafety": "Keamanan Maksimum",
+        "maximumSafetyDesc": "1 serentak · 60s",
+        "balancedSelfUse": "Pemakaian Sendiri Seimbang",
+        "balancedSelfUseDesc": "1 serentak · 20s",
+        "quotaDrainCareful": "Pengurasan Kuota Hati-hati",
+        "quotaDrainCarefulDesc": "1 serentak · 30s"
+      },
+      "health": {
+        "title": "Kesehatan",
+        "healthy": "Sehat",
+        "cooling": "Cooling",
+        "auth": "Autentikasi",
+        "manual": "Tindakan manual",
+        "modelCooldown": "Cooldown model",
+        "sticky": "Tersemat",
+        "lastError": "Kesalahan terakhir",
+        "cooldownUntil": "Cooldown hingga",
+        "unavailable": "Tidak tersedia"
       },
       "statusUnconfigured": "Belum dikonfigurasi",
       "expandDetails": "Buka detail",

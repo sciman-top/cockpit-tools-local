@@ -1563,6 +1563,8 @@
       "historyTitle": "سجل التشغيل",
       "taskTitleEdit": "تعديل مهمة الاستيقاظ",
       "taskTitleNew": "مهمة استيقاظ جديدة",
+      "enableTitle": "تفعيل الإيقاظ في الخلفية",
+      "enableAction": "تفعيل الإيقاظ",
       "riskWarning": "⚠️ تحذير من المخاطر\nبسبب تشديد Google الأخير لإجراءات التحكم في المخاطر، قد يؤدي استخدام ميزة الاستيقاظ إلى زيادة احتمال تفعيل إجراءات التحكم على الحساب (بما في ذلك على سبيل المثال لا الحصر التحقق الإضافي أو القيود المؤقتة).\nيرجى الاستخدام بحذر وفق حالة الحساب وتقييم المخاطر بنفسك.\n\nهل تريد المتابعة؟"
     },
     "form": {
@@ -1789,6 +1791,7 @@
       "toggleService": "تبديل خدمة API",
       "showKey": "إظهار المفتاح",
       "hideKey": "إخفاء المفتاح",
+      "hiddenKeyTitle": "مفتاح API مخفي",
       "modal": {
         "title": "إضافة إلى خدمة API",
         "desc": "اختر حسابات OAuth التي تريد إضافتها إلى مجموعة خدمة API. ستُخفى الحسابات المضافة من اللوحة العادية وتُدار فقط من بطاقة خدمة API.",
@@ -1843,6 +1846,8 @@
       },
       "routingLabel": "توجيه",
       "routingSaveSuccess": "تم تحديث توجيه خدمة API",
+      "safetyPresetSaveSuccess": "تمت استعادة إعداد استراتيجية خدمة API",
+      "safetyPresetSaveFailed": "فشل استعادة إعداد استراتيجية خدمة API",
       "routingDescriptionAuto": "يفضّل الحسابات الأعلى اشتراكًا والأعلى رصيدًا، ثم يوزّع بالتناوب داخل نفس المستوى.",
       "routingDescriptionQuotaHighFirst": "يفضّل الحسابات ذات الحصة المتبقية الأعلى.",
       "routingDescriptionQuotaLowFirst": "يفضّل الحسابات ذات الحصة المتبقية الأقل.",
@@ -1852,6 +1857,10 @@
       "clearStats": "مسح الإحصاءات",
       "clearStatsConfirm": "هل تريد مسح كل إحصاءات خدمة API؟",
       "clearStatsSuccess": "تم مسح إحصاءات خدمة API",
+      "recoverAccount": "استعادة صحة الحساب",
+      "recoverModel": "استعادة تبريد النموذج الحالي: {{model}}",
+      "recoverAccountSuccess": "تمت استعادة صحة الحساب",
+      "recoverModelSuccess": "تمت استعادة تبريد النموذج الحالي",
       "killPortAction": "تنظيف المنفذ",
       "killPortTitle": "تنظيف منفذ خدمة API",
       "killPortConfirmMessage": "سيتم إنهاء العمليات الأخرى التي تستخدم المنفذ المحلي {{port}} بالقوة، ثم إعادة تشغيل خدمة API. هل تريد المتابعة؟",
@@ -1867,6 +1876,29 @@
         "planHighFirst": "الأعلى باقة أولاً",
         "planLowFirst": "الأقل باقة أولاً",
         "expirySoonFirst": "الأقرب انتهاءً أولاً"
+      },
+      "safetyPreset": {
+        "label": "إعداد الاستراتيجية",
+        "current": "حالي",
+        "custom": "مخصص",
+        "maximumSafety": "أقصى أمان",
+        "maximumSafetyDesc": "تزامن 1 · 60s",
+        "balancedSelfUse": "استخدام ذاتي متوازن",
+        "balancedSelfUseDesc": "تزامن 1 · 20s",
+        "quotaDrainCareful": "استنزاف الحصة بحذر",
+        "quotaDrainCarefulDesc": "تزامن 1 · 30s"
+      },
+      "health": {
+        "title": "الصحة",
+        "healthy": "سليم",
+        "cooling": "تبريد",
+        "auth": "تفويض",
+        "manual": "تدخل يدوي",
+        "modelCooldown": "تبريد النموذج",
+        "sticky": "تثبيت",
+        "lastError": "آخر خطأ",
+        "cooldownUntil": "التبريد حتى",
+        "unavailable": "غير متاح"
       },
       "statusUnconfigured": "غير مُعدّ",
       "expandDetails": "توسيع التفاصيل",

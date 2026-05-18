@@ -1517,6 +1517,8 @@
       "historyTitle": "트리거 기록",
       "taskTitleEdit": "깨우기 작업 편집",
       "taskTitleNew": "새 깨우기 작업",
+      "enableTitle": "백그라운드 Wakeup 활성화",
+      "enableAction": "Wakeup 활성화",
       "riskWarning": "⚠️ 위험 경고\n최근 Google 리스크 제어 강화로 인해 깨우기 기능을 사용하면 계정 리스크 제어(추가 인증, 임시 제한 등)가 발생할 가능성이 높아질 수 있습니다.\n계정 상태를 고려해 신중히 사용하고, 위험은 직접 판단해 주세요.\n\n계속하시겠습니까?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "API 서비스 전환",
       "showKey": "키 표시",
       "hideKey": "키 숨기기",
+      "hiddenKeyTitle": "API 키가 숨겨짐",
       "modal": {
         "title": "API 서비스에 추가",
         "desc": "API 서비스 모음에 포함할 OAuth 계정을 선택하세요. 추가된 계정은 일반 개요에서 숨겨지고 API 서비스 카드에서만 관리됩니다.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "라우팅",
       "routingSaveSuccess": "API 서비스 라우팅을 업데이트했습니다",
+      "safetyPresetSaveSuccess": "API 서비스 전략 프리셋을 복원했습니다",
+      "safetyPresetSaveFailed": "API 서비스 전략 프리셋 복원에 실패했습니다",
       "routingDescriptionAuto": "상위 요금제이면서 남은 할당량이 많은 계정을 우선하고, 같은 요금제 내에서 순환합니다.",
       "routingDescriptionQuotaHighFirst": "남은 할당량이 많은 계정을 우선합니다.",
       "routingDescriptionQuotaLowFirst": "남은 할당량이 적은 계정을 우선합니다.",
@@ -1806,6 +1811,10 @@
       "clearStats": "통계 지우기",
       "clearStatsConfirm": "API 서비스 통계를 모두 지울까요?",
       "clearStatsSuccess": "API 서비스 통계를 지웠습니다",
+      "recoverAccount": "계정 상태 복구",
+      "recoverModel": "현재 모델 cooldown 복구: {{model}}",
+      "recoverAccountSuccess": "계정 상태가 복구되었습니다",
+      "recoverModelSuccess": "현재 모델 cooldown이 복구되었습니다",
       "killPortAction": "포트 정리",
       "killPortTitle": "API 서비스 포트 정리",
       "killPortConfirmMessage": "로컬 포트 {{port}}를 사용하는 다른 프로세스를 강제로 종료한 뒤 API 서비스를 다시 시작합니다. 계속할까요?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "상위 요금제 우선",
         "planLowFirst": "하위 요금제 우선",
         "expirySoonFirst": "만료 임박 우선"
+      },
+      "safetyPreset": {
+        "label": "전략 프리셋",
+        "current": "현재",
+        "custom": "사용자 지정",
+        "maximumSafety": "최대 안전",
+        "maximumSafetyDesc": "동시 1개 · 60s",
+        "balancedSelfUse": "균형형 자가 사용",
+        "balancedSelfUseDesc": "동시 1개 · 20s",
+        "quotaDrainCareful": "신중한 할당량 소진",
+        "quotaDrainCarefulDesc": "동시 1개 · 30s"
+      },
+      "health": {
+        "title": "상태",
+        "healthy": "정상",
+        "cooling": "쿨다운",
+        "auth": "인증",
+        "manual": "수동 조치",
+        "modelCooldown": "모델 쿨다운",
+        "sticky": "고정",
+        "lastError": "최근 오류",
+        "cooldownUntil": "쿨다운 종료",
+        "unavailable": "사용 불가"
       },
       "statusUnconfigured": "미설정",
       "expandDetails": "세부 정보 펼치기",

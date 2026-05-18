@@ -1517,6 +1517,8 @@
       "historyTitle": "Auslöseverlauf",
       "taskTitleEdit": "Weckaufgabe bearbeiten",
       "taskTitleNew": "Neue Weckaufgabe",
+      "enableTitle": "Hintergrund-Wakeup aktivieren",
+      "enableAction": "Wakeup aktivieren",
       "riskWarning": "⚠️ Risikowarnung\nAufgrund der jüngsten Verschärfung der Google-Risikokontrollen kann die Nutzung der Wakeup-Funktion die Wahrscheinlichkeit erhöhen, dass Risikomaßnahmen für das Konto ausgelöst werden (z. B. zusätzliche Verifizierung oder temporäre Einschränkungen).\nBitte nutzen Sie die Funktion abhängig von Ihrer Kontosituation mit Vorsicht und bewerten Sie das Risiko selbst.\n\nFortfahren?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "API-Dienst umschalten",
       "showKey": "Schlüssel anzeigen",
       "hideKey": "Schlüssel ausblenden",
+      "hiddenKeyTitle": "API-Schlüssel ausgeblendet",
       "modal": {
         "title": "Zum API-Dienst hinzufügen",
         "desc": "Wählen Sie die OAuth-Konten aus, die in die API-Dienst-Sammlung aufgenommen werden sollen. Hinzugefügte Konten werden aus der normalen Übersicht ausgeblendet und nur noch über die API-Dienst-Karte verwaltet.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "Routing",
       "routingSaveSuccess": "API-Service-Routing wurde aktualisiert",
+      "safetyPresetSaveSuccess": "Strategievorgabe des API-Dienstes wiederhergestellt",
+      "safetyPresetSaveFailed": "Strategievorgabe des API-Dienstes konnte nicht wiederhergestellt werden",
       "routingDescriptionAuto": "Bevorzugt Konten mit höherem Tarif und mehr Restkontingent, rotiert dann innerhalb derselben Tarifstufe.",
       "routingDescriptionQuotaHighFirst": "Bevorzugt Konten mit mehr verbleibendem Kontingent.",
       "routingDescriptionQuotaLowFirst": "Bevorzugt Konten mit weniger verbleibendem Kontingent.",
@@ -1806,6 +1811,10 @@
       "clearStats": "Statistik löschen",
       "clearStatsConfirm": "Alle API-Service-Statistiken löschen?",
       "clearStatsSuccess": "API-Service-Statistiken wurden gelöscht",
+      "recoverAccount": "Kontozustand wiederherstellen",
+      "recoverModel": "Cooldown des aktuellen Modells wiederherstellen: {{model}}",
+      "recoverAccountSuccess": "Kontozustand wurde wiederhergestellt",
+      "recoverModelSuccess": "Cooldown des aktuellen Modells wurde wiederhergestellt",
       "killPortAction": "Port bereinigen",
       "killPortTitle": "API-Dienstport bereinigen",
       "killPortConfirmMessage": "Andere Prozesse, die den lokalen Port {{port}} verwenden, werden zwangsweise beendet. Danach wird der API-Dienst neu gestartet. Fortfahren?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "Hohes Abo zuerst",
         "planLowFirst": "Niedriges Abo zuerst",
         "expirySoonFirst": "Bald ablaufend zuerst"
+      },
+      "safetyPreset": {
+        "label": "Strategievorgabe",
+        "current": "Aktuell",
+        "custom": "Benutzerdefiniert",
+        "maximumSafety": "Maximale Sicherheit",
+        "maximumSafetyDesc": "1 gleichzeitig · 60s",
+        "balancedSelfUse": "Ausgewogene Eigennutzung",
+        "balancedSelfUseDesc": "1 gleichzeitig · 20s",
+        "quotaDrainCareful": "Kontingent vorsichtig nutzen",
+        "quotaDrainCarefulDesc": "1 gleichzeitig · 30s"
+      },
+      "health": {
+        "title": "Zustand",
+        "healthy": "Gesund",
+        "cooling": "Abkühlung",
+        "auth": "Autorisierung",
+        "manual": "Manueller Eingriff",
+        "modelCooldown": "Modell-Cooldown",
+        "sticky": "Angeheftet",
+        "lastError": "Letzter Fehler",
+        "cooldownUntil": "Cooldown bis",
+        "unavailable": "Nicht verfügbar"
       },
       "statusUnconfigured": "Nicht konfiguriert",
       "expandDetails": "Details aufklappen",

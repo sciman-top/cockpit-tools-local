@@ -1517,6 +1517,8 @@
       "historyTitle": "Tetikleme Geçmişi",
       "taskTitleEdit": "Uyandırma Görevini Düzenle",
       "taskTitleNew": "Yeni Uyandırma Görevi",
+      "enableTitle": "Arka plan uyandırmayı etkinleştir",
+      "enableAction": "Uyandırmayı etkinleştir",
       "riskWarning": "⚠️ Risk uyarısı\nGoogle’ın son dönemde sıkılaştırdığı risk kontrolleri nedeniyle uyandırma özelliğini kullanmak, hesapta risk kontrollerinin tetiklenme olasılığını artırabilir (ek doğrulama veya geçici kısıtlamalar dahil ancak bunlarla sınırlı olmamak üzere).\nLütfen hesabınızın durumuna göre dikkatli kullanın ve riski kendiniz değerlendirin.\n\nDevam edilsin mi?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "API hizmetini değiştir",
       "showKey": "Anahtarı göster",
       "hideKey": "Anahtarı gizle",
+      "hiddenKeyTitle": "API anahtarı gizli",
       "modal": {
         "title": "API hizmetine ekle",
         "desc": "API hizmeti koleksiyonuna dahil etmek istediğiniz OAuth hesaplarını seçin. Eklenen hesaplar normal görünümden gizlenir ve yalnızca API hizmeti kartından yönetilir.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "Yönlendirme",
       "routingSaveSuccess": "API hizmeti yönlendirmesi güncellendi",
+      "safetyPresetSaveSuccess": "API hizmeti strateji ön ayarı geri yüklendi",
+      "safetyPresetSaveFailed": "API hizmeti strateji ön ayarı geri yüklenemedi",
       "routingDescriptionAuto": "Önce daha yüksek planlı ve daha fazla kalan kotası olan hesapları seçer, sonra aynı planda dönüşümlü devam eder.",
       "routingDescriptionQuotaHighFirst": "Kalan kotası daha yüksek hesapları tercih eder.",
       "routingDescriptionQuotaLowFirst": "Kalan kotası daha düşük hesapları tercih eder.",
@@ -1806,6 +1811,10 @@
       "clearStats": "İstatistikleri Temizle",
       "clearStatsConfirm": "API hizmeti istatistiklerinin tümü temizlensin mi?",
       "clearStatsSuccess": "API hizmeti istatistikleri temizlendi",
+      "recoverAccount": "Hesap sağlığını kurtar",
+      "recoverModel": "Geçerli model cooldown durumunu kurtar: {{model}}",
+      "recoverAccountSuccess": "Hesap sağlığı kurtarıldı",
+      "recoverModelSuccess": "Geçerli model cooldown durumu kurtarıldı",
       "killPortAction": "Portu temizle",
       "killPortTitle": "API hizmeti portunu temizle",
       "killPortConfirmMessage": "Yerel {{port}} portunu kullanan diğer işlemler zorla kapatılacak, ardından API hizmeti yeniden başlatılacak. Devam edilsin mi?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "Önce yüksek plan",
         "planLowFirst": "Önce düşük plan",
         "expirySoonFirst": "Yakında Biten Önce"
+      },
+      "safetyPreset": {
+        "label": "Strateji Ön Ayarı",
+        "current": "Geçerli",
+        "custom": "Özel",
+        "maximumSafety": "Maksimum Güvenlik",
+        "maximumSafetyDesc": "1 eşzamanlı · 60s",
+        "balancedSelfUse": "Dengeli Kişisel Kullanım",
+        "balancedSelfUseDesc": "1 eşzamanlı · 20s",
+        "quotaDrainCareful": "Dikkatli Kota Tüketimi",
+        "quotaDrainCarefulDesc": "1 eşzamanlı · 30s"
+      },
+      "health": {
+        "title": "Sağlık",
+        "healthy": "Sağlıklı",
+        "cooling": "Soğuma",
+        "auth": "Yetkilendirme",
+        "manual": "Manuel işlem",
+        "modelCooldown": "Model cooldown",
+        "sticky": "Sabit",
+        "lastError": "Son hata",
+        "cooldownUntil": "Cooldown bitişi",
+        "unavailable": "Kullanılamaz"
       },
       "statusUnconfigured": "Yapılandırılmadı",
       "expandDetails": "Ayrıntıları aç",

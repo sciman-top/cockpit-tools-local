@@ -6,8 +6,8 @@ use crate::models::codex_local_access::{
     CodexLocalAccessPortCleanupResult, CodexLocalAccessRoutingStrategy, CodexLocalAccessState,
     CodexLocalAccessStats, CodexLocalAccessStatsWindow, CodexLocalAccessStickyBinding,
     CodexLocalAccessUsageEvent, CodexLocalAccessUsageStats, CodexLocalApiFallbackMode,
-    CodexLocalApiSafetyConfig, CodexRuntimeAccountKind, CodexRuntimeIntegrationMode,
-    CodexRuntimeModeState, CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION,
+    CodexLocalApiSafetyConfig, CodexLocalApiSafetyPresetId, CodexRuntimeAccountKind,
+    CodexRuntimeIntegrationMode, CodexRuntimeModeState, CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION,
     CODEX_LOCAL_API_SAFETY_SCHEMA_VERSION,
 };
 use crate::modules::atomic_write::write_string_atomic;
@@ -4923,6 +4923,54 @@ fn normalize_local_api_safety_config(collection: &mut CodexLocalAccessCollection
     changed
 }
 
+fn local_api_safety_config_for_preset(
+    preset: CodexLocalApiSafetyPresetId,
+) -> CodexLocalApiSafetyConfig {
+    let mut config = CodexLocalApiSafetyConfig::default();
+
+    match preset {
+        CodexLocalApiSafetyPresetId::MaximumSafety => {
+            config.min_request_interval_seconds = 60;
+            config.max_retry_accounts = 1;
+            config.fallback_mode = CodexLocalApiFallbackMode::Disabled;
+        }
+        CodexLocalApiSafetyPresetId::BalancedSelfUse => {
+            config.min_request_interval_seconds = 20;
+            config.max_retry_accounts = 1;
+            config.fallback_mode = CodexLocalApiFallbackMode::Disabled;
+        }
+        CodexLocalApiSafetyPresetId::QuotaDrainCareful => {
+            config.min_request_interval_seconds = 30;
+            config.max_retry_accounts = 1;
+            config.fallback_mode = CodexLocalApiFallbackMode::NextRequestOnly;
+        }
+    }
+
+    config
+}
+
+fn local_api_routing_strategy_for_preset(
+    _preset: CodexLocalApiSafetyPresetId,
+) -> CodexLocalAccessRoutingStrategy {
+    CodexLocalAccessRoutingStrategy::Auto
+}
+
+fn apply_local_api_safety_preset_to_collection(
+    collection: &mut CodexLocalAccessCollection,
+    preset: CodexLocalApiSafetyPresetId,
+) -> bool {
+    let original_safety_config = collection.safety_config.clone();
+    let original_routing_strategy = collection.routing_strategy;
+
+    collection.safety_config = local_api_safety_config_for_preset(preset);
+    collection.routing_strategy = local_api_routing_strategy_for_preset(preset);
+    let changed = original_safety_config != collection.safety_config
+        || original_routing_strategy != collection.routing_strategy;
+
+    let normalized = normalize_local_api_safety_config(collection);
+    changed || normalized
+}
+
 fn filter_local_access_account_ids<I>(
     account_ids: I,
     valid_account_ids: &HashSet<String>,
@@ -5544,6 +5592,36 @@ pub async fn update_local_access_routing_strategy(
         sync_runtime_collection(&mut runtime, collection);
     }
 
+    snapshot_state().await
+}
+
+pub async fn apply_local_access_safety_preset(
+    preset: CodexLocalApiSafetyPresetId,
+) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded().await?;
+
+    let maybe_collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    };
+
+    let Some(mut collection) = maybe_collection else {
+        return Err("本地接入集合尚未创建".to_string());
+    };
+
+    if !apply_local_api_safety_preset_to_collection(&mut collection, preset) {
+        return snapshot_state().await;
+    }
+
+    collection.updated_at = now_ms();
+    save_collection_to_disk(&collection)?;
+
+    {
+        let mut runtime = gateway_runtime().lock().await;
+        sync_runtime_collection(&mut runtime, collection);
+    }
+
+    ensure_gateway_matches_runtime().await?;
     snapshot_state().await
 }
 
@@ -8603,16 +8681,18 @@ async fn handle_connection(
 mod tests {
     use super::{
         acquire_local_api_backpressure, append_audit_event_to_path,
-        apply_collection_routing_strategy, build_audit_context, build_audit_event,
-        build_chat_completion_payload, build_chat_completion_stream_body,
-        build_codex_api_failure_log, build_effective_local_access_account_ids,
-        build_health_summary_from_registry, build_images_api_payload, build_local_models_response,
-        build_ordered_account_ids, build_request_routing_hint, build_routing_pool_account_ids,
-        build_runtime_account, build_runtime_mode_state, classify_codex_upstream_error,
-        empty_health_registry, extract_usage_capture, filter_local_access_account_ids,
-        first_stable_local_access_port, health_registry_account_is_schedulable,
-        health_registry_model_key, is_responses_completion_event, json_response_with_retry_after,
-        load_health_registry_from_path, load_runtime_mode_state, local_backpressure_wait_duration,
+        apply_collection_routing_strategy, apply_local_api_safety_preset_to_collection,
+        build_audit_context, build_audit_event, build_chat_completion_payload,
+        build_chat_completion_stream_body, build_codex_api_failure_log,
+        build_effective_local_access_account_ids, build_health_summary_from_registry,
+        build_images_api_payload, build_local_models_response, build_ordered_account_ids,
+        build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
+        build_runtime_mode_state, classify_codex_upstream_error, empty_health_registry,
+        extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
+        health_registry_account_is_schedulable, health_registry_model_key,
+        is_responses_completion_event, json_response_with_retry_after,
+        load_health_registry_from_path, load_runtime_mode_state,
+        local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
         parse_codex_retry_after, parse_responses_payload_from_upstream,
         parse_retry_after_header_value, pin_process_sticky_account, prepare_gateway_request,
@@ -8633,8 +8713,8 @@ mod tests {
     use crate::models::codex_local_access::{
         CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
         CodexLocalAccessCollection, CodexLocalAccessModelCooldown, CodexLocalAccessRoutingStrategy,
-        CodexLocalApiFallbackMode, CodexLocalApiSafetyConfig, CodexRuntimeAccountKind,
-        CodexRuntimeIntegrationMode,
+        CodexLocalApiFallbackMode, CodexLocalApiSafetyConfig, CodexLocalApiSafetyPresetId,
+        CodexRuntimeAccountKind, CodexRuntimeIntegrationMode,
     };
     use reqwest::header::{HeaderValue, RETRY_AFTER};
     use reqwest::StatusCode;
@@ -9601,6 +9681,73 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(collection.safety_config.logging.redact_sensitive_values);
         assert!(!collection.safety_config.logging.include_prompt_response);
         assert!(!collection.safety_config.logging.include_raw_upstream_body);
+    }
+
+    #[test]
+    fn local_api_safety_presets_expand_to_safe_contracts() {
+        let maximum_safety =
+            local_api_safety_config_for_preset(CodexLocalApiSafetyPresetId::MaximumSafety);
+        assert!(maximum_safety.hardened_local_mode);
+        assert_eq!(maximum_safety.max_concurrent_requests, 1);
+        assert_eq!(maximum_safety.min_request_interval_seconds, 60);
+        assert_eq!(maximum_safety.max_retry_accounts, 1);
+        assert_eq!(maximum_safety.fallback_mode.as_str(), "disabled");
+        assert!(maximum_safety.logging.redact_sensitive_values);
+        assert!(!maximum_safety.logging.include_prompt_response);
+        assert!(!maximum_safety.logging.include_raw_upstream_body);
+
+        let balanced =
+            local_api_safety_config_for_preset(CodexLocalApiSafetyPresetId::BalancedSelfUse);
+        assert_eq!(balanced.max_concurrent_requests, 1);
+        assert_eq!(balanced.min_request_interval_seconds, 20);
+        assert_eq!(balanced.max_retry_accounts, 1);
+        assert_eq!(balanced.fallback_mode.as_str(), "disabled");
+
+        let quota_drain =
+            local_api_safety_config_for_preset(CodexLocalApiSafetyPresetId::QuotaDrainCareful);
+        assert_eq!(quota_drain.max_concurrent_requests, 1);
+        assert_eq!(quota_drain.min_request_interval_seconds, 30);
+        assert_eq!(quota_drain.max_retry_accounts, 1);
+        assert_eq!(quota_drain.fallback_mode.as_str(), "next_request_only");
+    }
+
+    #[test]
+    fn applying_safety_preset_resets_collection_to_hardened_fill_first() {
+        let mut collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "ck-test".to_string(),
+            safety_config: CodexLocalApiSafetyConfig {
+                hardened_local_mode: false,
+                max_concurrent_requests: 4,
+                min_request_interval_seconds: 1,
+                max_retry_accounts: 2,
+                fallback_mode: CodexLocalApiFallbackMode::NextRequestOnly,
+                ..CodexLocalApiSafetyConfig::default()
+            },
+            routing_strategy: CodexLocalAccessRoutingStrategy::PlanHighFirst,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec!["acc-a".to_string(), "acc-b".to_string()],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        let changed = apply_local_api_safety_preset_to_collection(
+            &mut collection,
+            CodexLocalApiSafetyPresetId::MaximumSafety,
+        );
+
+        assert!(changed);
+        assert_eq!(
+            collection.routing_strategy,
+            CodexLocalAccessRoutingStrategy::Auto
+        );
+        assert!(collection.safety_config.hardened_local_mode);
+        assert_eq!(collection.safety_config.max_concurrent_requests, 1);
+        assert_eq!(collection.safety_config.min_request_interval_seconds, 60);
+        assert_eq!(collection.safety_config.max_retry_accounts, 1);
+        assert_eq!(collection.safety_config.fallback_mode.as_str(), "disabled");
     }
 
     #[test]

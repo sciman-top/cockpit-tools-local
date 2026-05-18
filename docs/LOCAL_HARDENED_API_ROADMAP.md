@@ -453,8 +453,8 @@ Phase 3 checkpoint：
 
 验收：
 
-- [ ] 每个 preset 都能展开为明确配置。
-- [ ] UI 能恢复默认 preset。
+- [x] 每个 preset 都能展开为明确配置。
+- [x] UI 能恢复默认 preset。
 
 任务 16：文档和回滚
 
@@ -505,7 +505,7 @@ P1 必做：
 
 P2 增强：
 
-- [ ] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复仍待实现。
+- [ ] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复已实现，并通过 typecheck、build、locale check 与 safety preset 单测，直连 smoke 仍待执行。
 - [ ] 请求历史扩展和健康趋势。
 - [ ] 可选 LiteLLM 桥接。
 - [ ] 更完整端到端 smoke。

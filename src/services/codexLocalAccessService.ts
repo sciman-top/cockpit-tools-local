@@ -3,6 +3,7 @@ import type {
   CodexLocalAccessPortCleanupResult,
   CodexLocalAccessRoutingStrategy,
   CodexLocalAccessState,
+  CodexLocalApiSafetyPresetId,
   CodexRuntimeIntegrationMode,
   CodexRuntimeModeState,
 } from '../types/codexLocalAccess';
@@ -60,6 +61,12 @@ export async function updateCodexLocalAccessRoutingStrategy(
   strategy: CodexLocalAccessRoutingStrategy,
 ): Promise<CodexLocalAccessState> {
   return await invoke('codex_local_access_update_routing_strategy', { strategy });
+}
+
+export async function applyCodexLocalAccessSafetyPreset(
+  preset: CodexLocalApiSafetyPresetId,
+): Promise<CodexLocalAccessState> {
+  return await invoke('codex_local_access_apply_safety_preset', { preset });
 }
 
 export async function setCodexLocalAccessFollowCurrentAccount(

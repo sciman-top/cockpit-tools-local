@@ -14,6 +14,10 @@ export type CodexRuntimeIntegrationMode =
 
 export type CodexRuntimeAccountKind = 'oauth' | 'api' | 'unknown';
 export type CodexLocalApiFallbackMode = 'disabled' | 'next_request_only' | 'unknown';
+export type CodexLocalApiSafetyPresetId =
+  | 'maximum_safety'
+  | 'balanced_self_use'
+  | 'quota_drain_careful';
 
 export interface CodexRuntimeModeState {
   mode: CodexRuntimeIntegrationMode;

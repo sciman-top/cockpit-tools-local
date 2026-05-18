@@ -1842,6 +1842,8 @@
       "portSaveSuccess": "API 服务端口已更新",
       "routingLabel": "调度账号",
       "routingSaveSuccess": "API 服务调度账号已更新",
+      "safetyPresetSaveSuccess": "API 服务策略预设已恢复",
+      "safetyPresetSaveFailed": "恢复 API 服务策略预设失败",
       "routingDescriptionAuto": "优先高订阅与高剩余额度账号，同档再轮换。",
       "routingDescriptionQuotaHighFirst": "优先选择剩余配额更高的账号。",
       "routingDescriptionQuotaLowFirst": "优先选择剩余配额更低的账号。",
@@ -1907,6 +1909,17 @@
         "planLowFirst": "优先低订阅",
         "expirySoonFirst": "优先近到期"
       },
+      "safetyPreset": {
+        "label": "策略预设",
+        "current": "当前",
+        "custom": "自定义",
+        "maximumSafety": "最高安全",
+        "maximumSafetyDesc": "1 并发 · 60s",
+        "balancedSelfUse": "自用均衡",
+        "balancedSelfUseDesc": "1 并发 · 20s",
+        "quotaDrainCareful": "谨慎消耗",
+        "quotaDrainCarefulDesc": "1 并发 · 30s"
+      },
       "stats": {
         "requests": "总请求数",
         "requestsDetail": "成功 {{success}} / 失败 {{failed}}",
@@ -1928,7 +1941,7 @@
         "auth": "认证",
         "manual": "人工",
         "modelCooldown": "模型冷却",
-        "sticky": "Sticky",
+        "sticky": "粘性",
         "lastError": "最近错误",
         "cooldownUntil": "冷却至",
         "unavailable": "不可用"

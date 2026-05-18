@@ -657,7 +657,18 @@ export function buildCodexAccountPresentation(
             : "",
           resetAt: window.resetTime,
           hintText:
-            window.id === "primary" && weeklyBlocksHourlyHint
+            window.serverBaselineAdjusted
+              ? t(
+                  "codex.quota.freeWeeklyBaselineHint",
+                  "服务端初始 used_percent={{used}}%，已按接近满额显示",
+                  {
+                    used:
+                      window.rawPercentage == null
+                        ? 0
+                        : Math.max(0, 100 - window.rawPercentage),
+                  },
+                )
+              : window.id === "primary" && weeklyBlocksHourlyHint
               ? weeklyBlocksHourlyHint
               : undefined,
         }));

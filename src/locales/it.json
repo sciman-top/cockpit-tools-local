@@ -1517,6 +1517,8 @@
       "historyTitle": "Cronologia attivazioni",
       "taskTitleEdit": "Modifica attività di risveglio",
       "taskTitleNew": "Nuova attività di risveglio",
+      "enableTitle": "Abilita risveglio in background",
+      "enableAction": "Abilita risveglio",
       "riskWarning": "⚠️ Avviso di rischio\nA causa del recente rafforzamento dei controlli di rischio di Google, l’uso della funzione wakeup può aumentare la probabilità di attivare controlli di rischio sull’account (inclusi, ma non limitati a, verifiche aggiuntive o limitazioni temporanee).\nUsala con cautela in base allo stato del tuo account e valuta autonomamente il rischio.\n\nContinuare?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "Attiva/disattiva servizio API",
       "showKey": "Mostra chiave",
       "hideKey": "Nascondi chiave",
+      "hiddenKeyTitle": "Chiave API nascosta",
       "modal": {
         "title": "Aggiungi al servizio API",
         "desc": "Scegli gli account OAuth da includere nella raccolta del servizio API. Gli account aggiunti verranno nascosti dalla panoramica normale e gestiti solo dalla scheda del servizio API.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "Instradamento",
       "routingSaveSuccess": "Instradamento del servizio API aggiornato",
+      "safetyPresetSaveSuccess": "Preset strategia del servizio API ripristinato",
+      "safetyPresetSaveFailed": "Impossibile ripristinare il preset strategia del servizio API",
       "routingDescriptionAuto": "Dà priorità agli account con piano più alto e quota residua maggiore, poi ruota nello stesso livello.",
       "routingDescriptionQuotaHighFirst": "Dà priorità agli account con più quota residua.",
       "routingDescriptionQuotaLowFirst": "Dà priorità agli account con meno quota residua.",
@@ -1806,6 +1811,10 @@
       "clearStats": "Cancella statistiche",
       "clearStatsConfirm": "Cancellare tutte le statistiche del servizio API?",
       "clearStatsSuccess": "Le statistiche del servizio API sono state cancellate",
+      "recoverAccount": "Ripristina salute account",
+      "recoverModel": "Ripristina cooldown del modello corrente: {{model}}",
+      "recoverAccountSuccess": "Salute account ripristinata",
+      "recoverModelSuccess": "Cooldown del modello corrente ripristinato",
       "killPortAction": "Pulisci porta",
       "killPortTitle": "Pulisci porta del servizio API",
       "killPortConfirmMessage": "Gli altri processi che usano la porta locale {{port}} verranno chiusi forzatamente, poi il servizio API verrà riavviato. Continuare?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "Piano alto prima",
         "planLowFirst": "Piano basso prima",
         "expirySoonFirst": "Scadenza vicina prima"
+      },
+      "safetyPreset": {
+        "label": "Preset strategia",
+        "current": "Attuale",
+        "custom": "Personalizzato",
+        "maximumSafety": "Massima sicurezza",
+        "maximumSafetyDesc": "1 concorrente · 60s",
+        "balancedSelfUse": "Uso personale bilanciato",
+        "balancedSelfUseDesc": "1 concorrente · 20s",
+        "quotaDrainCareful": "Consumo quota prudente",
+        "quotaDrainCarefulDesc": "1 concorrente · 30s"
+      },
+      "health": {
+        "title": "Salute",
+        "healthy": "Sano",
+        "cooling": "Raffreddamento",
+        "auth": "Autenticazione",
+        "manual": "Intervento manuale",
+        "modelCooldown": "Cooldown modello",
+        "sticky": "Fissato",
+        "lastError": "Ultimo errore",
+        "cooldownUntil": "Cooldown fino a",
+        "unavailable": "Non disponibile"
       },
       "statusUnconfigured": "Non configurato",
       "expandDetails": "Espandi dettagli",

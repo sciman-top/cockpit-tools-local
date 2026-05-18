@@ -1517,6 +1517,8 @@
       "historyTitle": "Historia wywołań",
       "taskTitleEdit": "Edytuj zadanie wybudzania",
       "taskTitleNew": "Nowe zadanie wybudzania",
+      "enableTitle": "Włącz wybudzanie w tle",
+      "enableAction": "Włącz wybudzanie",
       "riskWarning": "⚠️ Ostrzeżenie o ryzyku\nZe względu na ostatnie zaostrzenie mechanizmów kontroli ryzyka Google korzystanie z funkcji wybudzania może zwiększyć prawdopodobieństwo uruchomienia kontroli ryzyka konta (w tym m.in. dodatkowej weryfikacji lub tymczasowych ograniczeń).\nKorzystaj ostrożnie, biorąc pod uwagę stan konta, i samodzielnie oceń ryzyko.\n\nKontynuować?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "Przełącz usługę API",
       "showKey": "Pokaż klucz",
       "hideKey": "Ukryj klucz",
+      "hiddenKeyTitle": "Klucz API ukryty",
       "modal": {
         "title": "Dodaj do usługi API",
         "desc": "Wybierz konta OAuth, które chcesz dodać do kolekcji usługi API. Dodane konta zostaną ukryte w zwykłym widoku i będą zarządzane tylko z karty usługi API.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "Trasowanie",
       "routingSaveSuccess": "Zaktualizowano trasowanie usługi API",
+      "safetyPresetSaveSuccess": "Przywrócono preset strategii usługi API",
+      "safetyPresetSaveFailed": "Nie udało się przywrócić presetu strategii usługi API",
       "routingDescriptionAuto": "Preferuje konta z wyższym planem i większym pozostałym limitem, a w tym samym planie rotuje.",
       "routingDescriptionQuotaHighFirst": "Preferuje konta z większym pozostałym limitem.",
       "routingDescriptionQuotaLowFirst": "Preferuje konta z mniejszym pozostałym limitem.",
@@ -1806,6 +1811,10 @@
       "clearStats": "Wyczyść statystyki",
       "clearStatsConfirm": "Wyczyścić wszystkie statystyki usługi API?",
       "clearStatsSuccess": "Statystyki usługi API zostały wyczyszczone",
+      "recoverAccount": "Przywróć stan konta",
+      "recoverModel": "Przywróć cooldown bieżącego modelu: {{model}}",
+      "recoverAccountSuccess": "Stan konta został przywrócony",
+      "recoverModelSuccess": "Cooldown bieżącego modelu został przywrócony",
       "killPortAction": "Wyczyść port",
       "killPortTitle": "Wyczyść port usługi API",
       "killPortConfirmMessage": "Inne procesy używające lokalnego portu {{port}} zostaną wymuszenie zamknięte, a następnie usługa API zostanie uruchomiona ponownie. Kontynuować?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "Najpierw wyższy plan",
         "planLowFirst": "Najpierw niższy plan",
         "expirySoonFirst": "Najbliższe wygaśnięcie"
+      },
+      "safetyPreset": {
+        "label": "Preset strategii",
+        "current": "Bieżący",
+        "custom": "Niestandardowy",
+        "maximumSafety": "Maksymalne bezpieczeństwo",
+        "maximumSafetyDesc": "1 równocześnie · 60s",
+        "balancedSelfUse": "Zrównoważone użycie własne",
+        "balancedSelfUseDesc": "1 równocześnie · 20s",
+        "quotaDrainCareful": "Ostrożne zużycie limitu",
+        "quotaDrainCarefulDesc": "1 równocześnie · 30s"
+      },
+      "health": {
+        "title": "Stan",
+        "healthy": "Zdrowe",
+        "cooling": "Cooldown",
+        "auth": "Autoryzacja",
+        "manual": "Interwencja ręczna",
+        "modelCooldown": "Cooldown modelu",
+        "sticky": "Przypięte",
+        "lastError": "Ostatni błąd",
+        "cooldownUntil": "Cooldown do",
+        "unavailable": "Niedostępne"
       },
       "statusUnconfigured": "Nieskonfigurowane",
       "expandDetails": "Rozwiń szczegóły",

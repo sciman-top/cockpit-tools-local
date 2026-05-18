@@ -12,7 +12,7 @@
 
 ## 默认安全姿态
 
-API service 的默认安全配置等价于 `maximum_safety`：
+API service 的默认安全配置等价于 `balanced_self_use`；需要更保守时可一键恢复 `maximum_safety`：
 
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -62,6 +62,10 @@ API service 的默认安全配置等价于 `maximum_safety`：
 - `minRequestIntervalSeconds >= 30`
 - `fallbackMode = next_request_only`
 - 只在下一请求边界选择下一个 healthy 账号。
+
+## Preset 恢复入口
+
+API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_safety_preset`，把当前集合恢复到对应 safety config，并重置为 hardened fill-first 起点。Preset 不会改账号池成员、端口、API key 或运行模式。
 
 ## Codex CLI 直连 Cockpit
 

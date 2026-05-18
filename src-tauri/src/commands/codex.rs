@@ -4,7 +4,7 @@ use crate::models::codex::{
 };
 use crate::models::codex_local_access::{
     CodexLocalAccessPortCleanupResult, CodexLocalAccessRoutingStrategy, CodexLocalAccessState,
-    CodexRuntimeIntegrationMode, CodexRuntimeModeState,
+    CodexLocalApiSafetyPresetId, CodexRuntimeIntegrationMode, CodexRuntimeModeState,
 };
 use crate::modules::{
     codex_account, codex_local_access, codex_oauth, codex_quota, codex_speed, codex_wakeup,
@@ -806,6 +806,13 @@ pub async fn codex_local_access_update_routing_strategy(
     strategy: CodexLocalAccessRoutingStrategy,
 ) -> Result<CodexLocalAccessState, String> {
     codex_local_access::update_local_access_routing_strategy(strategy).await
+}
+
+#[tauri::command]
+pub async fn codex_local_access_apply_safety_preset(
+    preset: CodexLocalApiSafetyPresetId,
+) -> Result<CodexLocalAccessState, String> {
+    codex_local_access::apply_local_access_safety_preset(preset).await
 }
 
 #[tauri::command]

@@ -1517,6 +1517,8 @@
       "historyTitle": "Histórico de disparos",
       "taskTitleEdit": "Editar tarefa de despertar",
       "taskTitleNew": "Nova tarefa de despertar",
+      "enableTitle": "Ativar wakeup em segundo plano",
+      "enableAction": "Ativar wakeup",
       "riskWarning": "⚠️ Aviso de risco\nDevido ao recente endurecimento do controle de risco do Google, usar o recurso de wakeup pode aumentar a chance de acionar controles de risco na conta (incluindo, mas não se limitando a, verificação adicional ou limitações temporárias).\nUse com cautela de acordo com a situação da sua conta e avalie o risco por conta própria.\n\nContinuar?"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "Alternar serviço de API",
       "showKey": "Mostrar chave",
       "hideKey": "Ocultar chave",
+      "hiddenKeyTitle": "Chave de API oculta",
       "modal": {
         "title": "Adicionar ao serviço de API",
         "desc": "Escolha as contas OAuth que deseja incluir na coleção do serviço de API. As contas adicionadas serão ocultadas da visão normal e gerenciadas apenas no cartão do serviço de API.",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "Roteamento",
       "routingSaveSuccess": "Roteamento do serviço API atualizado",
+      "safetyPresetSaveSuccess": "Predefinição de estratégia do serviço API restaurada",
+      "safetyPresetSaveFailed": "Falha ao restaurar a predefinição de estratégia do serviço API",
       "routingDescriptionAuto": "Prioriza contas com plano mais alto e maior cota restante, depois faz rotação dentro do mesmo nível.",
       "routingDescriptionQuotaHighFirst": "Prioriza contas com mais cota restante.",
       "routingDescriptionQuotaLowFirst": "Prioriza contas com menos cota restante.",
@@ -1806,6 +1811,10 @@
       "clearStats": "Limpar estatísticas",
       "clearStatsConfirm": "Limpar todas as estatísticas do serviço API?",
       "clearStatsSuccess": "As estatísticas do serviço API foram limpas",
+      "recoverAccount": "Recuperar saúde da conta",
+      "recoverModel": "Recuperar cooldown do modelo atual: {{model}}",
+      "recoverAccountSuccess": "A saúde da conta foi recuperada",
+      "recoverModelSuccess": "O cooldown do modelo atual foi recuperado",
       "killPortAction": "Limpar porta",
       "killPortTitle": "Limpar porta do serviço de API",
       "killPortConfirmMessage": "Outros processos que usam a porta local {{port}} serão encerrados à força, e o serviço de API será reiniciado. Continuar?",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "Plano alto primeiro",
         "planLowFirst": "Plano baixo primeiro",
         "expirySoonFirst": "Vence antes primeiro"
+      },
+      "safetyPreset": {
+        "label": "Predefinição de estratégia",
+        "current": "Atual",
+        "custom": "Personalizado",
+        "maximumSafety": "Segurança máxima",
+        "maximumSafetyDesc": "1 simultâneo · 60s",
+        "balancedSelfUse": "Uso próprio equilibrado",
+        "balancedSelfUseDesc": "1 simultâneo · 20s",
+        "quotaDrainCareful": "Consumo cuidadoso de cota",
+        "quotaDrainCarefulDesc": "1 simultâneo · 30s"
+      },
+      "health": {
+        "title": "Saúde",
+        "healthy": "Saudável",
+        "cooling": "Em cooldown",
+        "auth": "Autenticação",
+        "manual": "Ação manual",
+        "modelCooldown": "Cooldown do modelo",
+        "sticky": "Fixado",
+        "lastError": "Último erro",
+        "cooldownUntil": "Cooldown até",
+        "unavailable": "Indisponível"
       },
       "statusUnconfigured": "Não configurado",
       "expandDetails": "Expandir detalhes",

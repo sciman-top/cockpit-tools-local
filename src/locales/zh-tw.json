@@ -1517,6 +1517,8 @@
       "historyTitle": "觸發歷史",
       "taskTitleEdit": "編輯喚醒任務",
       "taskTitleNew": "新建喚醒任務",
+      "enableTitle": "啟用背景喚醒",
+      "enableAction": "啟用喚醒",
       "riskWarning": "⚠️ 風險提示\n近期 Google 風控策略收緊，使用喚醒功能可能提高帳號觸發風控的機率（包括但不限於額外驗證、暫時限制等）。\n請依帳號實際情況謹慎使用，並自行評估風險。\n\n確認繼續？"
     },
     "form": {
@@ -1743,6 +1745,7 @@
       "toggleService": "切換 API 服務",
       "showKey": "顯示金鑰",
       "hideKey": "隱藏金鑰",
+      "hiddenKeyTitle": "密鑰已隱藏",
       "modal": {
         "title": "加入 API 服務",
         "desc": "選擇要加入 API 服務集合的 OAuth 帳號。加入後，這些帳號會從一般面板隱藏，僅在 API 服務卡片中管理。",
@@ -1797,6 +1800,8 @@
       },
       "routingLabel": "調度策略",
       "routingSaveSuccess": "API 服務調度策略已更新",
+      "safetyPresetSaveSuccess": "API 服務策略預設已恢復",
+      "safetyPresetSaveFailed": "恢復 API 服務策略預設失敗",
       "routingDescriptionAuto": "優先高訂閱且剩餘配額較高的帳號，同檔位再輪替。",
       "routingDescriptionQuotaHighFirst": "優先選擇剩餘配額較高的帳號。",
       "routingDescriptionQuotaLowFirst": "優先選擇剩餘配額較低的帳號。",
@@ -1806,6 +1811,10 @@
       "clearStats": "清除統計",
       "clearStatsConfirm": "確定要清空 API 服務統計嗎？",
       "clearStatsSuccess": "API 服務統計已清空",
+      "recoverAccount": "恢復帳號健康狀態",
+      "recoverModel": "恢復目前模型 cooldown：{{model}}",
+      "recoverAccountSuccess": "帳號健康狀態已恢復",
+      "recoverModelSuccess": "目前模型 cooldown 已恢復",
       "killPortAction": "清理連接埠",
       "killPortTitle": "清理 API 服務連接埠",
       "killPortConfirmMessage": "將強制結束占用本機 {{port}} 連接埠的其他處理程序，然後重新啟動 API 服務。確認繼續嗎？",
@@ -1821,6 +1830,29 @@
         "planHighFirst": "優先高訂閱",
         "planLowFirst": "優先低訂閱",
         "expirySoonFirst": "優先近到期"
+      },
+      "safetyPreset": {
+        "label": "策略預設",
+        "current": "目前",
+        "custom": "自訂",
+        "maximumSafety": "最高安全",
+        "maximumSafetyDesc": "1 併發 · 60s",
+        "balancedSelfUse": "自用均衡",
+        "balancedSelfUseDesc": "1 併發 · 20s",
+        "quotaDrainCareful": "謹慎消耗",
+        "quotaDrainCarefulDesc": "1 併發 · 30s"
+      },
+      "health": {
+        "title": "健康狀態",
+        "healthy": "健康",
+        "cooling": "冷卻",
+        "auth": "認證",
+        "manual": "人工",
+        "modelCooldown": "模型冷卻",
+        "sticky": "黏性",
+        "lastError": "最近錯誤",
+        "cooldownUntil": "冷卻至",
+        "unavailable": "不可用"
       },
       "statusUnconfigured": "未設定",
       "expandDetails": "展開詳情",
