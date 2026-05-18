@@ -47,7 +47,7 @@
 - Cockpit 的流式写出路径在下游 headers 或 chunk 发出后已不能改变响应身份；stream guard 应跟随写出状态，而不是只跟随 upstream response 是否成功。
 - Sub2API 的 `IsSchedulable()` 和 CLIProxyAPI 的 `isAuthBlockedForModel()` 都把“可调度性”做成单一判定入口；Cockpit 应避免把 cooldown、auth suspect、manual pause 分散在 selector、retry 和 UI 三处各自判断。
 - 多账号池打开后，默认路由仍应是稳定起点或 sticky/fill-first；2026-05-18 已把 hardened mode 的请求起点固定为 0，加入 process sticky binding、cooldown/auth/manual sticky 清理，以及完整候选池 + 单请求尝试 cap，避免每个请求推进 round-robin cursor。
-- UI 只应展示脱敏 health summary：计数、sticky account hash、最近错误类型和 cooldown 到期时间；2026-05-18 已接入 API 服务面板首个只读切片，手动恢复仍需显式用户动作和 audit event。
+- UI 只应展示脱敏 health summary：计数、sticky account hash、最近错误类型和 cooldown 到期时间；2026-05-18 已接入 API 服务面板和显式用户动作触发的单账号/单模型 cooldown 恢复，恢复事件只写入脱敏 audit event。
 - LiteLLM 的 pre-call rate checks 提醒 Cockpit：本地限流要发生在真正调用上游前，并返回本地 `Retry-After`；不能等上游 429 后才反应。
 - 多个参考项目有 request/body logging 能力或 raw error 兜底日志。Cockpit hardened mode 应借鉴其脱敏工具和测试，不借鉴默认捕获 prompt/response 的能力。
 - CLIProxyAPI 的 usage logging、New API 的 request log 与 LiteLLM observability 都证明“结构化事件链”是成熟网关常见实践；Cockpit 的差异化边界是本机 JSONL、脱敏字段、低频被动写入，不记录正文、不把 audit 当额度探测器。

@@ -35,6 +35,13 @@ export async function clearCodexLocalAccessStats(): Promise<CodexLocalAccessStat
   return await invoke('codex_local_access_clear_stats');
 }
 
+export async function recoverCodexLocalAccessHealth(
+  accountId: string,
+  model?: string | null,
+): Promise<CodexLocalAccessState> {
+  return await invoke('codex_local_access_recover_health', { accountId, model });
+}
+
 export async function prepareCodexLocalAccessForRestart(): Promise<CodexLocalAccessState> {
   return await invoke('codex_local_access_prepare_restart');
 }

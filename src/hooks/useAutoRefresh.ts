@@ -18,7 +18,6 @@ import {
   type CurrentAccountRefreshPlatform,
 } from '../utils/currentAccountRefresh';
 import { isCodexApiKeyAccount } from '../types/codex';
-import * as codexLocalAccessService from '../services/codexLocalAccessService';
 import {
   createAutoRefreshScheduler,
   type AutoRefreshSchedulerHandle,
@@ -80,6 +79,8 @@ interface PlatformRefreshDescriptor {
 const STARTUP_AUTO_REFRESH_SETUP_DELAY_MS = 2500;
 const AUTO_REFRESH_TICK_MS = 5_000;
 const AUTO_REFRESH_MAX_CONCURRENT = 1;
+const CODEX_AUTO_REFRESH_MIN_INTERVAL_MINUTES = 60;
+const CODEX_AUTO_REFRESH_MAX_TARGET_ACCOUNTS = 50;
 
 function minutesToMs(minutes: number): number {
   return minutes * 60 * 1000;
@@ -100,6 +101,13 @@ function buildEnabledPlatformsSummary(
     parts.push(`current=${currentSummary.join('|')}`);
   }
   return parts.join(', ');
+}
+
+function clampCodexAutoRefreshMinutes(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    return value;
+  }
+  return Math.max(value, CODEX_AUTO_REFRESH_MIN_INTERVAL_MINUTES);
 }
 
 export function useAutoRefresh() {
@@ -240,81 +248,6 @@ export function useAutoRefresh() {
             return;
           }
 
-          const wakeupEnabled = localStorage.getItem('agtools.wakeup.enabled') === 'true';
-          if (wakeupEnabled) {
-            const tasksJson = localStorage.getItem('agtools.wakeup.tasks');
-            if (tasksJson) {
-              try {
-                const tasks = JSON.parse(tasksJson);
-                const hasActiveResetTask = Array.isArray(tasks)
-                  && tasks.some((task: unknown) => {
-                    if (!task || typeof task !== 'object') {
-                      return false;
-                    }
-                    const taskObject = task as {
-                      enabled?: boolean;
-                      schedule?: { wakeOnReset?: boolean };
-                    };
-                    return Boolean(taskObject.enabled && taskObject.schedule?.wakeOnReset);
-                  });
-
-                if (
-                  hasActiveResetTask
-                  && (config.auto_refresh_minutes === -1 || config.auto_refresh_minutes > 2)
-                ) {
-                  console.log(
-                    `[AutoRefresh] 检测到活跃的配额重置任务，自动修正刷新间隔: ${config.auto_refresh_minutes} -> 2`,
-                  );
-                  const saveConfigStartedAt = performance.now();
-                  await invoke('save_general_config', {
-                    language: config.language,
-                    theme: config.theme,
-                    autoRefreshMinutes: 2,
-                    codexAutoRefreshMinutes: config.codex_auto_refresh_minutes,
-                    ghcpAutoRefreshMinutes: config.ghcp_auto_refresh_minutes,
-                    windsurfAutoRefreshMinutes: config.windsurf_auto_refresh_minutes,
-                    kiroAutoRefreshMinutes: config.kiro_auto_refresh_minutes,
-                    cursorAutoRefreshMinutes: config.cursor_auto_refresh_minutes,
-                    geminiAutoRefreshMinutes: config.gemini_auto_refresh_minutes,
-                    codebuddyAutoRefreshMinutes: config.codebuddy_auto_refresh_minutes,
-                    codebuddyCnAutoRefreshMinutes: config.codebuddy_cn_auto_refresh_minutes,
-                    workbuddyAutoRefreshMinutes: config.workbuddy_auto_refresh_minutes,
-                    qoderAutoRefreshMinutes: config.qoder_auto_refresh_minutes,
-                    traeAutoRefreshMinutes: config.trae_auto_refresh_minutes,
-                    zedAutoRefreshMinutes: config.zed_auto_refresh_minutes,
-                    closeBehavior: config.close_behavior || 'ask',
-                    opencodeAppPath: config.opencode_app_path ?? '',
-                    antigravityAppPath: config.antigravity_app_path ?? '',
-                    codexAppPath: config.codex_app_path ?? '',
-                    vscodeAppPath: config.vscode_app_path ?? '',
-                    windsurfAppPath: config.windsurf_app_path ?? '',
-                    kiroAppPath: config.kiro_app_path ?? '',
-                    cursorAppPath: config.cursor_app_path ?? '',
-                    codebuddyAppPath: config.codebuddy_app_path ?? '',
-                    codebuddyCnAppPath: config.codebuddy_cn_app_path ?? '',
-                    qoderAppPath: config.qoder_app_path ?? '',
-                    traeAppPath: config.trae_app_path ?? '',
-                    zedAppPath: config.zed_app_path ?? '',
-                    opencodeSyncOnSwitch: config.opencode_sync_on_switch ?? false,
-                    opencodeAuthOverwriteOnSwitch:
-                      config.opencode_auth_overwrite_on_switch ?? false,
-                    codexLaunchOnSwitch: config.codex_launch_on_switch ?? true,
-                    cursorQuotaAlertEnabled: config.cursor_quota_alert_enabled ?? false,
-                    cursorQuotaAlertThreshold: config.cursor_quota_alert_threshold ?? 20,
-                    geminiQuotaAlertEnabled: config.gemini_quota_alert_enabled ?? false,
-                    geminiQuotaAlertThreshold: config.gemini_quota_alert_threshold ?? 20,
-                  });
-                  console.log(
-                    `[StartupPerf][AutoRefresh] save_general_config completed in ${(performance.now() - saveConfigStartedAt).toFixed(2)}ms`,
-                  );
-                  config.auto_refresh_minutes = 2;
-                }
-              } catch (error) {
-                console.error('[AutoRefresh] 解析任务列表失败:', error);
-              }
-            }
-          }
-
           if (destroyedRef.current) {
             console.log('[StartupPerf][AutoRefresh] setupAutoRefresh aborted before scheduler setup: destroyed flag set');
             return;
@@ -341,17 +274,6 @@ export function useAutoRefresh() {
             const { accounts } = useCodexAccountStore.getState();
             const targetIds = new Set<string>();
 
-            try {
-              const state = await codexLocalAccessService.getCodexLocalAccessState();
-              for (const accountId of state.effectiveAccountIds.length > 0
-                ? state.effectiveAccountIds
-                : state.collection?.accountIds ?? []) {
-                targetIds.add(accountId);
-              }
-            } catch (error) {
-              console.warn('[AutoRefresh] Codex API 服务账号池读取失败:', error);
-            }
-
             for (const account of accounts) {
               if (isCodexApiKeyAccount(account)) {
                 targetIds.add(account.id);
@@ -359,6 +281,12 @@ export function useAutoRefresh() {
             }
 
             if (targetIds.size === 0) {
+              return;
+            }
+            if (targetIds.size > CODEX_AUTO_REFRESH_MAX_TARGET_ACCOUNTS) {
+              console.warn(
+                `[AutoRefresh] Codex 自动刷新跳过：目标账号 ${targetIds.size} 超过上限 ${CODEX_AUTO_REFRESH_MAX_TARGET_ACCOUNTS}`,
+              );
               return;
             }
 
@@ -395,10 +323,10 @@ export function useAutoRefresh() {
             {
               key: 'codex',
               label: 'Codex',
-              intervalMinutes: config.codex_auto_refresh_minutes,
+              intervalMinutes: clampCodexAutoRefreshMinutes(config.codex_auto_refresh_minutes),
               currentMinutes: Math.max(
                 currentRefreshMinutesMap.codex,
-                config.codex_auto_refresh_minutes,
+                clampCodexAutoRefreshMinutes(config.codex_auto_refresh_minutes),
               ),
               fullRefreshingRef: codexRefreshingRef,
               currentRefreshingRef: codexCurrentRefreshingRef,

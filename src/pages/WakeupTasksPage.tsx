@@ -116,21 +116,6 @@ interface WakeupTask {
   schedule: ScheduleConfig;
 }
 
-interface WakeupGeneralConfig {
-  language?: string;
-  theme?: string;
-  auto_refresh_minutes: number;
-  codex_auto_refresh_minutes?: number;
-  close_behavior?: string;
-  opencode_app_path?: string;
-  antigravity_app_path?: string;
-  codex_app_path?: string;
-  vscode_app_path?: string;
-  opencode_sync_on_switch?: boolean;
-  opencode_auth_overwrite_on_switch?: boolean;
-  codex_launch_on_switch?: boolean;
-}
-
 interface WakeupHistoryRecord {
   id: string;
   timestamp: number;
@@ -1929,51 +1914,6 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
     return 0;
   };
 
-  /**
-   * 确保配额刷新间隔满足最小要求
-   * 用于配额重置模式，确保数据足够实时
-   */
-  const ensureMinRefreshInterval = async (minMinutes: number) => {
-    try {
-      const config = await invoke<WakeupGeneralConfig>('get_general_config');
-      
-      // 如果刷新间隔大于最小值（或禁用），自动调整
-      if (config.auto_refresh_minutes < 0 || config.auto_refresh_minutes > minMinutes) {
-        const oldValue = config.auto_refresh_minutes;
-        
-        // 更新配置
-        await invoke('save_general_config', {
-          language: config.language,
-          theme: config.theme,
-          autoRefreshMinutes: minMinutes,
-          codexAutoRefreshMinutes: config.codex_auto_refresh_minutes ?? 10,
-          closeBehavior: config.close_behavior || 'ask',
-          opencodeAppPath: config.opencode_app_path ?? '',
-          antigravityAppPath: config.antigravity_app_path ?? '',
-          codexAppPath: config.codex_app_path ?? '',
-          vscodeAppPath: config.vscode_app_path ?? '',
-          opencodeSyncOnSwitch: config.opencode_sync_on_switch ?? false,
-          opencodeAuthOverwriteOnSwitch: config.opencode_auth_overwrite_on_switch ?? false,
-          codexLaunchOnSwitch: config.codex_launch_on_switch ?? true,
-        });
-        
-        // 触发配置更新事件（让 useAutoRefresh 重新设置定时器）
-        window.dispatchEvent(new Event('config-updated'));
-        
-        // 通知用户
-        const oldText = oldValue < 0 ? t('wakeup.refreshInterval.disabled') : `${oldValue} ${t('wakeup.refreshInterval.minutes')}`;
-        const newText = `${minMinutes} ${t('wakeup.refreshInterval.minutes')}`;
-        
-        setNotice({
-          text: t('wakeup.notice.refreshIntervalAdjusted', { old: oldText, new: newText }),
-          tone: 'success',
-        });
-      }
-    } catch (error) {
-      console.error('[WakeupTasks] 调整刷新间隔失败:', error);
-    }
-  };
-
   const validateCrontabInput = async (expr: string, options?: { showSuccess?: boolean }) => {
     const showSuccess = options?.showSuccess ?? false;
     const trimmed = expr.trim();
@@ -2116,11 +2056,6 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
       return [baseTask, ...prev];
     });
 
-    // 如果启用了配额重置模式，确保刷新间隔满足最小要求
-    if (formEnabled && formTriggerMode === 'quota_reset') {
-      await ensureMinRefreshInterval(2);
-    }
-
     setShowModal(false);
     setNotice({ text: t('wakeup.notice.taskSaved', { name }), tone: 'success' });
   };
@@ -2160,6 +2095,15 @@ export function WakeupTasksPage({ onNavigate }: WakeupPageProps) {
   const handleToggleWakeup = async (event?: React.MouseEvent) => {
     event?.preventDefault();
     if (!wakeupEnabled) {
+      const confirmed = await confirmDialog(t('wakeup.dialogs.riskWarning'), {
+        title: t('wakeup.dialogs.enableTitle'),
+        kind: 'warning',
+        okLabel: t('wakeup.dialogs.enableAction'),
+        cancelLabel: t('common.cancel'),
+      });
+      if (!confirmed) {
+        return;
+      }
       setWakeupEnabled(true);
       setNotice({ text: t('wakeup.notice.featureOn') });
       return;

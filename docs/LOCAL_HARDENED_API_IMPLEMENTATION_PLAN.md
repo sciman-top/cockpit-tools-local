@@ -374,19 +374,20 @@ flowchart TD
 
 描述：UI 展示 API service 健康状态，并提供手动恢复/暂停，不展示敏感内容。
 
-状态：2026-05-18 已完成只读可观测性切片：`CodexLocalAccessState.health` 暴露脱敏 health summary，包含 healthy/cooling/auth/manual/model cooldown 计数、sticky account hash、最近错误类型和最近 cooldown 到期时间；API 服务面板展示这些字段。该切片只读本地 health registry，不发起上游请求，不展示账号 ID/邮箱。手动恢复/暂停仍留到下一切片。
+状态：2026-05-18 已完成只读可观测性与手动恢复切片：`CodexLocalAccessState.health` 暴露脱敏 health summary，包含 healthy/cooling/auth/manual/model cooldown 计数、sticky account hash、最近错误类型和最近 cooldown 到期时间；API 服务面板展示这些字段。`codex_local_access_recover_health` 仅在用户显式点击时本地清理单账号或当前模型 cooldown，写入脱敏 audit event，不发起上游请求、不刷新额度、不展示账号 ID/邮箱。手动暂停仍留到后续切片。
 
 验收：
 
 - [x] 展示当前 sticky account hash。
 - [x] 展示 healthy/cooling/auth_failed/manual_required 数量。
 - [x] 展示最近错误类型和 cooldown 到期时间。
-- [ ] 可手动恢复单账号或单模型 cooldown。
-- [ ] 不展示完整邮箱、完整 key、token、prompt、response。
+- [x] 可手动恢复单账号或单模型 cooldown。
+- [x] health/recovery 面板不展示完整邮箱、完整 key、token、prompt、response。
 
 验证：
 
 - [x] health summary 脱敏单测：`cargo test --package cockpit-tools health_summary --quiet`
+- [x] 手动恢复单测：`cargo test --package cockpit-tools manual_recovery --quiet`
 - [x] `npm run typecheck`
 - [ ] 手动 UI smoke。
 
@@ -402,12 +403,14 @@ flowchart TD
 
 描述：hardened mode 下把配额刷新、quota reset wakeup、startup wakeup 统一纳入低频和显式 opt-in 规则。
 
+状态：2026-05-18 已完成首个前端策略切片：`useAutoRefresh` 不再因 quota reset wakeup 自动把全局刷新间隔改为 2 分钟；Codex 自动刷新不再读取 API service OAuth 账号池做批量探测，只保留 API key 类账号刷新，且超过 50 个目标时跳过；后台唤醒总开关开启前增加风险确认。后续仍需补 backend wakeup/reset 单测或 smoke。
+
 验收：
 
-- [ ] 默认不批量刷新 500+ 账号。
-- [ ] cooldown 账号不通过高频刷新探测恢复。
-- [ ] quota reset wakeup 不自动把全局刷新间隔调到高频。
-- [ ] 启用后台唤醒前有清晰风险提示。
+- [x] 默认不批量刷新 500+ 账号。
+- [x] cooldown 账号不通过高频刷新探测恢复。
+- [x] quota reset wakeup 不自动把全局刷新间隔调到高频。
+- [x] 启用后台唤醒前有清晰风险提示。
 
 验证：
 

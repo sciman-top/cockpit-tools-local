@@ -4368,6 +4368,38 @@ export function CodexAccountsPage() {
     }
   }, [setMessage, t]);
 
+  const handleRecoverLocalAccessHealth = useCallback(
+    async (accountId: string, model?: string | null) => {
+      setLocalAccessSaving(true);
+      try {
+        const nextState =
+          await codexLocalAccessService.recoverCodexLocalAccessHealth(
+            accountId,
+            model || null,
+          );
+        setLocalAccessState(nextState);
+        setMessage({
+          text: model
+            ? t(
+                "codex.localAccess.recoverModelSuccess",
+                "当前模型 cooldown 已恢复",
+              )
+            : t(
+                "codex.localAccess.recoverAccountSuccess",
+                "账号健康状态已恢复",
+              ),
+        });
+        return nextState;
+      } catch (error) {
+        console.error("Failed to recover local access health:", error);
+        throw new Error(String(error).replace(/^Error:\s*/, ""));
+      } finally {
+        setLocalAccessSaving(false);
+      }
+    },
+    [setMessage, t],
+  );
+
   const handleKillLocalAccessPort = useCallback(async () => {
     if (!localAccessCollection) return;
     const confirmed = await confirmDialog(
@@ -9830,6 +9862,7 @@ export function CodexAccountsPage() {
             }
             onClearStats={handleClearLocalAccessStats}
             onRefreshStats={reloadLocalAccessState}
+            onRecoverHealth={handleRecoverLocalAccessHealth}
             onUpdatePort={handleUpdateLocalAccessPort}
             onUpdateRoutingStrategy={handleUpdateLocalAccessRoutingStrategy}
             onSetFollowCurrentAccount={handleSetLocalAccessFollowCurrentAccount}

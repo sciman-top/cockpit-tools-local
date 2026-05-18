@@ -72,6 +72,10 @@ interface CodexLocalAccessModalProps {
   }) => Promise<unknown> | unknown;
   onClearStats: () => Promise<unknown> | unknown;
   onRefreshStats: () => Promise<unknown> | unknown;
+  onRecoverHealth: (
+    accountId: string,
+    model?: string | null,
+  ) => Promise<unknown> | unknown;
   onUpdatePort: (port: number) => Promise<unknown> | unknown;
   onUpdateRoutingStrategy: (
     strategy: CodexLocalAccessRoutingStrategy,
@@ -167,6 +171,7 @@ export function CodexLocalAccessModal({
   onSaveAccounts,
   onClearStats,
   onRefreshStats,
+  onRecoverHealth,
   onUpdatePort,
   onUpdateRoutingStrategy,
   onSetFollowCurrentAccount,
@@ -897,6 +902,14 @@ export function CodexLocalAccessModal({
     }
   };
 
+  const handleRecoverHealth = async (accountId: string, model?: string | null) => {
+    await runAction(async () => {
+      await onRecoverHealth(accountId, model || null);
+    }, model
+      ? t('codex.localAccess.recoverModelSuccess', '当前模型 cooldown 已恢复')
+      : t('codex.localAccess.recoverAccountSuccess', '账号健康状态已恢复'));
+  };
+
   const handleToggleEnabled = async () => {
     await runAction(
       async () => {
@@ -1464,6 +1477,36 @@ export function CodexLocalAccessModal({
                                     })}
                               </span>
                             </div>
+                          </div>
+                          <div className="codex-local-access-account-stat-actions">
+                            <button
+                              type="button"
+                              className="folder-icon-btn"
+                              onClick={() => void handleRecoverHealth(account.id, null)}
+                              title={t('codex.localAccess.recoverAccount', '恢复账号健康状态')}
+                              aria-label={t('codex.localAccess.recoverAccount', '恢复账号健康状态')}
+                              disabled={actionBusy}
+                            >
+                              <Wrench size={14} />
+                            </button>
+                            {selectedModelId ? (
+                              <button
+                                type="button"
+                                className="folder-icon-btn"
+                                onClick={() => void handleRecoverHealth(account.id, selectedModelId)}
+                                title={t('codex.localAccess.recoverModel', {
+                                  model: selectedModelId,
+                                  defaultValue: '恢复当前模型 cooldown：{{model}}',
+                                })}
+                                aria-label={t('codex.localAccess.recoverModel', {
+                                  model: selectedModelId,
+                                  defaultValue: '恢复当前模型 cooldown：{{model}}',
+                                })}
+                                disabled={actionBusy}
+                              >
+                                <RefreshCw size={14} />
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                       </div>

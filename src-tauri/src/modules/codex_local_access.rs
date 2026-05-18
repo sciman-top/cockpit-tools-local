@@ -3725,6 +3725,70 @@ fn update_health_registry_from_classified_error(
     }
 }
 
+fn recover_health_registry_account(
+    registry: &mut CodexLocalAccessHealthRegistry,
+    account_id: &str,
+    model: Option<&str>,
+    now: i64,
+) -> bool {
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return false;
+    }
+
+    let model = model.map(str::trim).filter(|value| !value.is_empty());
+    let mut changed = false;
+
+    if let Some(model) = model {
+        changed |= registry
+            .model_cooldowns
+            .remove(&health_registry_model_key(account_id, model))
+            .is_some();
+    } else {
+        let before_len = registry.model_cooldowns.len();
+        let model_key_prefix = format!("{}::", account_id);
+        registry.model_cooldowns.retain(|key, cooldown| {
+            cooldown.account_id.trim() != account_id && !key.starts_with(&model_key_prefix)
+        });
+        changed |= registry.model_cooldowns.len() != before_len;
+
+        if let Some(account) = registry.accounts.get_mut(account_id) {
+            let should_recover = account.manual_required
+                || matches!(
+                    account.status,
+                    CodexLocalAccessAccountHealthStatus::CoolingDown
+                        | CodexLocalAccessAccountHealthStatus::Exhausted
+                        | CodexLocalAccessAccountHealthStatus::AuthSuspect
+                        | CodexLocalAccessAccountHealthStatus::ManualRequired
+                );
+
+            if should_recover {
+                account.status = CodexLocalAccessAccountHealthStatus::EstimatedAvailable;
+                account.cooldown_until_ms = None;
+                account.exhausted_at_ms = None;
+                account.estimated_reset_at_ms = None;
+                account.estimated_remaining_percentage = Some(100);
+                account.reset_source = Some("manual_recovery".to_string());
+                account.confidence = Some("manual".to_string());
+                account.manual_required = false;
+                account.last_status = None;
+                account.last_error_type = None;
+                account.last_provider_code = None;
+                account.last_request_id = None;
+                account.updated_at = now;
+                changed = true;
+            }
+        }
+    }
+
+    if changed {
+        registry.schema_version = CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION;
+        registry.updated_at = now;
+    }
+
+    changed
+}
+
 fn health_registry_account_is_schedulable(
     registry: &CodexLocalAccessHealthRegistry,
     account_id: &str,
@@ -4669,15 +4733,32 @@ async fn bind_response_affinity(response_id: &str, account_id: &str) {
     prune_runtime_routing_state(&mut runtime, now);
 }
 
-async fn clear_model_cooldown(account_id: &str, model_key: &str) {
+async fn clear_model_cooldown(account_id: &str, model_key: &str) -> bool {
     let Some(cooldown_key) = build_cooldown_key(account_id, model_key) else {
-        return;
+        return false;
     };
 
     let mut runtime = gateway_runtime().lock().await;
     let now = now_ms();
     prune_runtime_routing_state(&mut runtime, now);
-    runtime.model_cooldowns.remove(&cooldown_key);
+    runtime.model_cooldowns.remove(&cooldown_key).is_some()
+}
+
+async fn clear_account_model_cooldowns(account_id: &str) -> bool {
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return false;
+    }
+
+    let mut runtime = gateway_runtime().lock().await;
+    let now = now_ms();
+    prune_runtime_routing_state(&mut runtime, now);
+    let prefix = format!("{}\u{1f}", account_id);
+    let before_len = runtime.model_cooldowns.len();
+    runtime
+        .model_cooldowns
+        .retain(|cooldown_key, _| !cooldown_key.starts_with(&prefix));
+    runtime.model_cooldowns.len() != before_len
 }
 
 async fn set_model_cooldown(account_id: &str, model_key: &str, retry_after: Duration) {
@@ -5532,6 +5613,48 @@ pub async fn clear_local_access_stats() -> Result<CodexLocalAccessState, String>
         runtime.stats_dirty = true;
     }
     schedule_stats_flush_if_needed().await;
+
+    snapshot_state().await
+}
+
+pub async fn recover_local_access_health(
+    account_id: &str,
+    model: Option<&str>,
+) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded_without_start().await?;
+
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return Err("账号 ID 不能为空".to_string());
+    }
+    let model = model.map(str::trim).filter(|value| !value.is_empty());
+
+    let collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    }
+    .ok_or_else(|| "API 服务集合尚未创建".to_string())?;
+
+    if !collection
+        .account_ids
+        .iter()
+        .any(|collection_account_id| collection_account_id == account_id)
+    {
+        return Err("账号不在 API 服务集合中".to_string());
+    }
+
+    let now = now_ms();
+    let mut registry = load_health_registry_from_disk()?;
+    let registry_changed = recover_health_registry_account(&mut registry, account_id, model, now);
+    if registry_changed {
+        save_health_registry_to_disk(&registry)?;
+    }
+
+    let runtime_changed = match model {
+        Some(model) => clear_model_cooldown(account_id, model).await,
+        None => clear_account_model_cooldowns(account_id).await,
+    };
+    record_manual_recovery_audit_event(account_id, model, registry_changed || runtime_changed);
 
     snapshot_state().await
 }
@@ -6424,6 +6547,31 @@ fn record_audit_event_from_context(
         outcome,
         detail,
     ));
+}
+
+fn record_manual_recovery_audit_event(account_id: &str, model: Option<&str>, changed: bool) {
+    let model = model.map(str::trim).filter(|value| !value.is_empty());
+    let context = AuditContext {
+        request_id: "manual_recovery".to_string(),
+        route: "manual_recovery".to_string(),
+        model: safe_log_field(model, 96),
+        account_hash: failure_log_account_hash(Some(account_id)),
+    };
+    record_audit_event_from_context(
+        &context,
+        "manual_recovery",
+        None,
+        None,
+        None,
+        Some("recovered"),
+        BTreeMap::from([
+            (
+                "scope".to_string(),
+                if model.is_some() { "model" } else { "account" }.to_string(),
+            ),
+            ("changed".to_string(), changed.to_string()),
+        ]),
+    );
 }
 
 fn classified_audit_outcome(classified: &ClassifiedCodexUpstreamError) -> &'static str {
@@ -8468,9 +8616,10 @@ mod tests {
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
         parse_codex_retry_after, parse_responses_payload_from_upstream,
         parse_retry_after_header_value, pin_process_sticky_account, prepare_gateway_request,
-        prune_process_sticky_binding, reset_local_api_backpressure_for_tests,
-        resolve_supported_model_alias, retry_failover_account_attempt_limit,
-        retry_failover_max_retries, save_health_registry_to_path, set_runtime_integration_mode,
+        prune_process_sticky_binding, recover_health_registry_account,
+        reset_local_api_backpressure_for_tests, resolve_supported_model_alias,
+        retry_failover_account_attempt_limit, retry_failover_max_retries,
+        save_health_registry_to_path, set_runtime_integration_mode,
         should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, sort_account_ids_by_health_estimate,
@@ -8483,8 +8632,9 @@ mod tests {
     use crate::models::codex::{CodexAccount, CodexApiProviderMode};
     use crate::models::codex_local_access::{
         CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
-        CodexLocalAccessCollection, CodexLocalAccessRoutingStrategy, CodexLocalApiFallbackMode,
-        CodexLocalApiSafetyConfig, CodexRuntimeAccountKind, CodexRuntimeIntegrationMode,
+        CodexLocalAccessCollection, CodexLocalAccessModelCooldown, CodexLocalAccessRoutingStrategy,
+        CodexLocalApiFallbackMode, CodexLocalApiSafetyConfig, CodexRuntimeAccountKind,
+        CodexRuntimeIntegrationMode,
     };
     use reqwest::header::{HeaderValue, RETRY_AFTER};
     use reqwest::StatusCode;
@@ -8919,6 +9069,125 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             "account-3",
             None,
             1_700_000_000_001
+        ));
+    }
+
+    #[test]
+    fn manual_recovery_clears_account_and_model_cooldowns() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "account-cooling".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::CoolingDown,
+                cooldown_until_ms: Some(now + 60_000),
+                exhausted_at_ms: Some(now - 1),
+                estimated_reset_at_ms: Some(now + 60_000),
+                estimated_remaining_percentage: Some(0),
+                last_observed_remaining_percentage: Some(0),
+                reset_source: Some("upstream_reset_hint".to_string()),
+                confidence: Some("confirmed".to_string()),
+                manual_required: true,
+                last_status: Some(429),
+                last_error_type: Some("usage_limit_reached".to_string()),
+                last_request_id: Some("req-cooling".to_string()),
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.model_cooldowns.insert(
+            health_registry_model_key("account-cooling", "gpt-5.5"),
+            CodexLocalAccessModelCooldown {
+                account_id: "account-cooling".to_string(),
+                model: "gpt-5.5".to_string(),
+                cooldown_until_ms: now + 60_000,
+                last_error_type: Some("model_capacity".to_string()),
+                last_request_id: Some("req-model".to_string()),
+                updated_at: now,
+            },
+        );
+
+        assert!(recover_health_registry_account(
+            &mut registry,
+            "account-cooling",
+            None,
+            now + 1
+        ));
+
+        let account = registry
+            .accounts
+            .get("account-cooling")
+            .expect("account health should still exist");
+        assert_eq!(
+            account.status,
+            CodexLocalAccessAccountHealthStatus::EstimatedAvailable
+        );
+        assert!(!account.manual_required);
+        assert_eq!(account.cooldown_until_ms, None);
+        assert_eq!(account.exhausted_at_ms, None);
+        assert_eq!(account.estimated_reset_at_ms, None);
+        assert_eq!(account.estimated_remaining_percentage, Some(100));
+        assert_eq!(account.reset_source.as_deref(), Some("manual_recovery"));
+        assert_eq!(account.confidence.as_deref(), Some("manual"));
+        assert!(registry.model_cooldowns.is_empty());
+        assert!(health_registry_account_is_schedulable(
+            &registry,
+            "account-cooling",
+            Some("gpt-5.5"),
+            now + 1
+        ));
+    }
+
+    #[test]
+    fn manual_recovery_clears_only_selected_model_cooldown() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "account-model".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::Healthy,
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        for model in ["gpt-5.5", "gpt-5.4"] {
+            registry.model_cooldowns.insert(
+                health_registry_model_key("account-model", model),
+                CodexLocalAccessModelCooldown {
+                    account_id: "account-model".to_string(),
+                    model: model.to_string(),
+                    cooldown_until_ms: now + 60_000,
+                    last_error_type: Some("upstream_rate_limit".to_string()),
+                    last_request_id: Some(format!("req-{model}")),
+                    updated_at: now,
+                },
+            );
+        }
+
+        assert!(recover_health_registry_account(
+            &mut registry,
+            "account-model",
+            Some("gpt-5.5"),
+            now + 1
+        ));
+
+        assert!(!registry
+            .model_cooldowns
+            .contains_key(&health_registry_model_key("account-model", "gpt-5.5")));
+        assert!(registry
+            .model_cooldowns
+            .contains_key(&health_registry_model_key("account-model", "gpt-5.4")));
+        assert!(!health_registry_account_is_schedulable(
+            &registry,
+            "account-model",
+            Some("gpt-5.4"),
+            now + 1
+        ));
+        assert!(health_registry_account_is_schedulable(
+            &registry,
+            "account-model",
+            Some("gpt-5.5"),
+            now + 1
         ));
     }
 

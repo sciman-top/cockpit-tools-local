@@ -779,6 +779,14 @@ pub async fn codex_local_access_clear_stats() -> Result<CodexLocalAccessState, S
 }
 
 #[tauri::command]
+pub async fn codex_local_access_recover_health(
+    account_id: String,
+    model: Option<String>,
+) -> Result<CodexLocalAccessState, String> {
+    codex_local_access::recover_local_access_health(&account_id, model.as_deref()).await
+}
+
+#[tauri::command]
 pub async fn codex_local_access_prepare_restart() -> Result<CodexLocalAccessState, String> {
     codex_local_access::prepare_local_access_gateway_for_restart().await
 }

@@ -887,6 +887,7 @@
   --codex-local-account-col: clamp(220px, 28%, 340px);
   --codex-local-metrics-col: clamp(220px, 24%, 300px);
   --codex-local-quota-col: clamp(260px, 30%, 360px);
+  --codex-local-actions-col: 76px;
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
@@ -917,7 +918,8 @@
   grid-template-columns:
     var(--codex-local-account-col)
     var(--codex-local-quota-col)
-    var(--codex-local-metrics-col);
+    var(--codex-local-metrics-col)
+    var(--codex-local-actions-col);
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -965,6 +967,14 @@
   width: 100%;
   scrollbar-width: none;
   -ms-overflow-style: none;
+}
+
+.codex-local-access-account-stat-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
 }
 
 .codex-local-access-account-stat-metrics::-webkit-scrollbar {
@@ -1331,6 +1341,15 @@
 
   .codex-local-access-account-stats {
     grid-template-columns: 1fr;
+  }
+
+  .codex-local-access-account-stat-top {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .codex-local-access-account-stat-actions {
+    justify-content: flex-start;
   }
 
   .codex-local-access-header-meta {

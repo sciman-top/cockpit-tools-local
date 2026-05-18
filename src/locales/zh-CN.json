@@ -1563,6 +1563,8 @@
       "historyTitle": "触发历史",
       "taskTitleEdit": "编辑唤醒任务",
       "taskTitleNew": "新建唤醒任务",
+      "enableTitle": "开启后台唤醒",
+      "enableAction": "开启唤醒",
       "riskWarning": "⚠️ 风险提示\n近期 Google 风控策略收紧，使用唤醒功能可能提高账号触发风控的概率（包括但不限于额外验证、临时限制等）。\n请根据账号实际情况谨慎使用，并自行评估风险。\n\n确认继续？"
     },
     "form": {
@@ -1851,6 +1853,10 @@
       "clearStats": "清除统计",
       "clearStatsConfirm": "确定要清空 API 服务统计吗？",
       "clearStatsSuccess": "API 服务统计已清空",
+      "recoverAccount": "恢复账号健康状态",
+      "recoverModel": "恢复当前模型 cooldown：{{model}}",
+      "recoverAccountSuccess": "账号健康状态已恢复",
+      "recoverModelSuccess": "当前模型 cooldown 已恢复",
       "killPortAction": "清理端口",
       "killPortTitle": "清理 API 服务端口",
       "killPortConfirmMessage": "将强制结束占用本机 {{port}} 端口的其他进程，然后重新启动 API 服务。确认继续吗？",

@@ -1563,6 +1563,8 @@
       "historyTitle": "Trigger History",
       "taskTitleEdit": "Edit Wakeup Task",
       "taskTitleNew": "New Wakeup Task",
+      "enableTitle": "Enable Background Wakeup",
+      "enableAction": "Enable Wakeup",
       "riskWarning": "⚠️ Risk warning\nDue to recent Google risk-control tightening, using the wakeup feature may increase the chance of triggering account risk controls (including but not limited to additional verification or temporary limits).\nPlease use it with caution based on your account status and evaluate the risk yourself.\n\nContinue?"
     },
     "form": {
@@ -1851,6 +1853,10 @@
       "clearStats": "Clear Stats",
       "clearStatsConfirm": "Clear all API service stats?",
       "clearStatsSuccess": "API service stats have been cleared",
+      "recoverAccount": "Recover account health",
+      "recoverModel": "Recover current model cooldown: {{model}}",
+      "recoverAccountSuccess": "Account health has been recovered",
+      "recoverModelSuccess": "Current model cooldown has been recovered",
       "killPortAction": "Clear Port",
       "killPortTitle": "Clear API Service Port",
       "killPortConfirmMessage": "This will force-close other processes using local port {{port}}, then restart the API service. Continue?",
