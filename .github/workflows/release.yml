@@ -1,4 +1,4 @@
-name: Release
+name: Release Cockpit Tools Local
 on:
   push:
     tags:
@@ -135,6 +135,8 @@ jobs:
 
           {
             echo "body<<EOF"
+            echo "> Cockpit Tools Local self-use build. This release is built from sciman-top/cockpit-tools-local main, not mirrored from the upstream official release."
+            echo
             echo "## 更新日志（中文）"
             echo
             printf '%s\n' "$zh_section"
@@ -153,7 +155,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: "v${{ steps.app_version.outputs.VERSION }}"
-          releaseName: "Cockpit Tools v${{ steps.app_version.outputs.VERSION }}"
+          releaseName: "Cockpit Tools Local v${{ steps.app_version.outputs.VERSION }}"
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: true
           prerelease: false
