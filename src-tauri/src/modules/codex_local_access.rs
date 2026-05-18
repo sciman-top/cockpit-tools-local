@@ -3308,7 +3308,10 @@ fn constrain_previous_response_affinity(
     account_ids: Vec<String>,
     affinity_account_id: Option<&str>,
 ) -> Vec<String> {
-    let Some(affinity_account_id) = affinity_account_id.map(str::trim).filter(|value| !value.is_empty()) else {
+    let Some(affinity_account_id) = affinity_account_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
         return account_ids;
     };
     if account_ids
@@ -8335,8 +8338,10 @@ async fn proxy_request_with_account_pool(
         );
         let strategy_account_ids =
             pin_account_to_front(strategy_account_ids, affinity_account_id.as_deref());
-        let strategy_account_ids =
-            constrain_previous_response_affinity(strategy_account_ids, affinity_account_id.as_deref());
+        let strategy_account_ids = constrain_previous_response_affinity(
+            strategy_account_ids,
+            affinity_account_id.as_deref(),
+        );
         let mut attempted_in_round = false;
         let mut round_cooldown_wait: Option<Duration> = None;
 
@@ -8938,22 +8943,22 @@ async fn handle_connection(
         BTreeMap::from([("method".to_string(), prepared_request.method.clone())]),
     );
 
-    let mut backpressure_permit = match acquire_local_api_backpressure(&collection.safety_config).await
-    {
-        Ok(permit) => permit,
-        Err(error) => {
-            let latency_ms = started_at.elapsed().as_millis() as u64;
-            write_proxy_dispatch_error_response(
-                &mut stream,
-                &addr,
-                &prepared_request,
-                error,
-                latency_ms,
-            )
-            .await?;
-            return Ok(());
-        }
-    };
+    let mut backpressure_permit =
+        match acquire_local_api_backpressure(&collection.safety_config).await {
+            Ok(permit) => permit,
+            Err(error) => {
+                let latency_ms = started_at.elapsed().as_millis() as u64;
+                write_proxy_dispatch_error_response(
+                    &mut stream,
+                    &addr,
+                    &prepared_request,
+                    error,
+                    latency_ms,
+                )
+                .await?;
+                return Ok(());
+            }
+        };
 
     let request_timeout =
         Duration::from_secs(collection.safety_config.request_timeout_seconds.max(1));
@@ -9034,9 +9039,9 @@ async fn handle_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_local_api_backpressure, append_audit_event_to_path,
-        apply_collection_routing_strategy, apply_local_api_safety_preset_to_collection,
-        active_stream_lease_count_for_account, build_audit_context, build_audit_event,
+        acquire_local_api_backpressure, active_stream_lease_count_for_account,
+        append_audit_event_to_path, apply_collection_routing_strategy,
+        apply_local_api_safety_preset_to_collection, build_audit_context, build_audit_event,
         build_chat_completion_payload, build_chat_completion_stream_body,
         build_codex_api_failure_log, build_effective_local_access_account_ids,
         build_health_summary_from_registry, build_images_api_payload, build_local_models_response,
@@ -9046,22 +9051,21 @@ mod tests {
         extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
         grant_active_stream_lease, health_registry_account_cooldown_wait,
         health_registry_account_is_schedulable, health_registry_model_key,
-        is_responses_completion_event, json_response_with_retry_after, load_health_registry_from_path,
-        load_runtime_mode_state,
+        is_responses_completion_event, json_response_with_retry_after,
+        load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
         parse_codex_retry_after, parse_responses_payload_from_upstream,
         parse_retry_after_header_value, pin_process_sticky_account, prepare_gateway_request,
         prune_process_sticky_binding, recover_health_registry_account,
         reset_active_stream_leases_for_tests, reset_local_api_backpressure_for_tests,
-        resolve_supported_model_alias,
-        retry_failover_account_attempt_limit, retry_failover_max_retries,
-        save_health_registry_to_path, set_runtime_integration_mode,
+        resolve_supported_model_alias, retry_failover_account_attempt_limit,
+        retry_failover_max_retries, save_health_registry_to_path, set_runtime_integration_mode,
         should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, sort_account_ids_by_health_estimate,
-        update_health_registry_from_classified_error, upsert_process_sticky_binding, AuditContext,
-        ActiveStreamTerminal, CodexLocalAccessErrorType, GatewayResponseAdapter,
+        update_health_registry_from_classified_error, upsert_process_sticky_binding,
+        ActiveStreamTerminal, AuditContext, CodexLocalAccessErrorType, GatewayResponseAdapter,
         LocalApiBackpressureState, ParsedRequest, ResponseUsageCollector, StreamWriteState,
         CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME,
         MAX_HTTP_REQUEST_BYTES, PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
@@ -10214,6 +10218,83 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         reset_local_api_backpressure_for_tests();
     }
 
+    #[tokio::test]
+    async fn active_stream_admission_release_allows_next_request_without_waiting_for_stream() {
+        let _guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        reset_local_api_backpressure_for_tests();
+        let mut config = CodexLocalApiSafetyConfig::default();
+        config.max_concurrent_requests = 1;
+        config.min_request_interval_seconds = 0;
+        config.max_queue_wait_seconds = 1;
+
+        let mut first = acquire_local_api_backpressure(&config)
+            .await
+            .expect("first admission should acquire permit");
+        first.release();
+
+        let second = acquire_local_api_backpressure(&config)
+            .await
+            .expect("released admission permit should not wait for active stream body");
+
+        drop(second);
+        reset_local_api_backpressure_for_tests();
+    }
+
+    #[test]
+    fn active_stream_lease_survives_cooldown_until_terminal_release() {
+        reset_active_stream_leases_for_tests();
+        let now = 1_700_000_000_000;
+        let context = AuditContext {
+            request_id: "req-active".to_string(),
+            route: "/v1/responses".to_string(),
+            model: "gpt-5.5".to_string(),
+            account_hash: "hash-active".to_string(),
+        };
+        let mut lease = grant_active_stream_lease(&context, "acc-active");
+        assert_eq!(active_stream_lease_count_for_account("acc-active"), 1);
+
+        let mut registry = empty_health_registry(now);
+        let classified = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"message":"rate limit exceeded"}}"#,
+        );
+        update_health_registry_from_classified_error(
+            &mut registry,
+            "acc-active",
+            Some("gpt-5.5"),
+            Some("req-followup"),
+            &classified,
+            now,
+        );
+
+        assert!(!health_registry_account_is_schedulable(
+            &registry,
+            "acc-active",
+            Some("gpt-5.5"),
+            now
+        ));
+        assert_eq!(active_stream_lease_count_for_account("acc-active"), 1);
+
+        lease.release(ActiveStreamTerminal::Completed);
+        assert_eq!(active_stream_lease_count_for_account("acc-active"), 0);
+        reset_active_stream_leases_for_tests();
+    }
+
+    #[test]
+    fn active_stream_error_classifier_distinguishes_client_abort_from_upstream_error() {
+        assert_eq!(
+            classify_active_stream_terminal_error("写入上游响应失败: broken pipe"),
+            ActiveStreamTerminal::ClientAborted
+        );
+        assert_eq!(
+            classify_active_stream_terminal_error("读取上游响应失败: timeout"),
+            ActiveStreamTerminal::StreamError
+        );
+    }
+
     #[test]
     fn local_backpressure_error_response_includes_retry_after_header() {
         let raw = String::from_utf8(json_response_with_retry_after(
@@ -10398,6 +10479,28 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             2
         );
         assert_eq!(build_routing_pool_account_ids(&collection).len(), 500);
+    }
+
+    #[test]
+    fn previous_response_affinity_disallows_direct_cross_account_reuse() {
+        let candidates = vec![
+            "acc-primary".to_string(),
+            "acc-secondary".to_string(),
+            "acc-third".to_string(),
+        ];
+
+        assert_eq!(
+            constrain_previous_response_affinity(candidates.clone(), Some("acc-secondary")),
+            vec!["acc-secondary".to_string()]
+        );
+        assert_eq!(
+            constrain_previous_response_affinity(candidates.clone(), Some("missing-affinity")),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            constrain_previous_response_affinity(candidates.clone(), None),
+            candidates
+        );
     }
 
     #[test]
