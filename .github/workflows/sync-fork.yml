@@ -1,0 +1,121 @@
+name: Sync Fork
+on:
+  schedule:
+    - cron: "17 2 * * 0"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_PAT }}
+
+      - name: Resolve upstream
+        id: upstream
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+        run: |
+          set -euo pipefail
+          UPSTREAM_FULL_NAME=$(gh api repos/${{ github.repository }} --jq '.parent.full_name // empty')
+          if [ -z "$UPSTREAM_FULL_NAME" ]; then
+            echo "::warning::Upstream repo metadata is missing. Sync skipped to preserve fork."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! gh api "repos/$UPSTREAM_FULL_NAME" >/dev/null 2>&1; then
+            echo "::warning::Upstream repo $UPSTREAM_FULL_NAME is unavailable or deleted. Sync skipped to preserve fork."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          UPSTREAM_BRANCH=$(gh api "repos/$UPSTREAM_FULL_NAME" --jq '.default_branch // empty')
+          UPSTREAM_URL=$(gh api "repos/$UPSTREAM_FULL_NAME" --jq '.clone_url')
+          echo "full_name=$UPSTREAM_FULL_NAME" >> "$GITHUB_OUTPUT"
+          echo "owner=${UPSTREAM_FULL_NAME%%/*}" >> "$GITHUB_OUTPUT"
+          echo "branch=$UPSTREAM_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "url=$UPSTREAM_URL" >> "$GITHUB_OUTPUT"
+
+      - name: Stable source policy guard
+        id: stable_source_policy
+        if: steps.upstream.outputs.skip != 'true'
+        env:
+          STABLE_SOURCE_ONLY_REPOS: "sciman-top/cockpit-tools"
+        run: |
+          set -euo pipefail
+          IFS=',' read -ra REPOS <<< "$STABLE_SOURCE_ONLY_REPOS"
+          for repo in "${REPOS[@]}"; do
+            repo=$(echo "$repo" | xargs)
+            if [ "$repo" = "${{ github.repository }}" ]; then
+              echo "::notice::Stable-source-only policy is enabled for $repo. Default-branch merge-upstream is skipped; mirror stable releases/tags instead."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Safety check - compare file counts
+        if: steps.upstream.outputs.skip != 'true' && steps.stable_source_policy.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+        run: |
+          set -euo pipefail
+          git remote add upstream "${{ steps.upstream.outputs.url }}"
+          git fetch upstream "${{ steps.upstream.outputs.branch }}"
+          FORK_FILES=$(git ls-tree -r --name-only HEAD | wc -l | tr -d '[:space:]')
+          UPSTREAM_FILES=$(git ls-tree -r --name-only "upstream/${{ steps.upstream.outputs.branch }}" | wc -l | tr -d '[:space:]')
+          THRESHOLD=$(( (FORK_FILES + 1) / 2 ))
+          echo "Fork files: $FORK_FILES"
+          echo "Upstream files: $UPSTREAM_FILES"
+          if [ "$UPSTREAM_FILES" -lt "$THRESHOLD" ]; then
+            echo "::error::SAFETY ABORT: Upstream has $UPSTREAM_FILES files vs fork's $FORK_FILES. Possible upstream deletion. Sync skipped."
+            exit 1
+          fi
+          echo "Safety check passed."
+
+      - name: Create restore point
+        if: steps.upstream.outputs.skip != 'true' && steps.stable_source_policy.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          BACKUP_BRANCH="backup/pre-sync"
+          git branch -f "$BACKUP_BRANCH" HEAD
+          git push origin "$BACKUP_BRANCH" --force
+
+      - name: Diff guard - inspect deletions
+        if: steps.upstream.outputs.skip != 'true' && steps.stable_source_policy.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+          BASE_REF: ${{ github.event.repository.default_branch }}
+          HEAD_REF: ${{ steps.upstream.outputs.owner }}:${{ steps.upstream.outputs.branch }}
+        run: |
+          set -euo pipefail
+          FORK_FILES=$(git ls-tree -r --name-only HEAD | wc -l | tr -d '[:space:]')
+          COMPARE_BASE=$(python3 -c 'import os; from urllib.parse import quote; print(quote(os.environ["BASE_REF"], safe=":"))')
+          COMPARE_HEAD=$(python3 -c 'import os; from urllib.parse import quote; print(quote(os.environ["HEAD_REF"], safe=":"))')
+          COMPARE_JSON=$(gh api "repos/${{ github.repository }}/compare/${COMPARE_BASE}...${COMPARE_HEAD}")
+          TOTAL_DELETIONS=$(printf '%s' "$COMPARE_JSON" | jq -r '.total_deletions // 0')
+          DELETED_FILES=$(printf '%s' "$COMPARE_JSON" | jq -r '.files[]? | select(.status == "removed") | .filename')
+          DELETE_LIMIT=$(( 5 + (FORK_FILES / 10) ))
+          echo "Total deletions: $TOTAL_DELETIONS"
+          echo "Deletion limit: $DELETE_LIMIT"
+          if [ "$TOTAL_DELETIONS" -gt "$DELETE_LIMIT" ]; then
+            echo "::error::SAFETY ABORT: deletion volume is too large for a safe sync."
+            exit 1
+          fi
+          if printf '%s\n' "$DELETED_FILES" | grep -Eq '^(\.github/|README\.md$|LICENSE$|sync-fork\.yml$)'; then
+            echo "::error::SAFETY ABORT: critical path deletion detected."
+            exit 1
+          fi
+
+      - name: Merge upstream changes
+        if: steps.upstream.outputs.skip != 'true' && steps.stable_source_policy.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+        run: |
+          set -euo pipefail
+          gh api repos/${{ github.repository }}/merge-upstream -X POST -f branch=${{ github.event.repository.default_branch }}
