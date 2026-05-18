@@ -120,6 +120,9 @@ export interface CodexLocalAccessHealthSummary {
   lastErrorType: string | null;
   lastStatus: number | null;
   lastRequestId: string | null;
+  auditDegraded: boolean;
+  auditError: string | null;
+  auditDegradedAtMs: number | null;
 }
 
 export interface CodexLocalAccessState {

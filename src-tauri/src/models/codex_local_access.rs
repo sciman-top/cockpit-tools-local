@@ -461,6 +461,9 @@ pub struct CodexLocalAccessHealthSummary {
     pub last_error_type: Option<String>,
     pub last_status: Option<u16>,
     pub last_request_id: Option<String>,
+    pub audit_degraded: bool,
+    pub audit_error: Option<String>,
+    pub audit_degraded_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

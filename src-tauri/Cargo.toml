@@ -5,6 +5,7 @@ description = "Cockpit Tools Local"
 authors = ["jlcodes"]
 license = "CC-BY-NC-SA-4.0"
 edition = "2021"
+default-run = "cockpit-tools"
 
 [lib]
 name = "antigravity_cockpit_tools_lib"

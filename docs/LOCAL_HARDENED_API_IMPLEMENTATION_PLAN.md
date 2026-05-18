@@ -285,13 +285,13 @@ flowchart TD
 
 描述：在 API service 内部加入被动监察层，记录风控相关关键节点的脱敏事件；不新增独立常驻探测进程，不通过额外请求判断额度，不设计规避官方识别的策略。
 
-状态：2026-05-18 已完成首个运行路径切片：新增本地 JSONL audit trail、结构化脱敏事件、大小轮转，并接入真实请求的 listener、selector、classifier、health update、stream write/final response 边界。认证投影聚合、上游转发细分事件和 UI degraded 提示继续归入 HLA-08/HLA-05 的相邻切片。
+状态：2026-05-18 已完成首个运行路径切片：新增本地 JSONL audit trail、结构化脱敏事件、大小轮转，并接入真实请求的 listener、selector、classifier、health update、stream write/final response 边界。2026-05-19 补齐当前 Rust runtime path 的 `auth_projection` 与 `upstream_forward` 细分事件，并新增按事件日轮转、audit 写入/解析失败 degraded 状态、健康摘要/UI 降级提示。
 
 事件来源：
 
 - 服务监听：request accepted、route、model、method、request_id。
-- 认证投影：current account source、account alias/hash、refresh decision，不记录 token/cookie；首个切片先由 401/refresh 分类事件承接。
-- 上游转发：route、model、stream flag、request_id、account alias/hash、latency、status；后续在 HLA-05 拆出 `upstream_forward` 明确阶段。
+- 认证投影：current account source、account alias/hash、prepare/refresh decision，不记录 token/cookie；当前已记录 `prepared`、`prepare_failed`、`refreshed`。
+- 上游转发：route、model、stream flag、request_id、account alias/hash、status；当前已记录 send start、response received、send failure 和 refresh 后重发边界。
 - 429/401/403/captcha/suspicious 分类：`error_type`、source、scope、manual required、retry-after。
 - selector 排序：chosen account hash；candidate count、skipped reason 和 sticky binding reason 后续补齐。
 - stream 写出：headers_written、first_chunk_written、finish/upstream_error。
@@ -302,8 +302,8 @@ flowchart TD
 - [x] audit trail 只保存结构化元数据，不保存 prompt、response、messages、token、cookie、Authorization、完整邮箱、完整 API key、raw upstream body。
 - [x] 额度为零只通过真实业务请求返回的明确 quota/exhaustion 信号或人工标记确认；未知 429 只标为 rate limit/cooldown，不直接判定 exhausted。
 - [x] 监察逻辑不发起额外上游请求，不批量刷新 500+ 账号，不通过高频探测等待恢复。
-- [ ] 每个 request_id 可串起：listener -> auth projection -> selector -> upstream -> classifier -> health update -> stream write/final response。当前已覆盖 listener、selector、classifier、health update、stream write/final response；auth projection 和 upstream forward 细分待补。
-- [ ] audit 文件采用大小/天数轮转，损坏时不影响 API service 启动，但 UI 明确提示 audit degraded。当前已完成大小轮转；天数轮转和 UI degraded 待补。
+- [x] 每个 request_id 可串起当前 runtime path：listener -> auth projection -> selector -> upstream -> classifier/health update -> stream write/final response。已覆盖 listener、auth projection、selector、upstream forward、classifier、health update、stream write/final response；health update 仅在真实 429/401/403/cooldown 等触发更新时出现。
+- [x] audit 文件采用大小/天数轮转；写入或解析轮转状态失败时不影响 API service 请求路径，健康摘要和 UI 明确提示 audit degraded。
 - [ ] UI 只展示聚合状态和最近脱敏事件，默认不展开账号级细节。
 
 验证：
@@ -311,7 +311,12 @@ flowchart TD
 - [x] audit event serde/redaction 单测：`cargo test --package cockpit-tools audit_event --quiet`
 - [x] quota exhausted vs unknown 429 分类审计单测：`cargo test --package cockpit-tools classifier --quiet`、`cargo test --package cockpit-tools health_registry --quiet`
 - [x] stream headers/first chunk 审计边界单测：`cargo test --package cockpit-tools audit_event --quiet`
-- [ ] `git diff --check`
+- [x] request_id audit chain smoke：`.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`，证据 `reports/local-hardened-api-smoke/smoke-20260519-000145.json`，audit phases 包含 `auth_projection` 与 `upstream_forward`，overall `pass`。
+- [x] audit day rotation / degraded summary 单测：`cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target audit --quiet`
+- [x] audit degraded UI 类型契约：`npm run typecheck`
+- [x] 3 账号 small_pool ephemeral gateway：`reports/local-hardened-api-smoke/smoke-20260519-001635.json`，overall `pass`，audit phases 包含 `auth_projection` 与 `upstream_forward`，`hasSensitiveMarkers=false`。
+- [x] 3 账号 fallback_probe ephemeral gateway：`reports/local-hardened-api-smoke/smoke-20260519-001658.json`，overall `pass`，`fallbackMode=next_request_only`，`maxRetryAccounts=2`。
+- [x] `git diff --check`
 
 建议文件：
 
@@ -507,7 +512,7 @@ flowchart TD
 
 描述：把“已被上游接纳的 stream/response 继续跑完”和“新的 admission 才避开 cooldown/exhausted 账号”固化为 API service 运行时边界。该切片不模拟上游 quota grace，不绕过真实 pre-stream 429，不做 mid-stream 跨账号续接；只保证本地 health registry、cooldown、selector 和 fallback 决策不会 retroactively cancel active stream。
 
-状态：2026-05-18 新增待执行切片。HLA-05 已有 headers/first chunk 写出后禁止 fallback 的 stream write state；本切片补齐 lease 生命周期、active stream 观测、client abort/terminal error 释放、以及 `previous_response_id` continuation 与新请求切号的任务边界。
+状态：2026-05-18 已完成最小 Rust 切片。已新增 admitted stream lease lifecycle、lease grant/release audit、client abort/terminal error 分类、admission 后释放 backpressure permit、`previous_response_id` strict affinity，以及 small_pool/fallback_probe 实跑证据。HLA-05 既有 headers/first chunk 写出后禁止 fallback 的 stream write state 继续保留。
 
 核心规则：
 
@@ -519,23 +524,31 @@ flowchart TD
 
 验收：
 
-- [ ] active SSE stream 被 grant lease 后，同账号随后被标记 cooldown/exhausted，stream 仍继续到 terminal 或真实 transport error。
-- [ ] pre-stream 429 会写入 health/cooldown/audit，但不会影响同账号已有 active lease。
-- [ ] active stream 期间同账号另一个请求返回 429，不 retroactively cancel active stream。
-- [ ] new admission 遇到 cooldown/exhausted 账号，会避开或返回本地 429；不等待无关 active stream 结束。
-- [ ] `previous_response_id` affinity 强绑定原 account hash/route；不会跨账号直接复用旧 `previous_response_id`。
-- [ ] client abort、upstream terminal error、normal completed 都会 release lease，不泄漏 active count。
-- [ ] health registry 状态变更只更新 `selection_eligible`，不会直接 cancel active leases。
-- [ ] 结构化 audit 能区分 `admission_attempt`、`upstream_admitted`、`lease_granted`、`stream_completed`、`stream_error`、`client_aborted`、`lease_released`、`account_cooldown_applied`、`fallback_selected`。
-- [ ] 不新增高频 refresh、全账号池扫描或 aggressive retry。
+- [x] active SSE stream 被 grant lease 后，同账号随后被标记 cooldown/exhausted，stream 仍继续到 terminal 或真实 transport error。
+- [x] pre-stream 429 会写入 health/cooldown/audit，但不会影响同账号已有 active lease。
+- [x] active stream 期间同账号另一个请求返回 429，不 retroactively cancel active stream。
+- [x] new admission 遇到 cooldown/exhausted 账号，会避开或返回本地 429；不等待无关 active stream 结束。
+- [x] `previous_response_id` affinity 强绑定原 account hash/route；不会跨账号直接复用旧 `previous_response_id`。
+- [x] client abort、upstream terminal error、normal completed 都会 release lease，不泄漏 active count。
+- [x] health registry 状态变更只更新 `selection_eligible`，不会直接 cancel active leases。
+- [x] 结构化 audit 能区分 `admission_attempt`、`upstream_admitted`、`lease_granted`、`stream_completed`、`stream_error`、`client_aborted`、`lease_released`、`account_cooldown_applied`、`fallback_selected`。
+- [x] 不新增高频 refresh、全账号池扫描或 aggressive retry。
 
 验证：
 
-- [ ] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target active_stream_lease --quiet`
-- [ ] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target hardened_routing --quiet`
-- [ ] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target stream_write_state --quiet`
-- [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -WriteReport`
-- [ ] `git diff --check`
+- [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target active_stream_lease --quiet`
+- [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target hardened_routing --quiet`
+- [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target stream_write_state --quiet`
+- [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target previous_response_affinity --quiet`
+- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`
+- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`
+- [x] `git diff --check`
+
+证据：
+
+- `reports/local-hardened-api-smoke/smoke-20260518-234934.json`：`small_pool` 首轮 contract/loopback/auth pass；真实上游单账号请求 fail 后写入 cooldown/audit，audit phases 包含 `account_cooldown_applied` 与 `fallback_selected`。
+- `reports/local-hardened-api-smoke/smoke-20260518-234939.json`：`fallback_probe` 上游实跑 pass，audit phases 包含 `selector` 与 `upstream_admitted`。
+- `reports/local-hardened-api-smoke/smoke-20260518-235038.json`：`small_pool` 复跑 pass，证明 health/selector 会避开刚冷却账号且不扩大 `maxRetryAccounts=1`。
 
 可能文件：
 
@@ -544,11 +557,11 @@ flowchart TD
 - `docs/LOCAL_HARDENED_API.md`
 - `docs/reference-gateway-best-practices.md`
 
-依赖：HLA-05、HLA-07、HLA-10。应先完成本切片，再进入 2-3 账号真实小池和 fallback probe 放量。
+依赖：HLA-05、HLA-07、HLA-10。已完成本切片与 2-3 账号真实小池、fallback probe 放量；后续不应把 HLA-11 解释为跨账号续接或 quota grace。
 
 ## 推荐执行顺序
 
-AI 推荐：已完成 `HLA-00 -> HLA-10` 的主要护栏后，下一步先做 `HLA-11 AdmissionLease/ActiveStreamLease`，再进入 `small_pool` 和 `fallback_probe` 实跑。理由：多号池调度已经具备数据面和 selector 基础，但额度耗尽后的体验是否接近 Direct OAuth，取决于 admission/active stream 边界是否明确；先固化 lease，可避免把真实 pre-stream 429 误写成“可继续”。
+AI 推荐：HLA-11、当前 runtime path 的 `request_id` audit chain、audit day rotation 与 degraded 可见性已完成后，下一步做 Codex CLI direct smoke 的低风险窗口验证，或继续补 audit UI 最近脱敏事件列表。理由：核心 API service 链路已经有 Rust focused tests 与 ephemeral gateway 实跑，剩余最大未知是 CLI 入口真实接入和 UI 可读性增强。
 
 ## 完成态证据
 

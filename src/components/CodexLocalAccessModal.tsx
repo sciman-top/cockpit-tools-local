@@ -1235,6 +1235,14 @@ export function CodexLocalAccessModal({
                         {t('codex.localAccess.health.unavailable', '不可用')}
                       </span>
                     )}
+                    {health.auditDegraded && (
+                      <span
+                        className="codex-local-access-health-badge is-warning"
+                        title={health.auditError ?? undefined}
+                      >
+                        {t('codex.localAccess.health.auditDegraded', '审计降级')}
+                      </span>
+                    )}
                   </div>
                   <div className="codex-local-access-health-metrics">
                     {healthMetricItems.map((item) => (
@@ -1260,6 +1268,12 @@ export function CodexLocalAccessModal({
                       {t('codex.localAccess.health.cooldownUntil', '冷却至')}:{' '}
                       {formatTimestampMs(health.nearestCooldownUntilMs)}
                     </span>
+                    {health.auditDegraded && (
+                      <span>
+                        {t('codex.localAccess.health.audit', 'Audit')}:{' '}
+                        <code>{health.auditError ?? '--'}</code>
+                      </span>
+                    )}
                   </div>
                 </div>
               )}

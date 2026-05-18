@@ -103,6 +103,7 @@ static GATEWAY_ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
 static UPSTREAM_HTTP_CLIENT: OnceLock<Mutex<Option<CachedUpstreamHttpClient>>> = OnceLock::new();
 static LOCAL_API_BACKPRESSURE_STATE: OnceLock<Mutex<LocalApiBackpressureState>> = OnceLock::new();
 static ACTIVE_STREAM_LEASE_REGISTRY: OnceLock<Mutex<ActiveStreamLeaseRegistry>> = OnceLock::new();
+static AUDIT_TRAIL_STATUS: OnceLock<Mutex<AuditTrailStatus>> = OnceLock::new();
 
 #[derive(Default)]
 struct GatewayRuntime {
@@ -219,6 +220,13 @@ struct LocalApiBackpressurePermit {
 struct ActiveStreamLeaseRegistry {
     next_lease_id: u64,
     leases: BTreeMap<u64, ActiveStreamLeaseRecord>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct AuditTrailStatus {
+    degraded: bool,
+    error: Option<String>,
+    degraded_at_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -352,6 +360,40 @@ fn local_api_backpressure_state() -> &'static Mutex<LocalApiBackpressureState> {
 
 fn active_stream_lease_registry() -> &'static Mutex<ActiveStreamLeaseRegistry> {
     ACTIVE_STREAM_LEASE_REGISTRY.get_or_init(|| Mutex::new(ActiveStreamLeaseRegistry::default()))
+}
+
+fn audit_trail_status() -> &'static Mutex<AuditTrailStatus> {
+    AUDIT_TRAIL_STATUS.get_or_init(|| Mutex::new(AuditTrailStatus::default()))
+}
+
+fn current_audit_trail_status() -> AuditTrailStatus {
+    audit_trail_status()
+        .lock()
+        .map(|status| status.clone())
+        .unwrap_or_default()
+}
+
+fn mark_audit_trail_degraded(err: &str) {
+    if let Ok(mut status) = audit_trail_status().lock() {
+        status.degraded = true;
+        status.error = Some(safe_log_field(Some(err), 240));
+        status.degraded_at_ms = Some(now_ms());
+    }
+}
+
+fn mark_audit_trail_healthy() {
+    if let Ok(mut status) = audit_trail_status().lock() {
+        *status = AuditTrailStatus::default();
+    }
+}
+
+fn apply_audit_trail_status_to_health_summary(
+    summary: &mut CodexLocalAccessHealthSummary,
+    status: &AuditTrailStatus,
+) {
+    summary.audit_degraded = status.degraded;
+    summary.audit_error = status.error.clone();
+    summary.audit_degraded_at_ms = status.degraded_at_ms;
 }
 
 impl Drop for LocalApiBackpressurePermit {
@@ -510,6 +552,7 @@ fn reset_local_api_backpressure_for_tests() {
     }
 }
 
+#[cfg(test)]
 fn active_stream_lease_count_for_account(account_id: &str) -> usize {
     let account_id = account_id.trim();
     if account_id.is_empty() {
@@ -4302,10 +4345,12 @@ fn build_unavailable_health_summary(now: i64, err: &str) -> CodexLocalAccessHeal
 
 fn build_health_summary_from_disk() -> CodexLocalAccessHealthSummary {
     let now = now_ms();
-    match load_health_registry_from_disk() {
+    let mut summary = match load_health_registry_from_disk() {
         Ok(registry) => build_health_summary_from_registry(&registry, now),
         Err(err) => build_unavailable_health_summary(now, &err),
-    }
+    };
+    apply_audit_trail_status_to_health_summary(&mut summary, &current_audit_trail_status());
+    summary
 }
 
 fn process_sticky_account_id(
@@ -6836,6 +6881,35 @@ fn audit_rotated_path(path: &Path) -> PathBuf {
     path.with_extension("jsonl.1")
 }
 
+fn audit_day_bucket(timestamp_ms: i64) -> i64 {
+    timestamp_ms.div_euclid(DAY_WINDOW_MS)
+}
+
+fn first_audit_timestamp_from_path(path: &Path) -> Result<Option<i64>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("读取审计日志轮转状态失败: {}", e))?;
+    let Some(line) = content.lines().find(|line| !line.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let value: Value =
+        serde_json::from_str(line).map_err(|e| format!("解析审计日志轮转状态失败: {}", e))?;
+    Ok(value.get("timestamp").and_then(Value::as_i64))
+}
+
+fn should_rotate_audit_by_day(
+    path: &Path,
+    event: &CodexLocalAccessAuditEvent,
+) -> Result<bool, String> {
+    let Some(first_timestamp) = first_audit_timestamp_from_path(path)? else {
+        return Ok(false);
+    };
+    Ok(audit_day_bucket(first_timestamp) != audit_day_bucket(event.timestamp))
+}
+
 fn append_audit_event_to_path(
     path: &Path,
     event: &CodexLocalAccessAuditEvent,
@@ -6844,11 +6918,13 @@ fn append_audit_event_to_path(
     let parent = path.parent().ok_or("无法定位审计日志目录")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("创建审计日志目录失败: {}", e))?;
 
-    if path
+    let should_rotate_by_size = path
         .metadata()
         .map(|metadata| metadata.len() as usize > max_bytes)
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    let should_rotate_by_day = should_rotate_audit_by_day(path, event)?;
+
+    if should_rotate_by_size || should_rotate_by_day {
         let rotated_path = audit_rotated_path(path);
         if rotated_path.exists() {
             std::fs::remove_file(&rotated_path)
@@ -6875,11 +6951,15 @@ fn append_audit_event_to_disk(event: &CodexLocalAccessAuditEvent) -> Result<(), 
 }
 
 fn record_audit_event(event: CodexLocalAccessAuditEvent) {
-    if let Err(err) = append_audit_event_to_disk(&event) {
-        logger::log_warn(&format!(
-            "[CodexLocalAccess][AuditTrail] 写入审计事件失败: {}",
-            err
-        ));
+    match append_audit_event_to_disk(&event) {
+        Ok(()) => mark_audit_trail_healthy(),
+        Err(err) => {
+            mark_audit_trail_degraded(&err);
+            logger::log_warn(&format!(
+                "[CodexLocalAccess][AuditTrail] 写入审计事件失败: {}",
+                err
+            ));
+        }
     }
 }
 
@@ -8383,8 +8463,33 @@ async fn proxy_request_with_account_pool(
             attempts += 1;
 
             let mut account = match get_prepared_account(&account_id).await {
-                Ok(account) => account,
+                Ok(account) => {
+                    let context = build_audit_context(request, Some(account_id.as_str()));
+                    record_audit_event_from_context(
+                        &context,
+                        "auth_projection",
+                        None,
+                        None,
+                        None,
+                        Some("prepared"),
+                        BTreeMap::from([("source".to_string(), "prepared_account".to_string())]),
+                    );
+                    account
+                }
                 Err(err) => {
+                    let context = build_audit_context(request, Some(account_id.as_str()));
+                    record_audit_event_from_context(
+                        &context,
+                        "auth_projection",
+                        None,
+                        Some("auth_projection_error"),
+                        None,
+                        Some("prepare_failed"),
+                        BTreeMap::from([(
+                            "reason".to_string(),
+                            "prepare_account_failed".to_string(),
+                        )]),
+                    );
                     invalidate_prepared_account(&account_id).await;
                     log_codex_api_failure(
                         None,
@@ -8433,6 +8538,15 @@ async fn proxy_request_with_account_pool(
                         ("model_key".to_string(), routing_hint.model_key.clone()),
                     ]),
                 );
+                record_audit_event_from_context(
+                    &admission_context,
+                    "upstream_forward",
+                    None,
+                    None,
+                    None,
+                    Some("send_started"),
+                    BTreeMap::from([("model_key".to_string(), routing_hint.model_key.clone())]),
+                );
                 let first_response = send_upstream_request(
                     &request.method,
                     &upstream_target,
@@ -8443,8 +8557,31 @@ async fn proxy_request_with_account_pool(
                 .await;
 
                 let mut response = match first_response {
-                    Ok(response) => response,
+                    Ok(response) => {
+                        record_audit_event_from_context(
+                            &admission_context,
+                            "upstream_forward",
+                            Some(response.status().as_u16()),
+                            None,
+                            None,
+                            Some("response_received"),
+                            BTreeMap::from([(
+                                "model_key".to_string(),
+                                routing_hint.model_key.clone(),
+                            )]),
+                        );
+                        response
+                    }
                     Err(err) => {
+                        record_audit_event_from_context(
+                            &admission_context,
+                            "upstream_forward",
+                            None,
+                            Some("network_error"),
+                            None,
+                            Some("send_failed"),
+                            BTreeMap::from([("reason".to_string(), "send_error".to_string())]),
+                        );
                         log_codex_api_failure(
                             None,
                             Some(request),
@@ -8463,6 +8600,31 @@ async fn proxy_request_with_account_pool(
                     match force_refresh_gateway_account(&account_id).await {
                         Ok(refreshed_account) => {
                             account = refreshed_account;
+                            let context = build_audit_context(request, Some(account.id.as_str()));
+                            record_audit_event_from_context(
+                                &context,
+                                "auth_projection",
+                                Some(StatusCode::UNAUTHORIZED.as_u16()),
+                                None,
+                                None,
+                                Some("refreshed"),
+                                BTreeMap::from([(
+                                    "source".to_string(),
+                                    "force_refresh".to_string(),
+                                )]),
+                            );
+                            record_audit_event_from_context(
+                                &context,
+                                "upstream_forward",
+                                None,
+                                None,
+                                None,
+                                Some("send_started_after_refresh"),
+                                BTreeMap::from([(
+                                    "model_key".to_string(),
+                                    routing_hint.model_key.clone(),
+                                )]),
+                            );
                             response = match send_upstream_request(
                                 &request.method,
                                 &upstream_target,
@@ -8472,8 +8634,34 @@ async fn proxy_request_with_account_pool(
                             )
                             .await
                             {
-                                Ok(response) => response,
+                                Ok(response) => {
+                                    record_audit_event_from_context(
+                                        &context,
+                                        "upstream_forward",
+                                        Some(response.status().as_u16()),
+                                        None,
+                                        None,
+                                        Some("response_received_after_refresh"),
+                                        BTreeMap::from([(
+                                            "model_key".to_string(),
+                                            routing_hint.model_key.clone(),
+                                        )]),
+                                    );
+                                    response
+                                }
                                 Err(err) => {
+                                    record_audit_event_from_context(
+                                        &context,
+                                        "upstream_forward",
+                                        None,
+                                        Some("network_error"),
+                                        None,
+                                        Some("send_failed_after_refresh"),
+                                        BTreeMap::from([(
+                                            "reason".to_string(),
+                                            "send_error".to_string(),
+                                        )]),
+                                    );
                                     log_codex_api_failure(
                                         None,
                                         Some(request),
@@ -9040,13 +9228,14 @@ async fn handle_connection(
 mod tests {
     use super::{
         acquire_local_api_backpressure, active_stream_lease_count_for_account,
-        append_audit_event_to_path, apply_collection_routing_strategy,
-        apply_local_api_safety_preset_to_collection, build_audit_context, build_audit_event,
-        build_chat_completion_payload, build_chat_completion_stream_body,
-        build_codex_api_failure_log, build_effective_local_access_account_ids,
-        build_health_summary_from_registry, build_images_api_payload, build_local_models_response,
-        build_ordered_account_ids, build_request_routing_hint, build_routing_pool_account_ids,
-        build_runtime_account, build_runtime_mode_state, classify_active_stream_terminal_error,
+        append_audit_event_to_path, apply_audit_trail_status_to_health_summary,
+        apply_collection_routing_strategy, apply_local_api_safety_preset_to_collection,
+        build_audit_context, build_audit_event, build_chat_completion_payload,
+        build_chat_completion_stream_body, build_codex_api_failure_log,
+        build_effective_local_access_account_ids, build_health_summary_from_registry,
+        build_images_api_payload, build_local_models_response, build_ordered_account_ids,
+        build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
+        build_runtime_mode_state, classify_active_stream_terminal_error,
         classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
         extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
         grant_active_stream_lease, health_registry_account_cooldown_wait,
@@ -9065,17 +9254,18 @@ mod tests {
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, sort_account_ids_by_health_estimate,
         update_health_registry_from_classified_error, upsert_process_sticky_binding,
-        ActiveStreamTerminal, AuditContext, CodexLocalAccessErrorType, GatewayResponseAdapter,
-        LocalApiBackpressureState, ParsedRequest, ResponseUsageCollector, StreamWriteState,
-        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME,
-        MAX_HTTP_REQUEST_BYTES, PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
+        ActiveStreamTerminal, AuditContext, AuditTrailStatus, CodexLocalAccessErrorType,
+        GatewayResponseAdapter, LocalApiBackpressureState, ParsedRequest, ResponseUsageCollector,
+        StreamWriteState, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID,
+        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME, DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES,
+        PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
     };
     use crate::models::codex::{CodexAccount, CodexApiProviderMode};
     use crate::models::codex_local_access::{
         CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
-        CodexLocalAccessCollection, CodexLocalAccessModelCooldown, CodexLocalAccessRoutingStrategy,
-        CodexLocalApiFallbackMode, CodexLocalApiSafetyConfig, CodexLocalApiSafetyPresetId,
-        CodexRuntimeAccountKind, CodexRuntimeIntegrationMode,
+        CodexLocalAccessCollection, CodexLocalAccessHealthSummary, CodexLocalAccessModelCooldown,
+        CodexLocalAccessRoutingStrategy, CodexLocalApiFallbackMode, CodexLocalApiSafetyConfig,
+        CodexLocalApiSafetyPresetId, CodexRuntimeAccountKind, CodexRuntimeIntegrationMode,
     };
     use reqwest::header::{HeaderValue, RETRY_AFTER};
     use reqwest::StatusCode;
@@ -9867,6 +10057,68 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let rotated =
             fs::read_to_string(path.with_extension("jsonl.1")).expect("rotated audit log exists");
         assert!(rotated.contains("\"phase\":\"listener\""));
+    }
+
+    #[test]
+    fn audit_event_append_rotates_when_event_day_changes() {
+        let path = temp_audit_path("rotate-day");
+        let context = AuditContext {
+            request_id: "req-rotate-day".to_string(),
+            route: "/v1/responses".to_string(),
+            model: "gpt-5.5".to_string(),
+            account_hash: "sha256:day123day123".to_string(),
+        };
+        let first = build_audit_event(
+            DAY_WINDOW_MS,
+            &context,
+            "listener",
+            None,
+            None,
+            None,
+            Some("accepted"),
+            BTreeMap::new(),
+        );
+        let second = build_audit_event(
+            DAY_WINDOW_MS * 2,
+            &context,
+            "stream_write",
+            Some(200),
+            None,
+            Some("headers_written"),
+            Some("ok"),
+            BTreeMap::new(),
+        );
+
+        append_audit_event_to_path(&path, &first, usize::MAX).expect("first append should work");
+        append_audit_event_to_path(&path, &second, usize::MAX)
+            .expect("second append should rotate by day");
+
+        let active = fs::read_to_string(&path).expect("active audit log should exist");
+        assert!(active.contains("\"phase\":\"stream_write\""));
+        assert!(!active.contains("\"phase\":\"listener\""));
+
+        let rotated =
+            fs::read_to_string(path.with_extension("jsonl.1")).expect("rotated audit log exists");
+        assert!(rotated.contains("\"phase\":\"listener\""));
+    }
+
+    #[test]
+    fn audit_status_is_exposed_in_health_summary() {
+        let mut summary = CodexLocalAccessHealthSummary::default();
+        let status = AuditTrailStatus {
+            degraded: true,
+            error: Some("audit path unavailable".to_string()),
+            degraded_at_ms: Some(1_700_000_000_000),
+        };
+
+        apply_audit_trail_status_to_health_summary(&mut summary, &status);
+
+        assert!(summary.audit_degraded);
+        assert_eq!(
+            summary.audit_error.as_deref(),
+            Some("audit path unavailable")
+        );
+        assert_eq!(summary.audit_degraded_at_ms, Some(1_700_000_000_000));
     }
 
     #[test]

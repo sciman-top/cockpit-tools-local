@@ -495,9 +495,9 @@ P0 必做：
 - [x] `HLA-02` 429/header/body 分类和 cooldown。
 - [x] `HLA-03` 全局 semaphore、请求启动 rate limiter、bounded queue 和本地超时。
 - [x] `HLA-04` Persistent AccountHealthRegistry。基础持久化/筛选已落地，只读 UI 已在 HLA-08 展示，手动恢复已接入显式本地恢复命令。
-- [x] `HLA-04A` SafetyObserver/AuditTrail 被动监察和脱敏事件链。已完成 listener/selector/classifier/health update/stream/final response 的本地 JSONL 脱敏事件；auth projection、upstream forward 细分和 UI degraded 提示待 HLA-05/HLA-08 承接。
+- [x] `HLA-04A` SafetyObserver/AuditTrail 被动监察和脱敏事件链。已完成 listener/auth projection/selector/upstream forward/classifier/health update/stream/final response 的本地 JSONL 脱敏事件；已补大小/天数轮转、audit degraded 健康摘要与 UI 提示。
 - [x] `HLA-05` retry/fallback/stream guard。已完成默认单账号/单 retry 控制边界、显式 fallback cap 和 stream write state；完整控制器类型拆分与 client disconnect 分类待后续增强。
-- [ ] `HLA-11` AdmissionLease/ActiveStreamLease。补齐 upstream admitted -> lease granted -> terminal/release 的生命周期，保证本地 cooldown/exhausted 不 retroactively cancel active stream，并把 new admission 切号、`previous_response_id` affinity、context replay 边界写入测试。
+- [x] `HLA-11` AdmissionLease/ActiveStreamLease。已补齐 upstream admitted -> lease granted -> terminal/release 的生命周期；本地 cooldown/exhausted 不 retroactively cancel active stream；new admission 可避开冷却账号；`previous_response_id` strict affinity 不跨账号直接复用。`small_pool` 与 `fallback_probe` 已用 ephemeral gateway 实跑。
 
 P1 必做：
 
@@ -508,7 +508,7 @@ P1 必做：
 
 P2 增强：
 
-- [ ] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复已实现，并补入单号池 API service smoke harness 与短生命周期 gateway runner；单号池 loopback 与 `gpt-5.4` 上游 429/cooldown/audit 链路已实跑通过，重复 cooldown 已修正为本地 429 + `Retry-After`，2-3 账号小池与 fallback probe 仍待放量。
+- [ ] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复已实现，并补入单号池 API service smoke harness 与短生命周期 gateway runner；单号池 loopback 与 `gpt-5.4` 上游 429/cooldown/audit 链路已实跑通过，重复 cooldown 已修正为本地 429 + `Retry-After`；2-3 账号小池与 fallback probe 已在 HLA-11 收口中实跑通过。Codex CLI direct smoke 仍待现场配置窗口验证。
 - [ ] 请求历史扩展和健康趋势。
 - [ ] 可选 LiteLLM 桥接。
 - [ ] 更完整端到端 smoke。
@@ -525,11 +525,11 @@ P2 增强：
 - [x] cooldown 状态持久化，应用重启后不丢。
 - [x] 风控监察不发起额外上游请求，不批量刷新账号，只基于真实请求结果和人工标记更新状态。
 - [x] 额度为零只由明确 quota/exhaustion 信号或人工标记确认；未知 429 不能直接判定账号 exhausted。
-- [ ] request_id 可串起 listener/auth projection/selector/upstream/classifier/health update/stream write/final response 的脱敏事件。当前已覆盖 listener/selector/classifier/health update/stream write/final response；auth projection 和 upstream forward 细分待补。
+- [x] request_id 可串起当前 runtime path 的 listener/auth projection/selector/upstream/classifier/health update/stream write/final response 脱敏事件；health update 仅在真实 429/401/403/cooldown 等触发更新时出现。证据：`reports/local-hardened-api-smoke/smoke-20260519-000145.json`。
 - [x] local backpressure 产生的 429/503 与 upstream 429 有不同 `error_type`，并都带可解释 `Retry-After` 或恢复提示。
 - [x] stream 已开始后不会跨账号续接；相关测试覆盖 headers/payload 已写出两种边界。
-- [ ] 已接纳 active stream 不因本地 cooldown/exhausted/selection_eligible 变化被取消；新 independent request 可立即切健康账号，不等待无关 active stream 结束。
-- [ ] `previous_response_id` 不跨账号直接复用；跨账号 fallback 只能使用 full context replay 或 compacted replay。
+- [x] 已接纳 active stream 不因本地 cooldown/exhausted/selection_eligible 变化被取消；new independent admission 可避开冷却账号，不等待无关 active stream 结束。
+- [x] `previous_response_id` 不跨账号直接复用；跨账号 fallback 只能使用 full context replay 或 compacted replay。
 - [x] 500+ 账号时 selector 不高频刷新、不扫射、不阻塞 UI。Hardened mode 下候选池可保留完整账号列表，但 fill-first 不做账号快照刷新，实际上游尝试仍受 `maxRetryAccounts` / `fallbackMode` cap 控制。
 - [ ] Codex CLI 可以通过 `http://127.0.0.1:2876/v1` 正常调用。
 - [ ] 原有账号管理、多实例、配额展示功能不被破坏。
@@ -571,4 +571,4 @@ git diff --check
 
 ## 下一步建议
 
-下一步继续 `docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md` 的 `HLA-11 AdmissionLease/ActiveStreamLease`。AI 推荐先补 active stream lease runtime、审计事件和 focused Rust tests，再做 `small_pool` / `fallback_probe` 实跑；这样可以验证“已接纳继续跑完、新 admission 才切号”的真实边界，而不会把 pre-stream 429 误当成可续接。
+下一步做 Codex CLI direct smoke 的低风险窗口验证，或补 audit UI 最近脱敏事件列表。AI 推荐优先 CLI direct smoke；核心 API service 请求链路、HLA-11 lease、request_id audit chain 和 audit degraded 可见性已完成 focused tests + ephemeral gateway 实跑，剩余最大未知是真实 CLI 入口接入。
