@@ -45,7 +45,7 @@ jobs:
         id: stable_source_policy
         if: steps.upstream.outputs.skip != 'true'
         env:
-          STABLE_SOURCE_ONLY_REPOS: "sciman-top/cockpit-tools"
+          STABLE_SOURCE_ONLY_REPOS: "sciman-top/cockpit-tools-local"
         run: |
           set -euo pipefail
           IFS=',' read -ra REPOS <<< "$STABLE_SOURCE_ONLY_REPOS"

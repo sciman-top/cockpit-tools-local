@@ -1,11 +1,10 @@
-# Cockpit Tools
+# Cockpit Tools Local
 
 English · [简体中文](README.md)
 
-[![GitHub stars](https://img.shields.io/github/stars/jlcodes99/cockpit-tools?style=flat&color=gold)](https://github.com/jlcodes99/cockpit-tools)
-[![GitHub downloads](https://img.shields.io/github/downloads/jlcodes99/cockpit-tools/total?style=flat&color=blue)](https://github.com/jlcodes99/cockpit-tools/releases)
-[![GitHub release](https://img.shields.io/github/v/release/jlcodes99/cockpit-tools?style=flat)](https://github.com/jlcodes99/cockpit-tools/releases)
-[![GitHub issues](https://img.shields.io/github/issues/jlcodes99/cockpit-tools)](https://github.com/jlcodes99/cockpit-tools/issues)
+[![GitHub release](https://img.shields.io/github/v/release/sciman-top/cockpit-tools-local?style=flat)](https://github.com/sciman-top/cockpit-tools-local/releases)
+
+> This is a personal self-use fork of `jlcodes99/cockpit-tools`. `main` is the Cockpit Tools Local self-use source line, `mirror/upstream-main` mirrors the latest upstream source, and `backup/*` keeps fixed snapshots or restore points. Stable installable release assets are maintained by the `D:\CODE\github-toolkit` `verify-releases` flow.
 
 A **universal AI IDE account management tool**, currently supporting **Antigravity**, **Codex**, **GitHub Copilot**, **Windsurf**, **Kiro**, **Cursor**, **Gemini Cli**, **CodeBuddy**, **CodeBuddy CN**, **Qoder**, **Trae**, and **Zed**, with multi-instance parallel workflows.
 
