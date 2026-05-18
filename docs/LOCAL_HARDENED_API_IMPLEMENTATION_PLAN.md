@@ -430,12 +430,14 @@ flowchart TD
 
 描述：把 hardened defaults、balanced self-use、quota drain careful 做成可恢复 preset，并补最终用户文档。
 
+状态：2026-05-18 已完成文档契约切片：新增 `docs/LOCAL_HARDENED_API.md`，写明默认安全姿态、三类 preset 目标值、Codex CLI 直连 Cockpit、可选 LiteLLM 桥接、风险边界和回滚。UI/command 级一键 preset 与直连 smoke 继续保留。
+
 验收：
 
-- [ ] `maximum_safety` 展开为单账号、单并发、60 秒间隔、manual fallback。
-- [ ] `balanced_self_use` 展开为单并发、20-30 秒间隔、sticky then next healthy。
-- [ ] `quota_drain_careful` 展开为 fill-first、严格 cooldown、低速率。
-- [ ] 文档写明 Codex CLI 直连 Cockpit 和可选 LiteLLM 桥接两条路径。
+- [x] `maximum_safety` 展开为单账号、单并发、60 秒间隔、manual fallback。
+- [x] `balanced_self_use` 展开为单并发、20-30 秒间隔、sticky then next healthy。
+- [x] `quota_drain_careful` 展开为 fill-first、严格 cooldown、低速率。
+- [x] 文档写明 Codex CLI 直连 Cockpit 和可选 LiteLLM 桥接两条路径。
 - [ ] 关闭 LiteLLM 后 Codex CLI 仍可直连 Cockpit。
 
 验证：

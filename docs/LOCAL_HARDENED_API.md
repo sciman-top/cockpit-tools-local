@@ -1,0 +1,111 @@
+# Cockpit Local Hardened API
+
+本页是自用版 Cockpit API service 的执行说明。它只描述本机低风险用法；代码、运行事实和 `docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md` 优先级更高。
+
+## 目标
+
+- 只监听 `127.0.0.1`，不提供 LAN/public 入口。
+- 单账号先跑通；多账号池只在 health registry、stream guard、backpressure 和 audit trail 均可用后启用。
+- 当前请求一旦开始写出，后续不换账号；额度耗尽只影响下一个请求的选择。
+- 429/401/5xx 只通过真实业务请求被动写入健康状态，不用高频刷新探测恢复。
+- 日志和 UI 只展示结构化脱敏字段，不记录 prompt、response、token、cookie、Authorization header 或完整邮箱。
+
+## 默认安全姿态
+
+API service 的默认安全配置等价于 `maximum_safety`：
+
+| 字段 | 默认值 | 说明 |
+| --- | --- | --- |
+| `hardenedLocalMode` | `true` | 开启本机 hardened 行为 |
+| `maxConcurrentRequests` | `1` | 同时最多一个上游请求 |
+| `minRequestIntervalSeconds` | `20` | 请求启动间隔不低于 20 秒 |
+| `maxQueueWaitSeconds` | `10` | 本地排队等待上限 |
+| `requestTimeoutSeconds` | `600` | 长任务允许继续写出 |
+| `maxRetries` | `1` | 单账号有限 retry |
+| `maxRetryAccounts` | `1` | 默认不在同一请求内扫账号池 |
+| `fallbackMode` | `disabled` | 下一个请求才重新选择账号 |
+| `logging.includePromptResponse` | `false` | 不记录正文 |
+| `logging.includeRawUpstreamBody` | `false` | 不记录上游原始 body |
+
+## Preset 契约
+
+### `maximum_safety`
+
+用途：默认自用、最低风控暴露。
+
+- 单账号或单 sticky 账号。
+- `maxConcurrentRequests = 1`
+- `minRequestIntervalSeconds >= 60` 可用于更保守场景；当前代码默认 20 秒。
+- `maxRetryAccounts = 1`
+- `fallbackMode = disabled`
+- 自动配额刷新关闭或不低于 60 分钟。
+- 唤醒/keepalive 默认关闭。
+
+### `balanced_self_use`
+
+用途：自用多账号池，但仍避免随机扫射。
+
+- `maxConcurrentRequests = 1`
+- `minRequestIntervalSeconds = 20..30`
+- sticky/fill-first 优先；当前账号健康时不轮换。
+- `maxRetryAccounts = 1`，可手动提升到 `2` 但必须保留 stream guard。
+- 账号进入 cooldown/manual/auth 状态后排到后面。
+- 自动刷新不扫描 API service OAuth 池。
+
+### `quota_drain_careful`
+
+用途：明确希望先消耗某些账号额度，但保持低速率。
+
+- 用户排序优先，fill-first。
+- 严格遵守 persistent health registry。
+- `maxConcurrentRequests = 1`
+- `minRequestIntervalSeconds >= 30`
+- `fallbackMode = next_request_only`
+- 只在下一请求边界选择下一个 healthy 账号。
+
+## Codex CLI 直连 Cockpit
+
+在 Codex 配置中使用本机 API service：
+
+```toml
+model_provider = "cockpit_api_service"
+
+[model_providers.cockpit_api_service]
+name = "Cockpit API Service"
+base_url = "http://127.0.0.1:<port>/v1"
+wire_api = "chat"
+env_key = "OPENAI_API_KEY"
+```
+
+`OPENAI_API_KEY` 使用 Cockpit API service 面板中的本机 key。端口以面板当前显示为准。
+
+## 可选 LiteLLM 桥接
+
+LiteLLM 只作为客户端兼容外壳，不持有 ChatGPT OAuth token。推荐链路：
+
+```text
+Codex CLI -> LiteLLM -> Cockpit API service -> ChatGPT/Codex upstream
+```
+
+当需要排错时，先验证 Cockpit 直连：
+
+```powershell
+codex exec --skip-git-repo-check --json "Reply with exactly OK"
+```
+
+若直连 Cockpit 正常、LiteLLM 失败，应优先查 LiteLLM route/config；若 Cockpit 返回 429，先判断是当前账号 cooldown/额度耗尽还是网关故障。
+
+## 风险边界
+
+- 不把 API service 暴露到 `0.0.0.0`、LAN IP 或公网。
+- 不把 OAuth token、refresh token、cookie 或 ChatGPT session 写入 LiteLLM。
+- 不通过 quota reset wakeup 自动把刷新间隔调到高频。
+- 不在 cooldown 期间用刷新任务反复探测账号是否恢复。
+- 不在 stream 已开始写出后切换账号。
+
+## 回滚
+
+1. 在 Codex 设置中切回 Direct API/OAuth 模式。
+2. 停用 Cockpit API service。
+3. 若使用 LiteLLM，临时把 Codex `model_provider` 改回官方或直连 Cockpit。
+4. 保留 `codex_local_access_health.json` 和 `codex_local_access_audit.jsonl` 作为诊断证据；不要上传其中任何本机私有路径或账号材料。

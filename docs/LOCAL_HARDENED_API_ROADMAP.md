@@ -505,7 +505,7 @@ P1 必做：
 
 P2 增强：
 
-- [ ] `HLA-10` 策略 preset。
+- [ ] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复仍待实现。
 - [ ] 请求历史扩展和健康趋势。
 - [ ] 可选 LiteLLM 桥接。
 - [ ] 更完整端到端 smoke。
