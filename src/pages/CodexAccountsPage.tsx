@@ -259,6 +259,7 @@ const EXPIRY_FILTER_FIELD = "expiry_filter";
 const GROUP_FILTER_FIELD = "group_filter";
 const ACTIVE_GROUP_ID_FIELD = "active_group_id";
 const codexSessionActivatedAccountIds = new Set<string>();
+const CODEX_RECOMMENDED_SORT_BY = "recommended";
 
 type CodexOverviewLayoutMode = "compact" | "list" | "grid";
 type CodexNumericSortDirection = "asc" | "desc";
@@ -315,10 +316,19 @@ function compareNullableSortNumber(
   return diff === 0 ? 0 : diff;
 }
 
-function compareCodexAccountTieBreak(left: CodexAccount, right: CodexAccount): number {
-  const createdDiff = right.created_at - left.created_at;
+function compareCodexAccountTieBreak(
+  left: CodexAccount,
+  right: CodexAccount,
+  direction: CodexNumericSortDirection = "desc",
+): number {
+  const createdDiff =
+    direction === "desc"
+      ? right.created_at - left.created_at
+      : left.created_at - right.created_at;
   if (createdDiff !== 0) return createdDiff;
-  return left.id.localeCompare(right.id);
+  return direction === "desc"
+    ? right.id.localeCompare(left.id)
+    : left.id.localeCompare(right.id);
 }
 
 function compareCodexAccountCreatedAt(
@@ -331,6 +341,90 @@ function compareCodexAccountCreatedAt(
       ? right.created_at - left.created_at
       : left.created_at - right.created_at;
   return diff !== 0 ? diff : left.id.localeCompare(right.id);
+}
+
+type CodexGroupSortMeta = {
+  sortOrder: number;
+  accountIndex: number;
+};
+
+function getCodexAccountRecommendedSortBucket(
+  account: CodexAccount,
+  apiServiceSortMeta: Map<string, number>,
+  groupSortMeta: Map<string, CodexGroupSortMeta>,
+  currentAccountId: string | null,
+): number {
+  if (apiServiceSortMeta.has(account.id) || isCodexNewApiAccount(account)) {
+    return 0;
+  }
+  if (groupSortMeta.has(account.id)) return 1;
+  if (currentAccountId === account.id) return 2;
+  if (isCodexApiKeyAccount(account)) return 3;
+
+  const planKey = getCodexPlanFilterKey(account).toLowerCase();
+  const quota = getCodexEffectiveQuotaPercentages(account.quota);
+  const hasHourlyAndWeeklyQuota =
+    (quota.hourly ?? 0) > 0 && (quota.weekly ?? 0) > 0;
+  if ((planKey === "pro" || planKey === "plus") && hasHourlyAndWeeklyQuota) {
+    return 4;
+  }
+  if (planKey === "free") return 5;
+  return 6;
+}
+
+function compareCodexRecommendedFreeAccounts(
+  left: CodexAccount,
+  right: CodexAccount,
+): number {
+  const weeklyDiff = compareNullableSortNumber(
+    getCodexQuotaSortValue(left, "weekly"),
+    getCodexQuotaSortValue(right, "weekly"),
+    "desc",
+  );
+  if (weeklyDiff !== 0) return weeklyDiff;
+
+  const resetDiff = compareNullableSortNumber(
+    getCodexQuotaResetSortValue(left, "weekly_reset"),
+    getCodexQuotaResetSortValue(right, "weekly_reset"),
+    "asc",
+  );
+  return resetDiff !== 0 ? resetDiff : compareCodexAccountTieBreak(left, right);
+}
+
+function compareCodexRecommendedGroupedAccounts(
+  left: CodexAccount,
+  right: CodexAccount,
+  groupSortMeta: Map<string, CodexGroupSortMeta>,
+): number {
+  const leftMeta = groupSortMeta.get(left.id);
+  const rightMeta = groupSortMeta.get(right.id);
+  const sortOrderDiff =
+    (leftMeta?.sortOrder ?? Number.MAX_SAFE_INTEGER) -
+    (rightMeta?.sortOrder ?? Number.MAX_SAFE_INTEGER);
+  if (sortOrderDiff !== 0) return sortOrderDiff;
+
+  const accountIndexDiff =
+    (leftMeta?.accountIndex ?? Number.MAX_SAFE_INTEGER) -
+    (rightMeta?.accountIndex ?? Number.MAX_SAFE_INTEGER);
+  return accountIndexDiff !== 0
+    ? accountIndexDiff
+    : compareCodexAccountTieBreak(left, right);
+}
+
+function compareCodexRecommendedApiServiceAccounts(
+  left: CodexAccount,
+  right: CodexAccount,
+  apiServiceSortMeta: Map<string, number>,
+): number {
+  const orderDiff =
+    (apiServiceSortMeta.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+    (apiServiceSortMeta.get(right.id) ?? Number.MAX_SAFE_INTEGER);
+  if (orderDiff !== 0) return orderDiff;
+
+  if (isCodexNewApiAccount(left) !== isCodexNewApiAccount(right)) {
+    return isCodexNewApiAccount(left) ? -1 : 1;
+  }
+  return compareCodexAccountTieBreak(left, right);
 }
 
 function getCodexQuotaSortValue(
@@ -601,6 +695,9 @@ export function CodexAccountsPage() {
   const [showCodexGroupModal, setShowCodexGroupModal] = useState(false);
   const [showAddToCodexGroupModal, setShowAddToCodexGroupModal] =
     useState(false);
+  const [addToCodexGroupAccountIds, setAddToCodexGroupAccountIds] = useState<
+    string[] | null
+  >(null);
   const [groupQuickAddGroupId, setGroupQuickAddGroupId] = useState<
     string | null
   >(null);
@@ -791,6 +888,7 @@ export function CodexAccountsPage() {
       exportAccounts: codexService.exportCodexAccounts,
     },
     getDisplayEmail: (account) => account.email ?? account.id,
+    defaultSortBy: CODEX_RECOMMENDED_SORT_BY,
   });
 
   const {
@@ -4134,6 +4232,107 @@ export function CodexAccountsPage() {
     [handleSaveLocalAccessAccounts, localAccessCollection, setMessage, t],
   );
 
+  const handleAddLocalAccessAccounts = useCallback(
+    async (accountIds: string[]) => {
+      const accountIdSet = new Set(localAccessCollection?.accountIds ?? []);
+      accountIds.forEach((accountId) => accountIdSet.add(accountId));
+      await handleSaveLocalAccessAccounts(Array.from(accountIdSet), {
+        restrictFreeAccounts: localAccessCollection?.restrictFreeAccounts ?? false,
+      });
+    },
+    [handleSaveLocalAccessAccounts, localAccessCollection],
+  );
+
+  const handleToggleLocalAccessAccount = useCallback(
+    async (accountId: string) => {
+      if (localAccessAccountIdSet.has(accountId)) {
+        await handleRemoveLocalAccessAccount(accountId);
+        return;
+      }
+      try {
+        await handleAddLocalAccessAccounts([accountId]);
+      } catch (error) {
+        setMessage({
+          text: t("messages.actionFailed", {
+            action: t("codex.localAccess.addMember", "加入 API 服务"),
+            error: String(error).replace(/^Error:\s*/, ""),
+          }),
+          tone: "error",
+        });
+      }
+    },
+    [
+      handleAddLocalAccessAccounts,
+      handleRemoveLocalAccessAccount,
+      localAccessAccountIdSet,
+      setMessage,
+      t,
+    ],
+  );
+
+  const handleAddSelectedToLocalAccess = useCallback(async () => {
+    const accountIds = Array.from(selected).filter(
+      (accountId) => !localAccessAccountIdSet.has(accountId),
+    );
+    if (accountIds.length === 0) return;
+    try {
+      await handleAddLocalAccessAccounts(accountIds);
+    } catch (error) {
+      setMessage({
+        text: t("messages.actionFailed", {
+          action: t("codex.localAccess.addSelectedMembers", "加入 API 服务"),
+          error: String(error).replace(/^Error:\s*/, ""),
+        }),
+        tone: "error",
+      });
+    }
+  }, [
+    handleAddLocalAccessAccounts,
+    localAccessAccountIdSet,
+    selected,
+    setMessage,
+    t,
+  ]);
+
+  const handleRemoveSelectedFromLocalAccess = useCallback(async () => {
+    if (!localAccessCollection) return;
+    const selectedAccountIds = new Set(selected);
+    const nextAccountIds = localAccessCollection.accountIds.filter(
+      (accountId) => !selectedAccountIds.has(accountId),
+    );
+    if (nextAccountIds.length === localAccessCollection.accountIds.length) {
+      return;
+    }
+    try {
+      await handleSaveLocalAccessAccounts(nextAccountIds, {
+        restrictFreeAccounts: localAccessCollection.restrictFreeAccounts ?? false,
+      });
+    } catch (error) {
+      setMessage({
+        text: t("messages.actionFailed", {
+          action: t("codex.localAccess.removeSelectedMembers", "移出 API 服务"),
+          error: String(error).replace(/^Error:\s*/, ""),
+        }),
+        tone: "error",
+      });
+    }
+  }, [
+    handleSaveLocalAccessAccounts,
+    localAccessCollection,
+    selected,
+    setMessage,
+    t,
+  ]);
+
+  const openAddAccountsToCodexGroup = useCallback(
+    (accountIds: string[]) => {
+      if (accountIds.length === 0) return;
+      setAddToCodexGroupAccountIds(accountIds);
+      setShowAddToCodexGroupModal(true);
+    },
+    [],
+  );
+
   const tierCounts = useMemo(() => {
     const counts = {
       all: overviewAccounts.length,
@@ -4857,6 +5056,33 @@ export function CodexAccountsPage() {
     });
     return map;
   }, [customSortOrder]);
+  const groupSortMeta = useMemo(() => {
+    const map = new Map<string, CodexGroupSortMeta>();
+    for (const group of codexGroups) {
+      group.accountIds.forEach((accountId, accountIndex) => {
+        const existing = map.get(accountId);
+        if (
+          !existing ||
+          group.sortOrder < existing.sortOrder ||
+          (group.sortOrder === existing.sortOrder &&
+            accountIndex < existing.accountIndex)
+        ) {
+          map.set(accountId, {
+            sortOrder: group.sortOrder,
+            accountIndex,
+          });
+        }
+      });
+    }
+    return map;
+  }, [codexGroups]);
+  const apiServiceSortMeta = useMemo(() => {
+    const map = new Map<string, number>();
+    (localAccessCollection?.accountIds ?? []).forEach((accountId, index) => {
+      map.set(accountId, index);
+    });
+    return map;
+  }, [localAccessCollection?.accountIds]);
   const localAccessRuntimeActive =
     localAccessLaunchCurrent ||
     codexRuntimeMode?.mode === "cockpit_api_service";
@@ -4874,6 +5100,38 @@ export function CodexAccountsPage() {
 
   const compareAccountsBySort = useCallback(
     (a: CodexAccount, b: CodexAccount) => {
+      if (sortBy === CODEX_RECOMMENDED_SORT_BY) {
+        const aBucket = getCodexAccountRecommendedSortBucket(
+          a,
+          apiServiceSortMeta,
+          groupSortMeta,
+          overviewCurrentAccountId,
+        );
+        const bBucket = getCodexAccountRecommendedSortBucket(
+          b,
+          apiServiceSortMeta,
+          groupSortMeta,
+          overviewCurrentAccountId,
+        );
+        if (aBucket !== bBucket) {
+          return aBucket - bBucket;
+        }
+        if (aBucket === 0) {
+          return compareCodexRecommendedApiServiceAccounts(
+            a,
+            b,
+            apiServiceSortMeta,
+          );
+        }
+        if (aBucket === 1) {
+          return compareCodexRecommendedGroupedAccounts(a, b, groupSortMeta);
+        }
+        if (aBucket === 5) {
+          return compareCodexRecommendedFreeAccounts(a, b);
+        }
+        return compareCodexAccountTieBreak(a, b);
+      }
+
       const pinnedPriority =
         getCodexAccountPinnedPriority(a) - getCodexAccountPinnedPriority(b);
       if (pinnedPriority !== 0) {
@@ -4900,7 +5158,9 @@ export function CodexAccountsPage() {
           getCodexQuotaResetSortValue(b, sortBy),
           sortDirection,
         );
-        return diff !== 0 ? diff : compareCodexAccountTieBreak(a, b);
+        return diff !== 0
+          ? diff
+          : compareCodexAccountTieBreak(a, b, sortDirection);
       }
       if (sortBy === "subscription_expiry") {
         const aR = isCodexApiKeyAccount(a)
@@ -4914,7 +5174,9 @@ export function CodexAccountsPage() {
               resolveSubscriptionPresentation(b).timestampMs,
             );
         const diff = compareNullableSortNumber(aR, bR, sortDirection);
-        return diff !== 0 ? diff : compareCodexAccountTieBreak(a, b);
+        return diff !== 0
+          ? diff
+          : compareCodexAccountTieBreak(a, b, sortDirection);
       }
       if (sortBy === "weekly" || sortBy === "hourly") {
         const diff = compareNullableSortNumber(
@@ -4922,14 +5184,19 @@ export function CodexAccountsPage() {
           getCodexQuotaSortValue(b, sortBy),
           sortDirection,
         );
-        return diff !== 0 ? diff : compareCodexAccountTieBreak(a, b);
+        return diff !== 0
+          ? diff
+          : compareCodexAccountTieBreak(a, b, sortDirection);
       }
 
       return compareCodexAccountCreatedAt(a, b, sortDirection);
     },
     [
+      apiServiceSortMeta,
       customSortOrderIndex,
       getCodexAccountPinnedPriority,
+      groupSortMeta,
+      overviewCurrentAccountId,
       resolveSubscriptionPresentation,
       sortBy,
       sortDirection,
@@ -5027,6 +5294,7 @@ export function CodexAccountsPage() {
     [paginatedAccounts],
   );
   const isCustomSortActive = sortBy === "custom";
+  const isRecommendedSortActive = sortBy === CODEX_RECOMMENDED_SORT_BY;
   const customSortAccounts = useMemo(() => {
     const accountMap = new Map(
       accounts.map((account) => [account.id, account]),
@@ -5107,7 +5375,11 @@ export function CodexAccountsPage() {
   const handleSortByChange = useCallback(
     (value: string) => {
       setSortBy(value);
-      if (value === "weekly" || value === "hourly") {
+      if (
+        value === CODEX_RECOMMENDED_SORT_BY ||
+        value === "weekly" ||
+        value === "hourly"
+      ) {
         setSortDirection("desc");
       }
       if (value === "custom") {
@@ -5120,6 +5392,16 @@ export function CodexAccountsPage() {
     () => isEveryIdSelected(selected, paginatedIds),
     [paginatedIds, selected],
   );
+  const selectedAccountIds = useMemo(() => Array.from(selected), [selected]);
+  const selectedLocalAccessMemberCount = useMemo(
+    () =>
+      selectedAccountIds.filter((accountId) =>
+        localAccessAccountIdSet.has(accountId),
+      ).length,
+    [localAccessAccountIdSet, selectedAccountIds],
+  );
+  const selectedLocalAccessNonMemberCount =
+    selectedAccountIds.length - selectedLocalAccessMemberCount;
 
   const groupedAccounts = useMemo(() => {
     if (!groupByTag) return [] as Array<[string, typeof filteredAccounts]>;
@@ -5294,6 +5576,41 @@ export function CodexAccountsPage() {
           >
             <FileText size={13} />
           </button>
+          <button
+            className={`codex-compact-note-btn ${localAccessAccountIdSet.has(account.id) ? "has-note" : ""}`}
+            onClick={() => void handleToggleLocalAccessAccount(account.id)}
+            title={
+              localAccessAccountIdSet.has(account.id)
+                ? t("codex.localAccess.removeMember", "移出 API 服务")
+                : t("codex.localAccess.addMember", "加入 API 服务")
+            }
+            disabled={localAccessBusy}
+          >
+            {localAccessAccountIdSet.has(account.id) ? (
+              <LogOut size={13} />
+            ) : (
+              <Server size={13} />
+            )}
+          </button>
+          <button
+            className="codex-compact-note-btn"
+            onClick={() => openAddAccountsToCodexGroup([account.id])}
+            title={t("codex.groups.addToGroup", "添加至分组")}
+          >
+            <FolderPlus size={13} />
+          </button>
+          {activeGroupId && (
+            <button
+              className="codex-compact-note-btn"
+              onClick={() =>
+                void handleRemoveSingleFromGroup(activeGroupId, account.id)
+              }
+              title={t("accounts.groups.removeFromGroup")}
+              disabled={removingGroupAccountIds.has(account.id)}
+            >
+              <LogOut size={13} />
+            </button>
+          )}
           <button
             className={`codex-compact-switch-btn ${!isCurrent ? "success" : ""}`}
             onClick={() => handleSwitch(account.id)}
@@ -5686,6 +6003,37 @@ export function CodexAccountsPage() {
                     title={t("instances.actions.edit", "编辑")}
                   >
                     <Pencil size={14} />
+                  </button>
+                )}
+                <button
+                  className={`card-action-btn ${isInLocalAccess ? "active" : ""}`}
+                  onClick={() => void handleToggleLocalAccessAccount(account.id)}
+                  title={
+                    isInLocalAccess
+                      ? t("codex.localAccess.removeMember", "移出 API 服务")
+                      : t("codex.localAccess.addMember", "加入 API 服务")
+                  }
+                  disabled={localAccessBusy}
+                >
+                  {isInLocalAccess ? <LogOut size={14} /> : <Server size={14} />}
+                </button>
+                <button
+                  className="card-action-btn"
+                  onClick={() => openAddAccountsToCodexGroup([account.id])}
+                  title={t("codex.groups.addToGroup", "添加至分组")}
+                >
+                  <FolderPlus size={14} />
+                </button>
+                {activeGroupId && (
+                  <button
+                    className="card-action-btn"
+                    onClick={() =>
+                      void handleRemoveSingleFromGroup(activeGroupId, account.id)
+                    }
+                    title={t("accounts.groups.removeFromGroup")}
+                    disabled={removingGroupAccountIds.has(account.id)}
+                  >
+                    <LogOut size={14} />
                   </button>
                 )}
                 <button
@@ -6747,6 +7095,37 @@ export function CodexAccountsPage() {
                 </button>
               )}
               <button
+                className={`action-btn ${isInLocalAccess ? "active" : ""}`}
+                onClick={() => void handleToggleLocalAccessAccount(account.id)}
+                title={
+                  isInLocalAccess
+                    ? t("codex.localAccess.removeMember", "移出 API 服务")
+                    : t("codex.localAccess.addMember", "加入 API 服务")
+                }
+                disabled={localAccessBusy}
+              >
+                {isInLocalAccess ? <LogOut size={14} /> : <Server size={14} />}
+              </button>
+              <button
+                className="action-btn"
+                onClick={() => openAddAccountsToCodexGroup([account.id])}
+                title={t("codex.groups.addToGroup", "添加至分组")}
+              >
+                <FolderPlus size={14} />
+              </button>
+              {activeGroupId && (
+                <button
+                  className="action-btn"
+                  onClick={() =>
+                    void handleRemoveSingleFromGroup(activeGroupId, account.id)
+                  }
+                  title={t("accounts.groups.removeFromGroup")}
+                  disabled={removingGroupAccountIds.has(account.id)}
+                >
+                  <LogOut size={14} />
+                </button>
+              )}
+              <button
                 className={`action-btn ${!isCurrent ? "success" : ""}`}
                 onClick={() => handleSwitch(account.id)}
                 disabled={!!switching}
@@ -7429,7 +7808,7 @@ export function CodexAccountsPage() {
                 <>
                   <button
                     className="btn btn-secondary breadcrumb-remove-btn"
-                    onClick={() => setShowAddToCodexGroupModal(true)}
+                    onClick={() => openAddAccountsToCodexGroup(selectedAccountIds)}
                     title={t("accounts.groups.moveToGroup")}
                   >
                     <FolderPlus size={14} />
@@ -7577,6 +7956,10 @@ export function CodexAccountsPage() {
                 value={sortBy}
                 options={[
                   {
+                    value: CODEX_RECOMMENDED_SORT_BY,
+                    label: t("codex.sort.recommended", "默认排序"),
+                  },
+                  {
                     value: "created_at",
                     label: t("common.shared.sort.createdAt", "按创建时间"),
                   },
@@ -7609,7 +7992,7 @@ export function CodexAccountsPage() {
                 icon={<ArrowDownWideNarrow size={14} />}
                 onChange={handleSortByChange}
               />
-              {!isCustomSortActive && (
+              {!isCustomSortActive && !isRecommendedSortActive && (
                 <button
                   className="sort-direction-btn"
                   onClick={() =>
@@ -7681,9 +8064,29 @@ export function CodexAccountsPage() {
               </button>
               {selected.size > 0 && (
                 <>
+                  {selectedLocalAccessNonMemberCount > 0 && (
+                    <button
+                      className="btn btn-secondary icon-only"
+                      onClick={() => void handleAddSelectedToLocalAccess()}
+                      disabled={localAccessBusy}
+                      title={`${t("codex.localAccess.addSelectedMembers", "加入 API 服务")} (${selectedLocalAccessNonMemberCount})`}
+                    >
+                      <Server size={14} />
+                    </button>
+                  )}
+                  {selectedLocalAccessMemberCount > 0 && (
+                    <button
+                      className="btn btn-secondary icon-only"
+                      onClick={() => void handleRemoveSelectedFromLocalAccess()}
+                      disabled={localAccessBusy}
+                      title={`${t("codex.localAccess.removeSelectedMembers", "移出 API 服务")} (${selectedLocalAccessMemberCount})`}
+                    >
+                      <LogOut size={14} />
+                    </button>
+                  )}
                   <button
                     className="btn btn-secondary icon-only"
-                    onClick={() => setShowAddToCodexGroupModal(true)}
+                    onClick={() => openAddAccountsToCodexGroup(selectedAccountIds)}
                     title={
                       activeGroupId
                         ? t("accounts.groups.moveToGroup")
@@ -7992,6 +8395,7 @@ export function CodexAccountsPage() {
             canGoPrevious={pagination.canGoPrevious}
             canGoNext={pagination.canGoNext}
             onPageSizeChange={pagination.setPageSize}
+            onPageChange={pagination.setCurrentPage}
             onPreviousPage={pagination.goToPreviousPage}
             onNextPage={pagination.goToNextPage}
           />
@@ -9926,10 +10330,16 @@ export function CodexAccountsPage() {
           {/* Codex 添加到分组弹窗 */}
           <CodexAddToGroupModal
             isOpen={showAddToCodexGroupModal}
-            onClose={() => setShowAddToCodexGroupModal(false)}
-            accountIds={Array.from(selected)}
+            onClose={() => {
+              setShowAddToCodexGroupModal(false);
+              setAddToCodexGroupAccountIds(null);
+            }}
+            accountIds={addToCodexGroupAccountIds ?? selectedAccountIds}
             sourceGroupId={activeGroupId ?? undefined}
-            onAdded={reloadCodexGroups}
+            onAdded={async () => {
+              await reloadCodexGroups();
+              setAddToCodexGroupAccountIds(null);
+            }}
           />
         </>
       )}

@@ -1649,6 +1649,7 @@ export function GeminiAccountsPage() {
             canGoPrevious={pagination.canGoPrevious}
             canGoNext={pagination.canGoNext}
             onPageSizeChange={pagination.setPageSize}
+            onPageChange={pagination.setCurrentPage}
             onPreviousPage={pagination.goToPreviousPage}
             onNextPage={pagination.goToNextPage}
           />

@@ -660,7 +660,7 @@ export function buildCodexAccountPresentation(
             window.serverBaselineAdjusted
               ? t(
                   "codex.quota.freeWeeklyBaselineHint",
-                  "服务端初始 used_percent={{used}}%，已按接近满额显示",
+                  "服务端初始 used_percent={{used}}%，已按默认初值 97% 显示",
                   {
                     used:
                       window.rawPercentage == null

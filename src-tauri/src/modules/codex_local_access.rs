@@ -5205,6 +5205,12 @@ fn normalize_local_api_safety_config(collection: &mut CodexLocalAccessCollection
         1,
         300,
     );
+    let minimum_queue_wait_seconds =
+        local_api_queue_wait_seconds_for_start_interval(config.min_request_interval_seconds);
+    if config.max_queue_wait_seconds < minimum_queue_wait_seconds {
+        config.max_queue_wait_seconds = minimum_queue_wait_seconds;
+        changed = true;
+    }
     changed |= clamp_u64_field(
         &mut config.request_timeout_seconds,
         defaults.request_timeout_seconds,
@@ -5245,6 +5251,10 @@ fn normalize_local_api_safety_config(collection: &mut CodexLocalAccessCollection
     changed
 }
 
+fn local_api_queue_wait_seconds_for_start_interval(min_request_interval_seconds: u64) -> u64 {
+    min_request_interval_seconds.saturating_add(1).clamp(1, 300)
+}
+
 fn local_api_safety_config_for_preset(
     preset: CodexLocalApiSafetyPresetId,
 ) -> CodexLocalApiSafetyConfig {
@@ -5268,6 +5278,8 @@ fn local_api_safety_config_for_preset(
         }
     }
 
+    config.max_queue_wait_seconds =
+        local_api_queue_wait_seconds_for_start_interval(config.min_request_interval_seconds);
     config
 }
 
@@ -10277,7 +10289,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(collection.safety_config.hardened_local_mode);
         assert_eq!(collection.safety_config.max_concurrent_requests, 1);
         assert_eq!(collection.safety_config.min_request_interval_seconds, 20);
-        assert_eq!(collection.safety_config.max_queue_wait_seconds, 10);
+        assert_eq!(collection.safety_config.max_queue_wait_seconds, 21);
         assert_eq!(collection.safety_config.request_timeout_seconds, 600);
         assert_eq!(
             collection.safety_config.max_request_body_mb,
@@ -10343,6 +10355,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(maximum_safety.hardened_local_mode);
         assert_eq!(maximum_safety.max_concurrent_requests, 1);
         assert_eq!(maximum_safety.min_request_interval_seconds, 60);
+        assert_eq!(maximum_safety.max_queue_wait_seconds, 61);
         assert_eq!(maximum_safety.max_retry_accounts, 1);
         assert_eq!(maximum_safety.fallback_mode.as_str(), "disabled");
         assert!(maximum_safety.logging.redact_sensitive_values);
@@ -10353,6 +10366,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             local_api_safety_config_for_preset(CodexLocalApiSafetyPresetId::BalancedSelfUse);
         assert_eq!(balanced.max_concurrent_requests, 1);
         assert_eq!(balanced.min_request_interval_seconds, 20);
+        assert_eq!(balanced.max_queue_wait_seconds, 21);
         assert_eq!(balanced.max_retry_accounts, 1);
         assert_eq!(balanced.fallback_mode.as_str(), "disabled");
 
@@ -10360,6 +10374,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             local_api_safety_config_for_preset(CodexLocalApiSafetyPresetId::QuotaDrainCareful);
         assert_eq!(quota_drain.max_concurrent_requests, 1);
         assert_eq!(quota_drain.min_request_interval_seconds, 30);
+        assert_eq!(quota_drain.max_queue_wait_seconds, 31);
         assert_eq!(quota_drain.max_retry_accounts, 1);
         assert_eq!(quota_drain.fallback_mode.as_str(), "next_request_only");
     }
@@ -10399,8 +10414,32 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(collection.safety_config.hardened_local_mode);
         assert_eq!(collection.safety_config.max_concurrent_requests, 1);
         assert_eq!(collection.safety_config.min_request_interval_seconds, 60);
+        assert_eq!(collection.safety_config.max_queue_wait_seconds, 61);
         assert_eq!(collection.safety_config.max_retry_accounts, 1);
         assert_eq!(collection.safety_config.fallback_mode.as_str(), "disabled");
+    }
+
+    #[test]
+    fn normalizes_queue_wait_to_cover_start_interval() {
+        let mut collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "ck-test".to_string(),
+            safety_config: CodexLocalApiSafetyConfig {
+                min_request_interval_seconds: 20,
+                max_queue_wait_seconds: 10,
+                ..CodexLocalApiSafetyConfig::default()
+            },
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec!["acc-a".to_string()],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        assert!(normalize_local_api_safety_config(&mut collection));
+        assert_eq!(collection.safety_config.max_queue_wait_seconds, 21);
     }
 
     #[test]

@@ -1526,6 +1526,37 @@
   white-space: nowrap;
 }
 
+.pagination-page-jump {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pagination-page-select {
+  width: 58px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.54);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pagination-page-select:focus {
+  outline: none;
+  border-color: rgba(29, 78, 216, 0.42);
+  box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.12);
+}
+
 .pagination-container .account-filter-surface {
   flex-shrink: 0;
 }

@@ -714,8 +714,44 @@ function clampCodexQuotaPercentage(value: number | null | undefined): number {
 }
 
 const CODEX_WEEK_WINDOW_SECONDS = 7 * 24 * 60 * 60;
+const CODEX_FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
 const CODEX_FREE_BASELINE_USED_PERCENT_MAX = 3;
 const CODEX_FREE_BASELINE_RESET_GRACE_SECONDS = 5 * 60;
+const CODEX_SERVER_INITIAL_BASELINE_REMAINING_PERCENTAGE = 97;
+
+function getCodexQuotaRawRateLimitWindow(
+  quota: CodexQuota | undefined,
+  window: "hourly" | "weekly",
+): JsonRecord | null {
+  const raw = toJsonRecord(quota?.raw_data);
+  const rateLimit = toJsonRecord(raw?.rate_limit);
+  return toJsonRecord(
+    window === "hourly"
+      ? rateLimit?.primary_window
+      : rateLimit?.secondary_window,
+  );
+}
+
+function isInitialQuotaWindow(
+  window: JsonRecord | null,
+  expectedWindowSeconds: number,
+): boolean {
+  if (!window) return false;
+
+  const usedPercent = toFiniteNumber(window.used_percent) ?? 0;
+  const windowSeconds = toFiniteNumber(window.limit_window_seconds);
+  const resetAfterSeconds = toFiniteNumber(window.reset_after_seconds);
+  if (windowSeconds === undefined || resetAfterSeconds === undefined) {
+    return false;
+  }
+
+  return (
+    usedPercent >= 0 &&
+    usedPercent <= CODEX_FREE_BASELINE_USED_PERCENT_MAX &&
+    windowSeconds >= expectedWindowSeconds - CODEX_FREE_BASELINE_RESET_GRACE_SECONDS &&
+    resetAfterSeconds >= windowSeconds - CODEX_FREE_BASELINE_RESET_GRACE_SECONDS
+  );
+}
 
 export function isCodexFreeWeeklyServerBaseline(
   quota: CodexQuota | undefined,
@@ -724,26 +760,33 @@ export function isCodexFreeWeeklyServerBaseline(
   const planType = toStringValue(raw?.plan_type)?.toLowerCase();
   if (planType !== "free") return false;
 
+  const primaryWindow = getCodexQuotaRawRateLimitWindow(quota, "hourly");
   const rateLimit = toJsonRecord(raw?.rate_limit);
-  const primaryWindow = toJsonRecord(rateLimit?.primary_window);
   if (!primaryWindow || toJsonRecord(rateLimit?.secondary_window)) return false;
 
-  const usedPercent = toFiniteNumber(primaryWindow.used_percent);
-  const windowSeconds = toFiniteNumber(primaryWindow.limit_window_seconds);
-  const resetAfterSeconds = toFiniteNumber(primaryWindow.reset_after_seconds);
-  if (
-    usedPercent === undefined ||
-    windowSeconds === undefined ||
-    resetAfterSeconds === undefined
-  ) {
-    return false;
-  }
+  return isInitialQuotaWindow(primaryWindow, CODEX_WEEK_WINDOW_SECONDS);
+}
 
+function isCodexPlusFiveHourServerBaseline(
+  quota: CodexQuota | undefined,
+): boolean {
+  const raw = toJsonRecord(quota?.raw_data);
+  const planType = toStringValue(raw?.plan_type)?.toLowerCase();
+  if (planType !== "plus") return false;
+
+  return isInitialQuotaWindow(
+    getCodexQuotaRawRateLimitWindow(quota, "hourly"),
+    CODEX_FIVE_HOUR_WINDOW_SECONDS,
+  );
+}
+
+function isCodexServerInitialBaseline(
+  quota: CodexQuota,
+  window: "hourly" | "weekly",
+): boolean {
   return (
-    usedPercent > 0 &&
-    usedPercent <= CODEX_FREE_BASELINE_USED_PERCENT_MAX &&
-    windowSeconds >= CODEX_WEEK_WINDOW_SECONDS - CODEX_FREE_BASELINE_RESET_GRACE_SECONDS &&
-    resetAfterSeconds >= windowSeconds - CODEX_FREE_BASELINE_RESET_GRACE_SECONDS
+    (window === "hourly" && isCodexFreeWeeklyServerBaseline(quota)) ||
+    (window === "hourly" && isCodexPlusFiveHourServerBaseline(quota))
   );
 }
 
@@ -753,8 +796,8 @@ function applyCodexServerBaselineAdjustment(
   percentage: number | null,
 ): number | null {
   if (percentage == null) return null;
-  if (window === "hourly" && isCodexFreeWeeklyServerBaseline(quota)) {
-    return 100;
+  if (isCodexServerInitialBaseline(quota, window)) {
+    return Math.min(percentage, CODEX_SERVER_INITIAL_BASELINE_REMAINING_PERCENTAGE);
   }
   return percentage;
 }
@@ -866,7 +909,7 @@ export function getCodexQuotaWindows(
       percentage: effective.hourly ?? 0,
       rawPercentage,
       serverBaselineAdjusted:
-        isCodexFreeWeeklyServerBaseline(quota) &&
+        isCodexServerInitialBaseline(quota, "hourly") &&
         effective.hourly != null &&
         effective.hourly !== rawPercentage,
       resetTime: quota.hourly_reset_time,

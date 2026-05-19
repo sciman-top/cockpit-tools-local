@@ -13,6 +13,7 @@ interface PaginationControlsProps {
   canGoPrevious: boolean;
   canGoNext: boolean;
   onPageSizeChange: (pageSize: number) => void;
+  onPageChange: (page: number) => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
 }
@@ -28,6 +29,7 @@ export function PaginationControls({
   canGoPrevious,
   canGoNext,
   onPageSizeChange,
+  onPageChange,
   onPreviousPage,
   onNextPage,
 }: PaginationControlsProps) {
@@ -73,13 +75,22 @@ export function PaginationControls({
           >
             {t('pagination.prev', 'Previous')}
           </button>
-          <span className="pagination-page">
-            {t('pagination.page', {
-              current: currentPage,
-              total: totalPages,
-              defaultValue: 'Page {{current}} / {{total}}',
-            })}
-          </span>
+          <label className="pagination-page-jump">
+            <span>{t('pagination.pagePrefix', 'Page')}</span>
+            <select
+              className="pagination-page-select"
+              value={currentPage}
+              onChange={(event) => onPageChange(Number.parseInt(event.target.value, 10))}
+              aria-label={t('pagination.jumpToPage', 'Jump to page')}
+            >
+              {Array.from({ length: totalPages }, (_, index) => index + 1).map((page) => (
+                <option key={page} value={page}>
+                  {page}
+                </option>
+              ))}
+            </select>
+            <span>/ {totalPages}</span>
+          </label>
           <button
             type="button"
             className="pagination-btn"

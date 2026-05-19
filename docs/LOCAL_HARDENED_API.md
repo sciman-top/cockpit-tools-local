@@ -19,7 +19,7 @@ API service 的默认安全配置等价于 `balanced_self_use`；需要更保守
 | `hardenedLocalMode` | `true` | 开启本机 hardened 行为 |
 | `maxConcurrentRequests` | `1` | 同时最多一个上游请求 |
 | `minRequestIntervalSeconds` | `20` | 请求启动间隔不低于 20 秒 |
-| `maxQueueWaitSeconds` | `10` | 本地排队等待上限 |
+| `maxQueueWaitSeconds` | `21` | 本地排队等待上限，至少覆盖启动间隔并留 1 秒余量 |
 | `requestTimeoutSeconds` | `600` | 长任务允许继续写出 |
 | `maxRetries` | `1` | 单账号有限 retry |
 | `maxRetryAccounts` | `1` | 默认不在同一请求内扫账号池 |

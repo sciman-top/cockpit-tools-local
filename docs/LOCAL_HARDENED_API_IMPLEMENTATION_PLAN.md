@@ -211,12 +211,13 @@ flowchart TD
 
 描述：在进入上游前增加本地 backpressure：global semaphore、请求启动间隔、bounded queue、请求超时。
 
-状态：2026-05-18 已完成本地背压切片。当前实现仍保持单账号保守路径，不打开多账号池；stream guard 的“已写出后不跨账号续接”继续归入 HLA-05。
+状态：2026-05-18 已完成本地背压切片。当前实现仍保持单账号保守路径，不打开多账号池；stream guard 的“已写出后不跨账号续接”继续归入 HLA-05。2026-05-19 修复 Codex CLI 快速连续请求下的本地 429：`maxQueueWaitSeconds` 默认和配置规范化都会覆盖 `minRequestIntervalSeconds + 1s`，避免 20 秒启动间隔只排队 10 秒后误报 `exceeded retry limit`。
 
 验收：
 
 - [x] hardened 默认同一时间最多 1 个上游请求。
 - [x] 新请求启动默认至少间隔 20 秒。
+- [x] 本地排队等待默认覆盖启动间隔；旧配置 `maxQueueWaitSeconds < minRequestIntervalSeconds + 1` 会在加载时自动规范化。
 - [x] 等待超时返回本地 429/503，并带 `Retry-After`。
 - [x] 本地 backpressure 返回的错误使用 `error_type = local_backpressure` 或等价结构，不能伪装成 upstream quota。
 - [x] streaming 成功、客户端断开、上游异常都会通过 scoped permit drop 释放 permit；HLA-05 继续覆盖 stream 已写出后的禁止重试/切号。
@@ -225,6 +226,7 @@ flowchart TD
 验证：
 
 - [x] 并发请求单测：`cargo test --package cockpit-tools local_backpressure --quiet`
+- [x] queue wait 规范化单测：`cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target normalizes_queue_wait_to_cover_start_interval --quiet`
 - [x] permit drop 释放单测：`cargo test --package cockpit-tools local_backpressure --quiet`
 - [x] `cargo test --package cockpit-tools --quiet`
 - [x] `cargo test --package cockpit-tools --quiet -- --test-threads=1`
@@ -473,7 +475,7 @@ flowchart TD
 
 描述：把 hardened defaults、balanced self-use、quota drain careful 做成可恢复 preset，并补最终用户文档。
 
-状态：2026-05-18 已完成文档契约、UI/command preset 与单号池 smoke harness 切片：新增 `docs/LOCAL_HARDENED_API.md`，写明默认安全姿态、三类 preset 目标值、单号池实跑、Codex CLI 直连 Cockpit、可选 LiteLLM 桥接、风险边界和回滚；`codex_local_access_apply_safety_preset` 与 API 服务面板策略预设按钮已可恢复 `maximum_safety`、`balanced_self_use`、`quota_drain_careful`；`scripts/smoke-local-hardened-api.ps1` 已提供默认不耗上游额度的 preflight、短生命周期 gateway runner 和显式真实上游 smoke。单号池实跑发现 health registry model cooldown 只阻断调度但未返回 wait，导致重复请求短路为 503；已改为从 health registry 提取 cooldown wait，重复请求返回本地 429 + `Retry-After`。本切片已通过 typecheck、build、locale check、safety preset 单测和 cooldown wait 单测；直连 smoke 继续保留。
+状态：2026-05-18 已完成文档契约、UI/command preset 与单号池 smoke harness 切片：新增 `docs/LOCAL_HARDENED_API.md`，写明默认安全姿态、三类 preset 目标值、单号池实跑、Codex CLI 直连 Cockpit、可选 LiteLLM 桥接、风险边界和回滚；`codex_local_access_apply_safety_preset` 与 API 服务面板策略预设按钮已可恢复 `maximum_safety`、`balanced_self_use`、`quota_drain_careful`；`scripts/smoke-local-hardened-api.ps1` 已提供默认不耗上游额度的 preflight、短生命周期 gateway runner 和显式真实上游 smoke。单号池实跑发现 health registry model cooldown 只阻断调度但未返回 wait，导致重复请求短路为 503；已改为从 health registry 提取 cooldown wait，重复请求返回本地 429 + `Retry-After`。2026-05-19 已用临时 free 账号、ephemeral gateway 和 `codex exec --ephemeral` 完成 CLI direct smoke。
 
 验收：
 
@@ -483,7 +485,7 @@ flowchart TD
 - [x] 文档写明 Codex CLI 直连 Cockpit 和可选 LiteLLM 桥接两条路径。
 - [x] UI/command 级一键恢复 preset。
 - [x] 单号池/小池/fallback 分阶段 smoke harness 不改 live Codex provider，默认不调用真实上游。
-- [ ] 关闭 LiteLLM 后 Codex CLI 仍可直连 Cockpit。
+- [x] 关闭 LiteLLM 后 Codex CLI 仍可直连 Cockpit；证据 `reports/local-hardened-api-smoke/codex-cli-direct-smoke-20260519-002837.json`。
 
 验证：
 
@@ -496,7 +498,7 @@ flowchart TD
 - [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target health_registry_model_cooldown_wait_is_exposed_for_scheduler --quiet`
 - [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -WriteReport`
 - [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -RunUpstreamSmoke -WriteReport`
-- [ ] 手动 smoke：Codex CLI 使用 `http://127.0.0.1:2876/v1`。
+- [x] 手动 smoke：Codex CLI 使用当前 API service 端口 `http://127.0.0.1:45335/v1`，一次性 provider `cockpit_direct_smoke`，`codex exec --ephemeral` 返回 `OK`。
 - [ ] 2026-05-18 前置探针：`Test-NetConnection 127.0.0.1:2876` 返回未监听；未修改 live Codex provider/API key。
 
 可能文件：
@@ -562,6 +564,7 @@ flowchart TD
 ## 推荐执行顺序
 
 AI 推荐：HLA-11、当前 runtime path 的 `request_id` audit chain、audit day rotation 与 degraded 可见性已完成后，下一步做 Codex CLI direct smoke 的低风险窗口验证，或继续补 audit UI 最近脱敏事件列表。理由：核心 API service 链路已经有 Rust focused tests 与 ephemeral gateway 实跑，剩余最大未知是 CLI 入口真实接入和 UI 可读性增强。
+2026-05-19 补充：Codex CLI direct smoke 已完成。下一步 AI 推荐补 audit UI 最近脱敏事件列表，理由：CLI 入口已被真实 `codex exec` 证明，剩余高收益点是让用户在 UI 中直接看到最近 request_id 链路摘要。
 
 ## 完成态证据
 

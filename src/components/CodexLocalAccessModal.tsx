@@ -129,10 +129,12 @@ function resolveSafetyPresetId(
   config: CodexLocalApiSafetyConfig | null | undefined,
 ): CodexLocalApiSafetyPresetId | 'custom' {
   if (!config) return 'custom';
+  const queueWaitCoversStartInterval =
+    config.maxQueueWaitSeconds >= Math.min(config.minRequestIntervalSeconds + 1, 300);
   const isBaseHardened =
     config.hardenedLocalMode &&
     config.maxConcurrentRequests === 1 &&
-    config.maxQueueWaitSeconds === 10 &&
+    queueWaitCoversStartInterval &&
     config.requestTimeoutSeconds === 600 &&
     config.maxRequestBodyMb === 64 &&
     config.maxRetries === 1 &&

@@ -508,7 +508,7 @@ P1 必做：
 
 P2 增强：
 
-- [ ] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复已实现，并补入单号池 API service smoke harness 与短生命周期 gateway runner；单号池 loopback 与 `gpt-5.4` 上游 429/cooldown/audit 链路已实跑通过，重复 cooldown 已修正为本地 429 + `Retry-After`；2-3 账号小池与 fallback probe 已在 HLA-11 收口中实跑通过。Codex CLI direct smoke 仍待现场配置窗口验证。
+- [x] `HLA-10` 策略 preset。已新增 `docs/LOCAL_HARDENED_API.md`，把 `maximum_safety`、`balanced_self_use`、`quota_drain_careful` 展开为可执行契约；UI/command 一键恢复已实现，并补入单号池 API service smoke harness 与短生命周期 gateway runner；单号池 loopback 与 `gpt-5.4` 上游 429/cooldown/audit 链路已实跑通过，重复 cooldown 已修正为本地 429 + `Retry-After`；2-3 账号小池与 fallback probe 已在 HLA-11 收口中实跑通过；Codex CLI direct smoke 已用临时 free 账号、ephemeral gateway 和 `codex exec --ephemeral` 验证通过。
 - [ ] 请求历史扩展和健康趋势。
 - [ ] 可选 LiteLLM 桥接。
 - [ ] 更完整端到端 smoke。
@@ -531,7 +531,7 @@ P2 增强：
 - [x] 已接纳 active stream 不因本地 cooldown/exhausted/selection_eligible 变化被取消；new independent admission 可避开冷却账号，不等待无关 active stream 结束。
 - [x] `previous_response_id` 不跨账号直接复用；跨账号 fallback 只能使用 full context replay 或 compacted replay。
 - [x] 500+ 账号时 selector 不高频刷新、不扫射、不阻塞 UI。Hardened mode 下候选池可保留完整账号列表，但 fill-first 不做账号快照刷新，实际上游尝试仍受 `maxRetryAccounts` / `fallbackMode` cap 控制。
-- [ ] Codex CLI 可以通过 `http://127.0.0.1:2876/v1` 正常调用。
+- [x] Codex CLI 可以通过当前 API service 端口正常调用。证据：`reports/local-hardened-api-smoke/codex-cli-direct-smoke-20260519-002837.json`，`codex exec --ephemeral` 最终消息 `OK`，audit route `/v1/responses`，status `200`。
 - [ ] 原有账号管理、多实例、配额展示功能不被破坏。
 
 ## 建议验证命令
@@ -571,4 +571,4 @@ git diff --check
 
 ## 下一步建议
 
-下一步做 Codex CLI direct smoke 的低风险窗口验证，或补 audit UI 最近脱敏事件列表。AI 推荐优先 CLI direct smoke；核心 API service 请求链路、HLA-11 lease、request_id audit chain 和 audit degraded 可见性已完成 focused tests + ephemeral gateway 实跑，剩余最大未知是真实 CLI 入口接入。
+下一步补 audit UI 最近脱敏事件列表。AI 推荐这样做的理由：核心 API service 请求链路、HLA-11 lease、request_id audit chain、audit degraded 可见性和 Codex CLI direct smoke 都已完成 focused tests + ephemeral gateway/CLI 实跑，剩余高收益点是把最近 request_id 链路摘要直接暴露给用户排障。
