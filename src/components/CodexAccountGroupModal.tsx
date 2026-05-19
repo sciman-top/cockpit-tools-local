@@ -354,7 +354,7 @@ export const CodexAddToGroupModal = ({
             <FolderPlus size={18} />
             {sourceGroupId
               ? t('accounts.groups.moveToGroup')
-              : t('accounts.groups.addToGroup', '添加至分组')}
+              : t('accounts.groups.addToGroup', '移入分组')}
           </h2>
           <button className="modal-close" onClick={onClose}>
             <X size={18} />
@@ -368,7 +368,7 @@ export const CodexAddToGroupModal = ({
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') handleCreateAndAdd(); }}
-              placeholder={t('accounts.groups.createAndAdd', '新建分组并添加...')}
+              placeholder={t('accounts.groups.createAndAdd', '新建分组并移入...')}
               maxLength={30}
             />
             <button

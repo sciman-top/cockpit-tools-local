@@ -1890,7 +1890,10 @@
         "viewFull": "Ver estatísticas completas",
         "modalTitle": "Pool de cota do serviço API",
         "empty": "Ainda sem estatísticas de cota"
-      }
+      },
+      "addMember": "Adicionar ao serviço de API",
+      "addSelectedMembers": "Adicionar selecionados ao serviço de API",
+      "removeSelectedMembers": "Remover selecionados do serviço de API"
     },
     "local": {
       "desc": "Importe a conta atual de ~/.codex/auth.json",

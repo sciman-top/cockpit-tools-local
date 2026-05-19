@@ -1890,7 +1890,10 @@
         "viewFull": "查看完整統計",
         "modalTitle": "API 服務額度池",
         "empty": "尚無額度統計"
-      }
+      },
+      "addMember": "加入 API 服務",
+      "addSelectedMembers": "將選取項加入 API 服務",
+      "removeSelectedMembers": "將選取項移出 API 服務"
     },
     "api": {
       "baseUrl": "基礎網址",

@@ -1939,7 +1939,10 @@
         "viewFull": "Lihat statistik lengkap",
         "modalTitle": "Kumpulan kuota layanan API",
         "empty": "Belum ada statistik kuota"
-      }
+      },
+      "addMember": "Tambahkan ke layanan API",
+      "addSelectedMembers": "Tambahkan pilihan ke layanan API",
+      "removeSelectedMembers": "Hapus pilihan dari layanan API"
     },
     "api": {
       "baseUrl": "URL Dasar",

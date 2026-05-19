@@ -7,6 +7,7 @@ import {
   Fragment,
   type ReactElement,
   type MouseEvent as ReactMouseEvent,
+  type DragEvent as ReactDragEvent,
 } from "react";
 import {
   Plus,
@@ -260,6 +261,21 @@ const GROUP_FILTER_FIELD = "group_filter";
 const ACTIVE_GROUP_ID_FIELD = "active_group_id";
 const codexSessionActivatedAccountIds = new Set<string>();
 const CODEX_RECOMMENDED_SORT_BY = "recommended";
+const CODEX_ACCOUNT_DRAG_MIME = "application/x-cockpit-codex-account-ids";
+const CODEX_API_SERVICE_DROP_TARGET = "api-service";
+
+function makeCodexGroupDropTarget(groupId: string): string {
+  return `group:${groupId}`;
+}
+
+function shouldIgnoreAccountDragStart(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(
+    target.closest(
+      'button, input, select, textarea, a, [role="button"], [data-no-account-drag="true"]',
+    ),
+  );
+}
 
 type CodexOverviewLayoutMode = "compact" | "list" | "grid";
 type CodexNumericSortDirection = "asc" | "desc";
@@ -1956,6 +1972,9 @@ export function CodexAccountsPage() {
   const [customSortDropTargetId, setCustomSortDropTargetId] = useState<
     string | null
   >(null);
+  const [draggedAccountIds, setDraggedAccountIds] = useState<string[]>([]);
+  const [dragOverAccountDropTarget, setDragOverAccountDropTarget] =
+    useState<string | null>(null);
   const repairSessionVisibilityAcrossInstances = useCodexInstanceStore(
     (state) => state.repairSessionVisibilityAcrossInstances,
   );
@@ -4222,7 +4241,7 @@ export function CodexAccountsPage() {
       } catch (error) {
         setMessage({
           text: t("messages.actionFailed", {
-            action: t("accounts.groups.removeFromGroup"),
+            action: t("codex.localAccess.removeMember", "移出 API 服务"),
             error: String(error).replace(/^Error:\s*/, ""),
           }),
           tone: "error",
@@ -5076,6 +5095,13 @@ export function CodexAccountsPage() {
     }
     return map;
   }, [codexGroups]);
+  const groupedAccountIdSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const group of codexGroups) {
+      group.accountIds.forEach((accountId) => set.add(accountId));
+    }
+    return set;
+  }, [codexGroups]);
   const apiServiceSortMeta = useMemo(() => {
     const map = new Map<string, number>();
     (localAccessCollection?.accountIds ?? []).forEach((accountId, index) => {
@@ -5238,19 +5264,22 @@ export function CodexAccountsPage() {
       );
     }
     // 分组筛选 — 仅保留仍存在于 codexGroups 中的 ID，防止已删除分组导致空筛选
-    if (groupFilter.length > 0) {
-      const existingGroupIds = new Set(codexGroups.map((g) => g.id));
-      const activeFilter = groupFilter.filter((id) => existingGroupIds.has(id));
-      if (activeFilter.length > 0) {
-        const groupAccountIds = new Set<string>();
-        const selectedGroupIds = new Set(activeFilter);
-        for (const group of codexGroups) {
-          if (selectedGroupIds.has(group.id)) {
-            for (const aid of group.accountIds) groupAccountIds.add(aid);
-          }
+    const existingGroupIds = new Set(codexGroups.map((group) => group.id));
+    const activeGroupFilter = groupFilter.filter((id) =>
+      existingGroupIds.has(id),
+    );
+    if (activeGroupFilter.length > 0) {
+      const groupAccountIds = new Set<string>();
+      const selectedGroupIds = new Set(activeGroupFilter);
+      for (const group of codexGroups) {
+        if (selectedGroupIds.has(group.id)) {
+          for (const aid of group.accountIds) groupAccountIds.add(aid);
         }
-        result = result.filter((a) => groupAccountIds.has(a.id));
       }
+      result = result.filter((a) => groupAccountIds.has(a.id));
+    }
+    if (!activeGroupId && activeGroupFilter.length === 0) {
+      result = result.filter((account) => !groupedAccountIdSet.has(account.id));
     }
     if (activeGroupId) {
       const scopedGroup = codexGroups.find(
@@ -5270,6 +5299,7 @@ export function CodexAccountsPage() {
     compareAccountsBySort,
     filterTypes,
     groupFilter,
+    groupedAccountIdSet,
     isAbnormalAccount,
     normalizeTag,
     overviewAccounts,
@@ -5388,9 +5418,9 @@ export function CodexAccountsPage() {
     },
     [setSortBy, setSortDirection],
   );
-  const isAllPaginatedSelected = useMemo(
-    () => isEveryIdSelected(selected, paginatedIds),
-    [paginatedIds, selected],
+  const isAllFilteredSelected = useMemo(
+    () => isEveryIdSelected(selected, filteredIds),
+    [filteredIds, selected],
   );
   const selectedAccountIds = useMemo(() => Array.from(selected), [selected]);
   const selectedLocalAccessMemberCount = useMemo(
@@ -5438,6 +5468,165 @@ export function CodexAccountsPage() {
   const accountsById = useMemo(
     () => new Map(overviewAccounts.map((account) => [account.id, account])),
     [overviewAccounts],
+  );
+  const draggedAccountIdSet = useMemo(
+    () => new Set(draggedAccountIds),
+    [draggedAccountIds],
+  );
+
+  const getAccountDragIds = useCallback(
+    (accountId: string) =>
+      selected.has(accountId) && selected.size > 0
+        ? Array.from(selected)
+        : [accountId],
+    [selected],
+  );
+
+  const readAccountDropIds = useCallback(
+    (event: ReactDragEvent<HTMLElement>) => {
+      const fromState = draggedAccountIds.length > 0 ? draggedAccountIds : [];
+      const raw = event.dataTransfer.getData(CODEX_ACCOUNT_DRAG_MIME);
+      let parsed: string[] = [];
+      if (raw) {
+        try {
+          const value = JSON.parse(raw);
+          if (Array.isArray(value)) {
+            parsed = value.filter(
+              (item): item is string => typeof item === "string",
+            );
+          }
+        } catch {
+          parsed = [];
+        }
+      }
+
+      const uniqueIds = new Set<string>(parsed.length > 0 ? parsed : fromState);
+      return Array.from(uniqueIds).filter((accountId) =>
+        accountsById.has(accountId),
+      );
+    },
+    [accountsById, draggedAccountIds],
+  );
+
+  const handleAccountDragStart = useCallback(
+    (event: ReactDragEvent<HTMLElement>, accountId: string) => {
+      if (shouldIgnoreAccountDragStart(event.target)) {
+        event.preventDefault();
+        return;
+      }
+
+      const accountIds = getAccountDragIds(accountId);
+      setDraggedAccountIds(accountIds);
+      setDragOverAccountDropTarget(null);
+      event.dataTransfer.effectAllowed = "copyMove";
+      event.dataTransfer.setData(
+        CODEX_ACCOUNT_DRAG_MIME,
+        JSON.stringify(accountIds),
+      );
+      event.dataTransfer.setData("text/plain", accountIds.join("\n"));
+    },
+    [getAccountDragIds],
+  );
+
+  const handleAccountDragEnd = useCallback(() => {
+    setDraggedAccountIds([]);
+    setDragOverAccountDropTarget(null);
+  }, []);
+
+  const handleAccountDropTargetDragOver = useCallback(
+    (
+      event: ReactDragEvent<HTMLElement>,
+      target: string,
+      operation: "copy" | "move",
+    ) => {
+      if (draggedAccountIds.length === 0) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = operation;
+      setDragOverAccountDropTarget(target);
+    },
+    [draggedAccountIds.length],
+  );
+
+  const handleAccountDropTargetDragLeave = useCallback(
+    (event: ReactDragEvent<HTMLElement>, target: string) => {
+      const nextTarget = event.relatedTarget;
+      if (
+        nextTarget instanceof Node &&
+        event.currentTarget.contains(nextTarget)
+      ) {
+        return;
+      }
+      setDragOverAccountDropTarget((current) =>
+        current === target ? null : current,
+      );
+    },
+    [],
+  );
+
+  const handleDropAccountsOnLocalAccess = useCallback(
+    async (event: ReactDragEvent<HTMLElement>) => {
+      event.preventDefault();
+      const accountIds = readAccountDropIds(event).filter(
+        (accountId) => !localAccessAccountIdSet.has(accountId),
+      );
+      setDraggedAccountIds([]);
+      setDragOverAccountDropTarget(null);
+      if (accountIds.length === 0 || localAccessBusy) return;
+
+      try {
+        await handleAddLocalAccessAccounts(accountIds);
+      } catch (error) {
+        setMessage({
+          text: t("messages.actionFailed", {
+            action: t("codex.localAccess.addMember", "加入 API 服务"),
+            error: String(error).replace(/^Error:\s*/, ""),
+          }),
+          tone: "error",
+        });
+      }
+    },
+    [
+      handleAddLocalAccessAccounts,
+      localAccessAccountIdSet,
+      localAccessBusy,
+      readAccountDropIds,
+      setMessage,
+      t,
+    ],
+  );
+
+  const handleDropAccountsOnGroup = useCallback(
+    async (event: ReactDragEvent<HTMLElement>, groupId: string) => {
+      event.preventDefault();
+      const accountIds = readAccountDropIds(event);
+      setDraggedAccountIds([]);
+      setDragOverAccountDropTarget(null);
+      if (accountIds.length === 0) return;
+
+      try {
+        await assignAccountsToCodexGroup(groupId, accountIds);
+        await reloadCodexGroups();
+        setSelected((current) => {
+          const next = new Set(current);
+          accountIds.forEach((accountId) => next.delete(accountId));
+          return next;
+        });
+        setMessage({
+          text: t("messages.actionSuccess", {
+            action: t("accounts.groups.addToGroup", "移入分组"),
+          }),
+        });
+      } catch (error) {
+        setMessage({
+          text: t("messages.actionFailed", {
+            action: t("accounts.groups.addToGroup", "移入分组"),
+            error: String(error).replace(/^Error:\s*/, ""),
+          }),
+          tone: "error",
+        });
+      }
+    },
+    [readAccountDropIds, reloadCodexGroups, setMessage, setSelected, t],
   );
 
   const resolveGroupAccounts = useCallback(
@@ -5513,10 +5702,14 @@ export function CodexAccountsPage() {
       const subscriptionInfo = resolveSubscriptionPresentation(account);
       const showCompactExpiry =
         !isApiKeyAccount && subscriptionInfo.bucket !== "active";
+      const isDraggingAccount = draggedAccountIdSet.has(account.id);
       return (
         <div
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`codex-compact-row ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""}`}
+          className={`codex-compact-row ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""} ${isDraggingAccount ? "is-account-dragging" : ""}`}
+          draggable
+          onDragStart={(event) => handleAccountDragStart(event, account.id)}
+          onDragEnd={handleAccountDragEnd}
         >
           <div className="codex-compact-select">
             <input
@@ -5595,7 +5788,7 @@ export function CodexAccountsPage() {
           <button
             className="codex-compact-note-btn"
             onClick={() => openAddAccountsToCodexGroup([account.id])}
-            title={t("codex.groups.addToGroup", "添加至分组")}
+            title={t("codex.groups.addToGroup", "移入分组")}
           >
             <FolderPlus size={13} />
           </button>
@@ -5697,10 +5890,14 @@ export function CodexAccountsPage() {
       const isFallbackLocalAccess = isEffectiveLocalAccess && !isInLocalAccess;
       const subscriptionInfo = resolveSubscriptionPresentation(account);
       const isSubscriptionInfoMissing = subscriptionInfo.bucket === "missing";
+      const isDraggingAccount = draggedAccountIdSet.has(account.id);
       return (
         <div
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`codex-account-card ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""}`}
+          className={`codex-account-card ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""} ${isDraggingAccount ? "is-account-dragging" : ""}`}
+          draggable
+          onDragStart={(event) => handleAccountDragStart(event, account.id)}
+          onDragEnd={handleAccountDragEnd}
         >
           <div className="card-top">
             <div className="card-select">
@@ -6020,7 +6217,7 @@ export function CodexAccountsPage() {
                 <button
                   className="card-action-btn"
                   onClick={() => openAddAccountsToCodexGroup([account.id])}
-                  title={t("codex.groups.addToGroup", "添加至分组")}
+                  title={t("codex.groups.addToGroup", "移入分组")}
                 >
                   <FolderPlus size={14} />
                 </button>
@@ -6154,7 +6351,25 @@ export function CodexAccountsPage() {
         key="codex-local-access-card"
         className={`codex-account-card folder-inline-card codex-local-access-card codex-local-access-card--${overviewLayoutMode} ${
           isLocalAccessCurrent ? "current" : ""
-        } ${showLocalAccessDetails ? "is-expanded" : "is-collapsed"}`}
+        } ${showLocalAccessDetails ? "is-expanded" : "is-collapsed"} ${
+          dragOverAccountDropTarget === CODEX_API_SERVICE_DROP_TARGET
+            ? "is-account-drop-target"
+            : ""
+        }`}
+        onDragOver={(event) =>
+          handleAccountDropTargetDragOver(
+            event,
+            CODEX_API_SERVICE_DROP_TARGET,
+            "copy",
+          )
+        }
+        onDragLeave={(event) =>
+          handleAccountDropTargetDragLeave(
+            event,
+            CODEX_API_SERVICE_DROP_TARGET,
+          )
+        }
+        onDrop={(event) => void handleDropAccountsOnLocalAccess(event)}
       >
         <div className="folder-inline-header codex-local-access-header">
           {isGridLocalAccessCard ? (
@@ -6617,12 +6832,24 @@ export function CodexAccountsPage() {
             0,
             groupAccounts.length - previewAccounts.length,
           );
+          const groupDropTarget = makeCodexGroupDropTarget(group.id);
 
           return (
             <div
               key={`codex-folder-${group.id}`}
-              className="codex-account-card folder-inline-card codex-group-folder-card"
+              className={`codex-account-card folder-inline-card codex-group-folder-card ${
+                dragOverAccountDropTarget === groupDropTarget
+                  ? "is-account-drop-target"
+                  : ""
+              }`}
               onClick={() => handleEnterGroup(group.id)}
+              onDragOver={(event) =>
+                handleAccountDropTargetDragOver(event, groupDropTarget, "move")
+              }
+              onDragLeave={(event) =>
+                handleAccountDropTargetDragLeave(event, groupDropTarget)
+              }
+              onDrop={(event) => void handleDropAccountsOnGroup(event, group.id)}
             >
               <div className="folder-inline-header">
                 <div className="folder-inline-icon">
@@ -6787,10 +7014,14 @@ export function CodexAccountsPage() {
         localAccessEffectiveAccountIdSet.has(account.id);
       const isFallbackLocalAccess = isEffectiveLocalAccess && !isInLocalAccess;
       const subscriptionInfo = resolveSubscriptionPresentation(account);
+      const isDraggingAccount = draggedAccountIdSet.has(account.id);
       return (
         <tr
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""}`}
+          className={`${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""} ${isDraggingAccount ? "is-account-dragging" : ""}`}
+          draggable
+          onDragStart={(event) => handleAccountDragStart(event, account.id)}
+          onDragEnd={handleAccountDragEnd}
         >
           <td>
             <input
@@ -7109,7 +7340,7 @@ export function CodexAccountsPage() {
               <button
                 className="action-btn"
                 onClick={() => openAddAccountsToCodexGroup([account.id])}
-                title={t("codex.groups.addToGroup", "添加至分组")}
+                title={t("codex.groups.addToGroup", "移入分组")}
               >
                 <FolderPlus size={14} />
               </button>
@@ -7184,12 +7415,24 @@ export function CodexAccountsPage() {
 
     const rows: ReactElement[] = codexGroups.map((group) => {
       const groupAccounts = resolveGroupAccounts(group);
+      const groupDropTarget = makeCodexGroupDropTarget(group.id);
       return (
         <tr
           key={`folder-row-${group.id}`}
-          className="folder-table-row"
+          className={`folder-table-row ${
+            dragOverAccountDropTarget === groupDropTarget
+              ? "is-account-drop-target"
+              : ""
+          }`}
           style={{ cursor: "pointer" }}
           onClick={() => handleEnterGroup(group.id)}
+          onDragOver={(event) =>
+            handleAccountDropTargetDragOver(event, groupDropTarget, "move")
+          }
+          onDragLeave={(event) =>
+            handleAccountDropTargetDragLeave(event, groupDropTarget)
+          }
+          onDrop={(event) => void handleDropAccountsOnGroup(event, group.id)}
         >
           <td />
           <td colSpan={4}>
@@ -8090,7 +8333,7 @@ export function CodexAccountsPage() {
                     title={
                       activeGroupId
                         ? t("accounts.groups.moveToGroup")
-                        : t("codex.groups.addToGroup", "添加至分组")
+                        : t("codex.groups.addToGroup", "移入分组")
                     }
                   >
                     <FolderPlus size={14} />
@@ -8180,8 +8423,8 @@ export function CodexAccountsPage() {
                   <label className="codex-overview-select-all">
                     <input
                       type="checkbox"
-                      checked={isAllPaginatedSelected}
-                      onChange={() => toggleSelectAll(paginatedIds)}
+                      checked={isAllFilteredSelected}
+                      onChange={() => toggleSelectAll(filteredIds)}
                     />
                     <span>{t("common.selectAll", "全选")}</span>
                   </label>
@@ -8240,8 +8483,8 @@ export function CodexAccountsPage() {
                         >
                           <input
                             type="checkbox"
-                            checked={isAllPaginatedSelected}
-                            onChange={() => toggleSelectAll(paginatedIds)}
+                            checked={isAllFilteredSelected}
+                            onChange={() => toggleSelectAll(filteredIds)}
                           />
                           {t("common.selectAll", "全选")}
                         </label>
@@ -8295,8 +8538,8 @@ export function CodexAccountsPage() {
                           <th style={{ width: 40 }}>
                             <input
                               type="checkbox"
-                              checked={isAllPaginatedSelected}
-                              onChange={() => toggleSelectAll(paginatedIds)}
+                              checked={isAllFilteredSelected}
+                              onChange={() => toggleSelectAll(filteredIds)}
                             />
                           </th>
                           <th style={{ width: 260 }}>
@@ -8353,8 +8596,8 @@ export function CodexAccountsPage() {
                             {showOverviewSelectionBar ? null : (
                               <input
                                 type="checkbox"
-                                checked={isAllPaginatedSelected}
-                                onChange={() => toggleSelectAll(paginatedIds)}
+                                checked={isAllFilteredSelected}
+                                onChange={() => toggleSelectAll(filteredIds)}
                               />
                             )}
                           </th>

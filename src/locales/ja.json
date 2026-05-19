@@ -1890,7 +1890,10 @@
         "viewFull": "完全な統計を表示",
         "modalTitle": "APIサービスのクォータプール",
         "empty": "クォータ統計はまだありません"
-      }
+      },
+      "addMember": "API サービスに追加",
+      "addSelectedMembers": "選択項目を API サービスに追加",
+      "removeSelectedMembers": "選択項目を API サービスから削除"
     },
     "local": {
       "desc": "~/.codex/auth.json から現在ログイン中のアカウントをインポート",

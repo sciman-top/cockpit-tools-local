@@ -1890,7 +1890,10 @@
         "viewFull": "Zobrazit úplné statistiky",
         "modalTitle": "Fond kvóty služby API",
         "empty": "Zatím žádné statistiky kvóty"
-      }
+      },
+      "addMember": "Přidat do služby API",
+      "addSelectedMembers": "Přidat vybrané do služby API",
+      "removeSelectedMembers": "Odebrat vybrané ze služby API"
     },
     "local": {
       "desc": "Importovat aktuální účet z ~/.codex/auth.json",

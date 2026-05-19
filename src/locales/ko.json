@@ -1890,7 +1890,10 @@
         "viewFull": "전체 통계 보기",
         "modalTitle": "API 서비스 할당량 풀",
         "empty": "할당량 통계가 아직 없습니다"
-      }
+      },
+      "addMember": "API 서비스에 추가",
+      "addSelectedMembers": "선택 항목을 API 서비스에 추가",
+      "removeSelectedMembers": "선택 항목을 API 서비스에서 제거"
     },
     "local": {
       "desc": "~/.codex/auth.json에서 현재 로그인된 계정 가져오기",

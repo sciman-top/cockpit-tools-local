@@ -1890,7 +1890,10 @@
         "viewFull": "Показать полную статистику",
         "modalTitle": "Пул квот сервиса API",
         "empty": "Статистики квот пока нет"
-      }
+      },
+      "addMember": "Добавить в API-сервис",
+      "addSelectedMembers": "Добавить выбранные в API-сервис",
+      "removeSelectedMembers": "Удалить выбранные из API-сервиса"
     },
     "local": {
       "desc": "Импортировать текущий аккаунт из ~/.codex/auth.json",

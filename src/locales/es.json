@@ -1890,7 +1890,10 @@
         "viewFull": "Ver estadísticas completas",
         "modalTitle": "Bolsa de cuota del servicio API",
         "empty": "Aún no hay estadísticas de cuota"
-      }
+      },
+      "addMember": "Añadir al servicio API",
+      "addSelectedMembers": "Añadir selección al servicio API",
+      "removeSelectedMembers": "Quitar selección del servicio API"
     },
     "local": {
       "desc": "Importa la cuenta actual desde ~/.codex/auth.json",

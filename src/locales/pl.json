@@ -1890,7 +1890,10 @@
         "viewFull": "Pokaż pełne statystyki",
         "modalTitle": "Pula limitów usługi API",
         "empty": "Brak statystyk limitów"
-      }
+      },
+      "addMember": "Dodaj do usługi API",
+      "addSelectedMembers": "Dodaj zaznaczone do usługi API",
+      "removeSelectedMembers": "Usuń zaznaczone z usługi API"
     },
     "local": {
       "desc": "Importuj bieżące konto z ~/.codex/auth.json",

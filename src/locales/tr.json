@@ -1890,7 +1890,10 @@
         "viewFull": "Tam istatistikleri gör",
         "modalTitle": "API hizmeti kota havuzu",
         "empty": "Henüz kota istatistiği yok"
-      }
+      },
+      "addMember": "API hizmetine ekle",
+      "addSelectedMembers": "Seçilenleri API hizmetine ekle",
+      "removeSelectedMembers": "Seçilenleri API hizmetinden çıkar"
     },
     "local": {
       "desc": "~/.codex/auth.json'dan mevcut hesabı içe aktar",

@@ -1961,7 +1961,10 @@
         "available": "Regular Overview",
         "manageMembers": "Manage Members",
         "save": "Save Account Pool"
-      }
+      },
+      "addMember": "Add to API service",
+      "addSelectedMembers": "Add selected to API service",
+      "removeSelectedMembers": "Remove selected from API service"
     },
     "api": {
       "baseUrl": "Base URL",

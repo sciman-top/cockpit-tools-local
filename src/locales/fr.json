@@ -1890,7 +1890,10 @@
         "viewFull": "Voir les stats complètes",
         "modalTitle": "Pool de quotas du service API",
         "empty": "Aucune statistique de quota pour l’instant"
-      }
+      },
+      "addMember": "Ajouter au service API",
+      "addSelectedMembers": "Ajouter la sélection au service API",
+      "removeSelectedMembers": "Retirer la sélection du service API"
     },
     "local": {
       "desc": "Importer le compte connecté depuis ~/.codex/auth.json",

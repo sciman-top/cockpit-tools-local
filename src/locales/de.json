@@ -1890,7 +1890,10 @@
         "viewFull": "Vollständige Statistik anzeigen",
         "modalTitle": "Kontingentpool des API-Dienstes",
         "empty": "Noch keine Kontingentstatistik"
-      }
+      },
+      "addMember": "Zum API-Dienst hinzufügen",
+      "addSelectedMembers": "Auswahl zum API-Dienst hinzufügen",
+      "removeSelectedMembers": "Auswahl aus API-Dienst entfernen"
     },
     "local": {
       "desc": "Aktuell eingeloggtes Konto aus ~/.codex/auth.json importieren",

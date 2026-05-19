@@ -1165,9 +1165,9 @@
       "empty": "No groups yet, create one to get started",
       "accountCount": "{{count}} account(s)",
       "rename": "Rename",
-      "addToGroup": "Add to Group",
+      "addToGroup": "Move into Group",
       "moveToGroup": "Move to Another Group",
-      "createAndAdd": "Create group and add...",
+      "createAndAdd": "Create group and move in...",
       "removeFromGroup": "Remove from Group",
       "deleteTitle": "Delete Group",
       "deleteConfirm": "Delete group \"{{name}}\"? Accounts will not be deleted.",
@@ -1180,10 +1180,10 @@
         "createFailed": "Failed to create group: {{error}}",
         "renameFailed": "Failed to rename group: {{error}}",
         "deleteFailed": "Failed to delete group: {{error}}",
-        "addFailed": "Failed to add to group: {{error}}",
-        "createAndAddFailed": "Failed to create group and add: {{error}}"
+        "addFailed": "Failed to move into group: {{error}}",
+        "createAndAddFailed": "Failed to create group and move accounts in: {{error}}"
       },
-      "addAccounts": "Add Accounts",
+      "addAccounts": "Move Accounts In",
       "editTitle": "Edit Group",
       "ungrouped": "Ungrouped",
       "currentGroupLabel": "Current Group",
@@ -2516,7 +2516,7 @@
       }
     },
     "groups": {
-      "addToGroup": "Add to Group"
+      "addToGroup": "Move into Group"
     },
     "speed": {
       "title": "Speed",

@@ -1890,7 +1890,10 @@
         "viewFull": "Xem thống kê đầy đủ",
         "modalTitle": "Nhóm hạn mức dịch vụ API",
         "empty": "Chưa có thống kê hạn mức"
-      }
+      },
+      "addMember": "Thêm vào dịch vụ API",
+      "addSelectedMembers": "Thêm mục đã chọn vào dịch vụ API",
+      "removeSelectedMembers": "Xóa mục đã chọn khỏi dịch vụ API"
     },
     "local": {
       "desc": "Nhập tài khoản hiện tại từ ~/.codex/auth.json",

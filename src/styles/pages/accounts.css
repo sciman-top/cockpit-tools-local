@@ -326,6 +326,26 @@
   box-shadow: 0 8px 24px rgba(29, 78, 216, 0.12);
 }
 
+.codex-compact-row[draggable="true"],
+.codex-account-card[draggable="true"],
+.account-table tr[draggable="true"] {
+  cursor: grab;
+}
+
+.codex-compact-row.is-account-dragging,
+.codex-account-card.is-account-dragging,
+.account-table tr.is-account-dragging {
+  opacity: 0.55;
+}
+
+.folder-inline-card.is-account-drop-target,
+.folder-table-row.is-account-drop-target {
+  border-color: var(--primary);
+  background: rgba(59, 130, 246, 0.12);
+  outline: 2px solid rgba(59, 130, 246, 0.32);
+  outline-offset: 2px;
+}
+
 .folder-inline-header {
   display: flex;
   align-items: center;

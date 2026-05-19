@@ -1936,7 +1936,10 @@
         "viewFull": "عرض الإحصاء الكامل",
         "modalTitle": "مجمع حصة خدمة API",
         "empty": "لا توجد إحصاءات حصة بعد"
-      }
+      },
+      "addMember": "إضافة إلى خدمة API",
+      "addSelectedMembers": "إضافة المحدد إلى خدمة API",
+      "removeSelectedMembers": "إزالة المحدد من خدمة API"
     },
     "local": {
       "desc": "استيراد الحساب الحالي من ~/.codex/auth.json",

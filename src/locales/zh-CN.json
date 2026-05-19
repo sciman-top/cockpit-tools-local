@@ -1167,7 +1167,7 @@
       "rename": "重命名",
       "addToGroup": "移入分组",
       "moveToGroup": "移到其他分组",
-      "createAndAdd": "新建分组并添加...",
+      "createAndAdd": "新建分组并移入...",
       "removeFromGroup": "移出分组",
       "deleteTitle": "删除分组",
       "deleteConfirm": "确定删除分组「{{name}}」吗？账号不会被删除。",
@@ -1180,10 +1180,10 @@
         "createFailed": "创建分组失败：{{error}}",
         "renameFailed": "重命名分组失败：{{error}}",
         "deleteFailed": "删除分组失败：{{error}}",
-        "addFailed": "添加到分组失败：{{error}}",
-        "createAndAddFailed": "新建分组并添加失败：{{error}}"
+        "addFailed": "移入分组失败：{{error}}",
+        "createAndAddFailed": "新建分组并移入失败：{{error}}"
       },
-      "addAccounts": "添加账号",
+      "addAccounts": "移入账号",
       "editTitle": "编辑分组",
       "ungrouped": "未分组",
       "currentGroupLabel": "当前分组",
@@ -2516,7 +2516,7 @@
       }
     },
     "groups": {
-      "addToGroup": "添加至分组"
+      "addToGroup": "移入分组"
     },
     "speed": {
       "title": "速度",
