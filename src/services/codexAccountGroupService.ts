@@ -65,7 +65,8 @@ async function saveGroups(groups: CodexAccountGroup[]): Promise<void> {
 // ─── 公开 API ───────────────────────────────────────
 
 export async function getCodexAccountGroups(): Promise<CodexAccountGroup[]> {
-  const groups = await loadGroups();
+  cachedGroups = await loadGroupsFromDisk();
+  const groups = cloneGroups(cachedGroups);
   return groups.sort((a, b) => a.sortOrder - b.sortOrder);
 }
 

@@ -5319,10 +5319,6 @@ export function CodexAccountsPage() {
     storageKey: buildPaginationPageSizeStorageKey("Codex"),
   });
   const paginatedAccounts = pagination.pageItems;
-  const paginatedIds = useMemo(
-    () => paginatedAccounts.map((account) => account.id),
-    [paginatedAccounts],
-  );
   const isCustomSortActive = sortBy === "custom";
   const isRecommendedSortActive = sortBy === CODEX_RECOMMENDED_SORT_BY;
   const customSortAccounts = useMemo(() => {
