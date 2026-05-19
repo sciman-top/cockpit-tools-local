@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { FolderPlus, Search, X } from 'lucide-react'
+import { FolderPlus, LogOut, Search, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { CodexAccount } from '../types/codex'
 import type { CodexAccountGroup } from '../services/codexAccountGroupService'
@@ -11,6 +11,8 @@ interface CodexGroupAccountPickerModalProps {
   targetGroup: CodexAccountGroup | null
   accounts: CodexAccount[]
   accountGroups: CodexAccountGroup[]
+  mode?: 'add' | 'remove'
+  currentAccountId?: string | null
   maskAccountText: (value?: string | null) => string
   onClose: () => void
   onConfirm: (payload: { accountIds: string[] }) => Promise<void> | void
@@ -21,6 +23,8 @@ export function CodexGroupAccountPickerModal({
   targetGroup,
   accounts,
   accountGroups,
+  mode = 'add',
+  currentAccountId,
   maskAccountText,
   onClose,
   onConfirm,
@@ -56,9 +60,26 @@ export function CodexGroupAccountPickerModal({
 
     const queryText = query.trim().toLowerCase()
     const existingIds = new Set(targetGroup.accountIds)
-    let next = accounts.filter((account) => !existingIds.has(account.id))
+    const groupOrder = new Map(
+      targetGroup.accountIds.map((accountId, index) => [accountId, index]),
+    )
+    let next =
+      mode === 'remove'
+        ? accounts.filter((account) => existingIds.has(account.id))
+        : accounts.filter((account) => !existingIds.has(account.id))
 
     next = next.sort((a, b) => {
+      const aIsCurrent = currentAccountId === a.id
+      const bIsCurrent = currentAccountId === b.id
+      if (aIsCurrent !== bIsCurrent) {
+        return aIsCurrent ? -1 : 1
+      }
+      if (mode === 'remove') {
+        const orderDiff =
+          (groupOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+          (groupOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
+        if (orderDiff !== 0) return orderDiff
+      }
       const aName = buildCodexAccountPresentation(a, t).displayName.toLowerCase()
       const bName = buildCodexAccountPresentation(b, t).displayName.toLowerCase()
       return aName.localeCompare(bName)
@@ -74,7 +95,7 @@ export function CodexGroupAccountPickerModal({
         || currentGroupName.includes(queryText)
       )
     })
-  }, [accounts, groupByAccountId, query, t, targetGroup])
+  }, [accounts, currentAccountId, groupByAccountId, mode, query, t, targetGroup])
 
   const selectedVisibleCount = useMemo(
     () =>
@@ -143,14 +164,18 @@ export function CodexGroupAccountPickerModal({
   }
 
   if (!isOpen || !targetGroup) return null
+  const confirmLabel =
+    mode === 'remove'
+      ? t('accounts.groups.removeFromGroup')
+      : t('accounts.groups.addAccounts')
 
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal group-account-picker-modal" onClick={(event) => event.stopPropagation()}>
         <div className="modal-header">
           <h2 className="group-account-picker-title">
-            <FolderPlus size={18} />
-            <span>{t('accounts.groups.addAccounts')}</span>
+            {mode === 'remove' ? <LogOut size={18} /> : <FolderPlus size={18} />}
+            <span>{confirmLabel}</span>
             <span className="group-account-picker-target">{targetGroup.name}</span>
           </h2>
           <button
@@ -188,18 +213,25 @@ export function CodexGroupAccountPickerModal({
 
           <div className="group-account-list">
             {visibleAccounts.length === 0 ? (
-              <div className="group-account-empty">{t('accounts.groups.accountPickerEmpty')}</div>
+              <div className="group-account-empty">
+                {mode === 'remove'
+                  ? t('accounts.groups.accountRemovePickerEmpty', '当前分组暂无账号')
+                  : t('accounts.groups.accountPickerEmpty')}
+              </div>
             ) : (
               visibleAccounts.map((account) => {
                 const currentGroup = groupByAccountId.get(account.id) || null
                 const presentation = buildCodexAccountPresentation(account, t)
                 const isChecked = selected.has(account.id)
                 const isUngrouped = !currentGroup
+                const isCurrentAccount = currentAccountId === account.id
 
                 return (
                   <label
                     key={account.id}
-                    className={`group-account-item${isChecked ? ' is-current' : ''}`}
+                    className={`group-account-item${isChecked ? ' is-current' : ''}${
+                      isCurrentAccount ? ' is-active-account' : ''
+                    }`}
                   >
                     <input
                       type="checkbox"
@@ -218,6 +250,11 @@ export function CodexGroupAccountPickerModal({
                         <span className={`tier-badge ${presentation.planClass} group-account-tier-badge`}>
                           {presentation.planLabel}
                         </span>
+                        {isCurrentAccount && (
+                          <span className="group-account-badge is-current">
+                            {t('codex.current', '当前')}
+                          </span>
+                        )}
                         <span className={`group-account-badge${isUngrouped ? ' is-ungrouped' : ''}`}>
                           {isUngrouped ? t('accounts.groups.ungrouped') : currentGroup.name}
                         </span>
@@ -241,7 +278,7 @@ export function CodexGroupAccountPickerModal({
             onClick={handleConfirm}
             disabled={selected.size === 0 || saving}
           >
-            {saving ? t('common.saving') : `${t('accounts.groups.addAccounts')} (${selected.size})`}
+            {saving ? t('common.saving') : `${confirmLabel} (${selected.size})`}
           </button>
         </div>
       </div>

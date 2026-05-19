@@ -13,19 +13,42 @@ function logTitle(title) {
   console.log(`\n=== ${title} ===`);
 }
 
+function resolveCommand(command) {
+  if (command === 'node') {
+    return { command: process.execPath, argsPrefix: [] };
+  }
+
+  if (command === 'npm' && process.env.npm_execpath) {
+    return { command: process.execPath, argsPrefix: [process.env.npm_execpath] };
+  }
+
+  if (process.platform !== 'win32') {
+    return { command, argsPrefix: [] };
+  }
+
+  const commandMap = new Map([
+    ['cargo', 'cargo.exe'],
+    ['pwsh', 'pwsh.exe'],
+  ]);
+  return { command: commandMap.get(command) || command, argsPrefix: [] };
+}
+
 function runStep(step) {
   const cmd = step.command;
-  const args = step.args;
+  const resolved = resolveCommand(cmd);
+  const executable = resolved.command;
+  const args = [...resolved.argsPrefix, ...step.args];
+  const displayArgs = step.args;
   const cwd = step.cwd || process.cwd();
 
   logTitle(step.name);
-  console.log(`$ ${cmd} ${args.join(' ')}`);
+  console.log(`$ ${cmd} ${displayArgs.join(' ')}`);
   console.log(`cwd: ${cwd}`);
 
-  const result = spawnSync(cmd, args, {
+  const result = spawnSync(executable, args, {
     cwd,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: false,
     env: process.env,
   });
 
@@ -53,6 +76,20 @@ if (!hasFlag('--skip-locales')) {
     name: 'Locale completeness check',
     command: 'node',
     args: ['scripts/check_locales.cjs'],
+  });
+}
+
+if (!hasFlag('--skip-local-hardened-api-guards')) {
+  steps.push({
+    name: 'Local hardened API live-risk guard',
+    command: 'pwsh',
+    args: [
+      '-NoProfile',
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      'scripts/test-local-hardened-api-live-risk-guard.ps1',
+    ],
   });
 }
 

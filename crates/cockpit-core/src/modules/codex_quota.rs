@@ -2,6 +2,7 @@ use crate::models::codex::{CodexAccount, CodexQuota, CodexQuotaErrorInfo};
 use crate::modules::{codex_account, logger};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 // 使用 wham/usage 端点（Quotio 使用的）
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -48,12 +49,130 @@ fn extract_error_code_from_message(message: &str) -> Option<String> {
     Some(message[code_start..code_start + end].to_string())
 }
 
+fn extract_i64_marker_from_message(message: &str, marker: &str) -> Option<i64> {
+    let start = message.find(marker)?;
+    let value_start = start + marker.len();
+    let end = message[value_start..].find(']')?;
+    message[value_start..value_start + end].parse::<i64>().ok()
+}
+
+fn normalize_unix_timestamp_seconds(value: i64) -> i64 {
+    if value > 1_000_000_000_000 {
+        value / 1000
+    } else {
+        value
+    }
+}
+
+fn first_i64_field<'a>(
+    value: &'a serde_json::Value,
+    keys: impl IntoIterator<Item = &'a str>,
+) -> Option<i64> {
+    keys.into_iter().find_map(|key| {
+        value.get(key).and_then(|item| {
+            item.as_i64()
+                .or_else(|| item.as_u64().and_then(|v| i64::try_from(v).ok()))
+        })
+    })
+}
+
+fn extract_quota_reset_hint_from_body(body: &str, now: i64) -> Option<(Option<i64>, Option<i64>)> {
+    let root: serde_json::Value = serde_json::from_str(body).ok()?;
+    let candidates = [
+        Some(&root),
+        root.get("error"),
+        root.get("detail"),
+        root.get("data"),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        let reset_at = first_i64_field(candidate, ["reset_at", "resets_at"])
+            .map(normalize_unix_timestamp_seconds);
+        let reset_after_seconds = first_i64_field(
+            candidate,
+            [
+                "reset_after_seconds",
+                "resets_in_seconds",
+                "resetAfterSeconds",
+            ],
+        )
+        .filter(|seconds| *seconds >= 0);
+
+        if reset_at.is_some() || reset_after_seconds.is_some() {
+            let computed_reset_at =
+                reset_at.or_else(|| reset_after_seconds.map(|seconds| now.saturating_add(seconds)));
+            return Some((computed_reset_at, reset_after_seconds));
+        }
+    }
+
+    None
+}
+
 fn write_quota_error(account: &mut CodexAccount, message: String) {
     account.quota_error = Some(CodexQuotaErrorInfo {
         code: extract_error_code_from_message(&message),
         message,
         timestamp: chrono::Utc::now().timestamp(),
     });
+}
+
+fn is_quota_exhaustion_error(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("api 返回错误 429")
+        || lower.contains("too many requests")
+        || lower.contains("rate_limit")
+        || lower.contains("rate limit")
+        || lower.contains("limit_reached")
+        || lower.contains("usage_limit")
+        || lower.contains("usage limit")
+        || lower.contains("model_cap")
+        || (lower.contains("quota")
+            && (lower.contains("exceed") || lower.contains("limit") || lower.contains("exhaust")))
+}
+
+fn build_exhausted_quota_snapshot(account: &CodexAccount, message: &str) -> CodexQuota {
+    let previous = account.quota.as_ref();
+    let now = chrono::Utc::now().timestamp();
+    let reset_at = extract_i64_marker_from_message(message, "[reset_at:")
+        .map(normalize_unix_timestamp_seconds);
+    let reset_after_seconds = extract_i64_marker_from_message(message, "[reset_after_seconds:");
+    let hourly_reset_time = reset_at.or_else(|| previous.and_then(|quota| quota.hourly_reset_time));
+    let weekly_reset_time = reset_at.or_else(|| previous.and_then(|quota| quota.weekly_reset_time));
+    CodexQuota {
+        hourly_percentage: 0,
+        hourly_reset_time,
+        hourly_window_minutes: previous.and_then(|quota| quota.hourly_window_minutes),
+        hourly_window_present: previous
+            .and_then(|quota| quota.hourly_window_present)
+            .or(Some(true)),
+        weekly_percentage: 0,
+        weekly_reset_time,
+        weekly_window_minutes: previous.and_then(|quota| quota.weekly_window_minutes),
+        weekly_window_present: previous
+            .and_then(|quota| quota.weekly_window_present)
+            .or(Some(true)),
+        raw_data: Some(json!({
+            "source": "quota_refresh_error",
+            "quota_exhausted": true,
+            "exhausted_at": now,
+            "reset_at": reset_at,
+            "reset_after_seconds": reset_after_seconds,
+        })),
+    }
+}
+
+fn write_quota_fetch_error(account: &mut CodexAccount, message: String) {
+    let quota_exhausted = is_quota_exhaustion_error(&message);
+    write_quota_error(account, message);
+    if quota_exhausted {
+        let message = account
+            .quota_error
+            .as_ref()
+            .map(|error| error.message.as_str())
+            .unwrap_or_default();
+        account.quota = Some(build_exhausted_quota_snapshot(account, message));
+        account.usage_updated_at = Some(chrono::Utc::now().timestamp());
+    }
 }
 
 /// 使用率窗口（5小时/周）
@@ -195,6 +314,8 @@ pub async fn fetch_quota(account: &CodexAccount) -> Result<FetchQuotaResult, Str
 
     if !status.is_success() {
         let detail_code = extract_detail_code_from_body(&body);
+        let quota_reset_hint =
+            extract_quota_reset_hint_from_body(&body, chrono::Utc::now().timestamp());
 
         logger::log_error(&format!(
             "Codex 配额接口返回非成功状态: url={}, status={}, request-id={}, x-request-id={}, cf-ray={}, detail_code={:?}, body_len={}",
@@ -210,6 +331,14 @@ pub async fn fetch_quota(account: &CodexAccount) -> Result<FetchQuotaResult, Str
         let mut error_message = format!("API 返回错误 {}", status);
         if let Some(code) = detail_code {
             error_message.push_str(&format!(" [error_code:{}]", code));
+        }
+        if let Some((reset_at, reset_after_seconds)) = quota_reset_hint {
+            if let Some(reset_at) = reset_at {
+                error_message.push_str(&format!(" [reset_at:{}]", reset_at));
+            }
+            if let Some(reset_after_seconds) = reset_after_seconds {
+                error_message.push_str(&format!(" [reset_after_seconds:{}]", reset_after_seconds));
+            }
         }
         error_message.push_str(&format!(" [body_len:{}]", body_len));
         return Err(error_message);
@@ -332,7 +461,7 @@ async fn refresh_account_quota_once(account_id: &str) -> Result<CodexQuota, Stri
     let result = match fetch_quota(&account).await {
         Ok(result) => result,
         Err(e) => {
-            write_quota_error(&mut account, e.clone());
+            write_quota_fetch_error(&mut account, e.clone());
             if let Err(save_err) = codex_account::save_account(&account) {
                 logger::log_warn(&format!("写入 Codex 配额错误失败: {}", save_err));
             }
@@ -395,4 +524,108 @@ pub async fn refresh_all_quotas() -> Result<Vec<(String, Result<CodexQuota, Stri
     }
 
     Ok(results)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::codex::CodexTokens;
+
+    fn test_account() -> CodexAccount {
+        CodexAccount::new(
+            "codex_test".to_string(),
+            "user@example.com".to_string(),
+            CodexTokens {
+                id_token: String::new(),
+                access_token: String::new(),
+                refresh_token: None,
+            },
+        )
+    }
+
+    #[test]
+    fn quota_fetch_error_sets_exhausted_quota_to_zero() {
+        let mut account = test_account();
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 64,
+            hourly_reset_time: Some(111),
+            hourly_window_minutes: Some(300),
+            hourly_window_present: Some(true),
+            weekly_percentage: 27,
+            weekly_reset_time: Some(222),
+            weekly_window_minutes: Some(10080),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+
+        write_quota_fetch_error(
+            &mut account,
+            "API 返回错误 429 [error_code:usage_limit_reached] [body_len:42]".to_string(),
+        );
+
+        let quota = account.quota.as_ref().expect("quota snapshot");
+        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.hourly_reset_time, Some(111));
+        assert_eq!(quota.weekly_reset_time, Some(222));
+        assert_eq!(
+            account
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("usage_limit_reached")
+        );
+        assert!(account.usage_updated_at.is_some());
+    }
+
+    #[test]
+    fn quota_fetch_error_uses_reset_hint_for_exhausted_snapshot() {
+        let mut account = test_account();
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 64,
+            hourly_reset_time: Some(111),
+            hourly_window_minutes: Some(300),
+            hourly_window_present: Some(true),
+            weekly_percentage: 27,
+            weekly_reset_time: Some(222),
+            weekly_window_minutes: Some(10080),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+
+        write_quota_fetch_error(
+            &mut account,
+            "API 返回错误 429 [error_code:usage_limit_reached] [reset_at:333] [reset_after_seconds:60] [body_len:42]".to_string(),
+        );
+
+        let quota = account.quota.as_ref().expect("quota snapshot");
+        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.hourly_reset_time, Some(333));
+        assert_eq!(quota.weekly_reset_time, Some(333));
+        assert_eq!(
+            quota
+                .raw_data
+                .as_ref()
+                .and_then(|value| value.get("reset_at"))
+                .and_then(|value| value.as_i64()),
+            Some(333)
+        );
+    }
+
+    #[test]
+    fn quota_reset_hint_body_computes_reset_at_from_reset_after_seconds() {
+        let hint = extract_quota_reset_hint_from_body(
+            r#"{"error":{"code":"usage_limit_reached","resets_in_seconds":60}}"#,
+            1_700_000_000,
+        )
+        .expect("reset hint should parse");
+
+        assert_eq!(hint, (Some(1_700_000_060), Some(60)));
+    }
+
+    #[test]
+    fn token_refresh_error_is_not_quota_exhaustion() {
+        assert!(!is_quota_exhaustion_error("Token 已过期且刷新失败"));
+    }
 }

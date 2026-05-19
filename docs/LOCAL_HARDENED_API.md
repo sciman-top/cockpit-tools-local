@@ -84,13 +84,13 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 ```
 
 ```powershell
-.\scripts\smoke-local-hardened-api.ps1 -Stage single -RunUpstreamSmoke -WriteReport
+.\scripts\smoke-local-hardened-api.ps1 -Stage single -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -WriteReport
 ```
 
 当前上游 429 链路 smoke 默认使用 `gpt-5.4`；若要把 429 视为预期结果，加入 `-Expect429`：
 
 ```powershell
-.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -RunUpstreamSmoke -Expect429 -WriteReport
+.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -Expect429 -WriteReport
 ```
 
 若上一轮已把该账号/模型写入 cooldown，后续同模型 smoke 应直接返回本地 429 和 `Retry-After`，不再继续打上游。
@@ -114,8 +114,124 @@ Hardened API Mode 的目标是接近 Direct OAuth 的稳定体验，但不伪造
 只有小池稳定后，才临时切到 `fallbackMode = next_request_only` 且 `maxRetryAccounts = 2`，做有限 fallback 探针：
 
 ```powershell
-.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -RunUpstreamSmoke -WriteReport
+.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -WriteReport
 ```
+
+若 Codex CLI 正在使用 Direct API/OAuth 并且会话不能断线，必须使用旁路探针入口。该入口只临时改
+`~/.antigravity_cockpit/codex_local_access.json`，且在结束后恢复；不会读取或写入当前 CLI 使用的
+`~/.codex/config.toml` / `~/.codex/auth.json` 内容，只记录文件 hash 以证明未被触碰：
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 `
+  -Stage fallback_probe `
+  -StartEphemeralGateway `
+  -TemporaryFallbackConfig `
+  -AcknowledgeLiveUpstreamRisk `
+  -RunUpstreamSmoke `
+  -AssertCodexCliConfigUntouched `
+  -WriteReport
+```
+
+若 Codex App 也必须不断线，使用 App-safe isolated probe。该模式会把 API service 配置复制到临时
+data root，临时 gateway 只读写该目录下的 `codex_local_access*.json/jsonl`，并让端口重新分配，避免
+改动 live Cockpit API service 配置或抢占 App 正在使用的端口：
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 `
+  -Stage fallback_probe `
+  -StartEphemeralGateway `
+  -TemporaryFallbackConfig `
+  -AppSafeIsolatedProbe `
+  -AutoPopulateProbeAccountPool `
+  -AcknowledgeLiveUpstreamRisk `
+  -RunUpstreamSmoke `
+  -RequireQuotaFallback `
+  -AssertCodexCliConfigUntouched `
+  -AssertCodexAppProcessStable `
+  -WriteReport
+```
+
+若验收目标是“Codex 任务本身在账号额度耗尽后不中断”，使用任务级 E2E。该模式会额外启动一个
+临时 `CODEX_HOME` 的 `codex exec --ephemeral`，让它通过隔离 gateway 执行一个真实小型编码任务；
+当前 Codex App 和当前 CLI 会话仍不参与本次任务流量：
+
+推荐直接使用一键验收入口，它会自动传入 App-safe、临时 fallback、自动号池、上游 smoke、nested
+`codex exec`、CLI/App 守卫和 report 参数，并输出简短 JSON 摘要：
+
+```powershell
+.\scripts\accept-local-hardened-api-continuity.ps1 -Model gpt-5.5 -AcknowledgeLiveUpstreamRisk -SkipEphemeralGatewayBuild
+```
+
+若需要手动展开底层 smoke 参数，可使用等价命令：
+
+```powershell
+.\scripts\smoke-local-hardened-api.ps1 `
+  -Stage fallback_probe `
+  -Model gpt-5.5 `
+  -StartEphemeralGateway `
+  -TemporaryFallbackConfig `
+  -AppSafeIsolatedProbe `
+  -AutoPopulateProbeAccountPool `
+  -AcknowledgeLiveUpstreamRisk `
+  -RunCodexExecSmoke `
+  -RequireQuotaFallback `
+  -AssertCodexCliConfigUntouched `
+  -AssertCodexAppProcessStable `
+  -WriteReport
+```
+
+任务级 E2E 的验收看 `codex_exec_task_e2e` 是否 `pass`，并结合 `quota_fallback_audit_contract`
+是否 `pass` 判断是否真的覆盖了额度耗尽后的 failover。传入 `-RequireQuotaFallback` 后，脚本要求
+audit 中同时出现 `429 usage_limit_reached`、`model_cooldown_applied`、`fallback_selected` 和
+后续 `200`；如果第一个账号没有返回 429，报告会标为 `blocked`，不能当作额度耗尽不中断验收通过。
+
+该 smoke 会在临时 `CODEX_HOME` 和临时 workspace 内对 nested `codex exec` 使用
+`--dangerously-bypass-approvals-and-sandbox`。这是为了规避 Codex CLI 0.131 在子进程
+`workspace-write` probe 中把写入判为 read-only；报告会记录
+`sandboxBypassForIsolatedWorkspace = true`。不要把该 bypass 用到 live CLI/App 会话。
+
+`-AutoPopulateProbeAccountPool` 只在 `-AppSafeIsolatedProbe` 下可用。它会从现有 Cockpit
+`codex_accounts.json` 和账号详情目录中扫描账号。选择顺序是先检查当前 API service 号池中已有的
+账号；若不能凑齐验收所需的 `exhausted + available`，再利用账号详情里的 cached quota 按验收优先级
+预排序全库候选，并只对候选 OAuth 账号即时请求 `wham/usage` 刷新配额判定。普通 API key 账号、
+非 free 账号、需要重新认证或已禁用账号都不会进入测试号池。
+free 账号按当前上游语义只接受 weekly-only quota：`primary_window.limit_window_seconds = 604800`
+且 `secondary_window = null`，不把它误判成 5h quota。
+
+为避免验收脚本为了找账号而扫大号池，任何真实上游请求、`wham/usage` 配额刷新、自动号池或 drain
+都必须显式传入 `-AcknowledgeLiveUpstreamRisk`，否则脚本返回 `blocked`，不会访问上游。
+`-AutoPopulateProbeAccountPool` 默认最多只做 2 次真实 `wham/usage` 刷新；找不到满足条件的账号就阻断，
+不继续刷新更多账号。只有在明确接受扩大扫描风险时，才手动提高
+`-AutoPopulateProbeMaxRefreshAttempts`；超过 2 次刷新、超过默认 drain 请求量，或把 drain 间隔降到
+20 秒以下，还必须同时传入 `-AcknowledgeExpandedLiveUpstreamRisk`。一键验收入口对应参数是
+`-MaxProbeQuotaRefreshAttempts`。
+
+自动号池会强制写入恰好 2 个账号到临时 `codex_local_access.json`：第一个必须是 refreshed 后
+`exhausted` 的 free OAuth weekly 账号，第二个必须是 refreshed 后仍 `available` 的 free OAuth
+weekly 账号；多余账号会被排除。报告只记录 `selectedAccountHashes`、角色和 weekly 百分比，不记录
+原始 accountId 或 token；不会写 live 号池，也不会改当前 Codex CLI/App 的 `config.toml` / `auth.json`。
+
+该命令适合验证“第一个账号真实 429 后，同一请求是否选择下一个账号并返回 200”。如果刷新后找不到
+exhausted + available 这一对 free weekly OAuth 账号，脚本会阻断，不能当作额度耗尽不中断验收通过。
+不要用它替代 release binary 部署验证；
+替换 release exe、重启 Cockpit/Codex App、kill `codex` 或改当前 CLI provider 仍需要单独确认。
+
+如果当前没有已耗尽的 free 账号，但接受为了验收消耗第 1 个 free 账号，可显式启用消耗型验收：
+
+```powershell
+.\scripts\accept-local-hardened-api-continuity.ps1 `
+  -Model gpt-5.5 `
+  -AcknowledgeLiveUpstreamRisk `
+  -SkipEphemeralGatewayBuild `
+  -DrainFirstFreeAccountUntilFallback `
+  -DrainMaxRequests 30 `
+  -DrainRequestIntervalSeconds 22
+```
+
+该模式仍只接受 OAuth free weekly 账号；第 1 个账号可以是 `available`，第 2 个账号必须是
+`available`。脚本会通过隔离 gateway 低频发送小请求消耗第 1 个账号，直到 audit 证明
+`429 usage_limit_reached -> fallback_selected -> 200`，或达到 `-DrainMaxRequests` 后阻断停止。
+该模式默认关闭，且不会用于普通验收。
 
 若要验证 429 链路，优先使用真实业务请求自然返回的 429；脚本只记录状态码、`Retry-After`、health registry 和 audit phase，不记录 prompt/response。
 
@@ -129,7 +245,7 @@ model_provider = "cockpit_api_service"
 [model_providers.cockpit_api_service]
 name = "Cockpit API Service"
 base_url = "http://127.0.0.1:<port>/v1"
-wire_api = "chat"
+wire_api = "responses"
 env_key = "OPENAI_API_KEY"
 ```
 

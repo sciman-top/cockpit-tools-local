@@ -1144,6 +1144,106 @@
   flex-wrap: wrap;
 }
 
+.codex-local-access-current-members {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-surface) 12%);
+}
+
+.codex-local-access-current-members-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.codex-local-access-current-member-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.codex-local-access-current-members-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.codex-local-access-current-members-check input,
+.codex-local-access-current-member input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+.codex-local-access-member-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 6px 10px;
+}
+
+.codex-local-access-member-action-btn.is-danger {
+  color: #b91c1c;
+}
+
+.codex-local-access-current-member-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 154px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.codex-local-access-current-member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.42);
+  cursor: pointer;
+}
+
+.codex-local-access-current-member:hover {
+  border-color: color-mix(in srgb, var(--primary) 18%, rgba(148, 163, 184, 0.18));
+}
+
+.codex-local-access-current-member.is-active-account {
+  border-color: color-mix(in srgb, var(--primary) 26%, rgba(148, 163, 184, 0.18));
+  background: color-mix(in srgb, var(--primary) 7%, rgba(255, 255, 255, 0.6));
+}
+
+.codex-local-access-current-member.is-marked {
+  border-color: rgba(239, 68, 68, 0.24);
+  background: rgba(254, 242, 242, 0.62);
+}
+
+.codex-local-access-current-member-email {
+  min-width: 110px;
+  flex: 1 1 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 12px;
+}
+
 .codex-local-access-member-section .account-filter-surface .tag-filter-panel {
   min-width: 300px;
 }
@@ -1195,6 +1295,10 @@
   box-shadow:
     0 24px 36px -28px rgba(29, 78, 216, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.62);
+}
+
+.codex-local-access-member-section .group-account-item.is-active-account {
+  border-color: color-mix(in srgb, var(--primary) 36%, rgba(148, 163, 184, 0.16));
 }
 
 .codex-local-access-member-section .group-account-item.is-disabled {

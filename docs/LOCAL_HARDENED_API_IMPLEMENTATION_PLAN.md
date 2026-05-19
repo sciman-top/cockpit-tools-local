@@ -313,7 +313,7 @@ flowchart TD
 - [x] audit event serde/redaction 单测：`cargo test --package cockpit-tools audit_event --quiet`
 - [x] quota exhausted vs unknown 429 分类审计单测：`cargo test --package cockpit-tools classifier --quiet`、`cargo test --package cockpit-tools health_registry --quiet`
 - [x] stream headers/first chunk 审计边界单测：`cargo test --package cockpit-tools audit_event --quiet`
-- [x] request_id audit chain smoke：`.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`，证据 `reports/local-hardened-api-smoke/smoke-20260519-000145.json`，audit phases 包含 `auth_projection` 与 `upstream_forward`，overall `pass`。
+- [x] request_id audit chain smoke：历史实跑命令为 `.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`，现行复跑必须加 `-AcknowledgeLiveUpstreamRisk`；证据 `reports/local-hardened-api-smoke/smoke-20260519-000145.json`，audit phases 包含 `auth_projection` 与 `upstream_forward`，overall `pass`。
 - [x] audit day rotation / degraded summary 单测：`cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target audit --quiet`
 - [x] audit degraded UI 类型契约：`npm run typecheck`
 - [x] 3 账号 small_pool ephemeral gateway：`reports/local-hardened-api-smoke/smoke-20260519-001635.json`，overall `pass`，audit phases 包含 `auth_projection` 与 `upstream_forward`，`hasSensitiveMarkers=false`。
@@ -494,10 +494,10 @@ flowchart TD
 - [x] `cargo test --package cockpit-tools safety_preset`
 - [x] `node scripts/check_locales.cjs`
 - [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -WriteReport`
-- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -RunUpstreamSmoke -Expect429 -Model gpt-5.4 -WriteReport`
+- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -Expect429 -Model gpt-5.4 -WriteReport`
 - [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target health_registry_model_cooldown_wait_is_exposed_for_scheduler --quiet`
 - [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -WriteReport`
-- [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -RunUpstreamSmoke -WriteReport`
+- [ ] `.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -WriteReport`
 - [x] 手动 smoke：Codex CLI 使用当前 API service 端口 `http://127.0.0.1:45335/v1`，一次性 provider `cockpit_direct_smoke`，`codex exec --ephemeral` 返回 `OK`。
 - [ ] 2026-05-18 前置探针：`Test-NetConnection 127.0.0.1:2876` 返回未监听；未修改 live Codex provider/API key。
 
@@ -542,8 +542,8 @@ flowchart TD
 - [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target hardened_routing --quiet`
 - [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target stream_write_state --quiet`
 - [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target previous_response_affinity --quiet`
-- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`
-- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`
+- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`
+- [x] `.\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -WriteReport -StartEphemeralGateway`
 - [x] `git diff --check`
 
 证据：

@@ -66,12 +66,18 @@ interface CodexLocalAccessModalProps {
   accounts: CodexAccount[];
   accountGroups: CodexAccountGroup[];
   initialSelectedIds: string[];
+  currentAccountId?: string | null;
   maskAccountText: (value?: string | null) => string;
   onClose: () => void;
   onSaveAccounts: (payload: {
     accountIds: string[];
     restrictFreeAccounts: boolean;
   }) => Promise<unknown> | unknown;
+  onRefreshAccounts: (
+    accountIds: string[],
+  ) =>
+    | Promise<{ successCount: number; total: number }>
+    | { successCount: number; total: number };
   onClearStats: () => Promise<unknown> | unknown;
   onRefreshStats: () => Promise<unknown> | unknown;
   onRecoverHealth: (
@@ -92,6 +98,7 @@ interface CodexLocalAccessModalProps {
   onToggleEnabled: () => Promise<unknown> | unknown;
   onTest: () => Promise<number> | number;
   saving: boolean;
+  refreshing: boolean;
   testing: boolean;
   starting: boolean;
   portCleanupBusy: boolean;
@@ -210,9 +217,11 @@ export function CodexLocalAccessModal({
   accounts,
   accountGroups,
   initialSelectedIds,
+  currentAccountId,
   maskAccountText,
   onClose,
   onSaveAccounts,
+  onRefreshAccounts,
   onClearStats,
   onRefreshStats,
   onRecoverHealth,
@@ -226,6 +235,7 @@ export function CodexLocalAccessModal({
   onToggleEnabled,
   onTest,
   saving,
+  refreshing,
   testing,
   starting,
   portCleanupBusy,
@@ -233,6 +243,7 @@ export function CodexLocalAccessModal({
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [memberRemovalSelected, setMemberRemovalSelected] = useState<Set<string>>(new Set());
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
@@ -245,6 +256,7 @@ export function CodexLocalAccessModal({
   const [selectedModelId, setSelectedModelId] = useState('');
   const [statsRange, setStatsRange] = useState<StatsRangeKey>(() => readStoredStatsRange());
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const memberRemoveAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const collection = state?.collection ?? null;
@@ -351,7 +363,7 @@ export function CodexLocalAccessModal({
     ],
     [health, t],
   );
-  const actionBusy = saving || testing || starting || portCleanupBusy;
+  const actionBusy = saving || refreshing || testing || starting || portCleanupBusy;
   const summaryStats = useMemo(
     () => [
       {
@@ -425,6 +437,7 @@ export function CodexLocalAccessModal({
     if (!isOpen) return;
     setQuery('');
     setSelected(new Set(normalizedInitialSelectedIds));
+    setMemberRemovalSelected(new Set());
     setFilterTypes([]);
     setTagFilter([]);
     setGroupFilter([]);
@@ -440,6 +453,19 @@ export function CodexLocalAccessModal({
       }, 0);
     }
   }, [collection?.port, collection?.restrictFreeAccounts, isOpen, mode, normalizedInitialSelectedIds]);
+
+  useEffect(() => {
+    setMemberRemovalSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const next = new Set<string>();
+      for (const accountId of prev) {
+        if (selected.has(accountId)) {
+          next.add(accountId);
+        }
+      }
+      return next.size === prev.size ? prev : next;
+    });
+  }, [selected]);
 
   useEffect(() => {
     if (modelIds.length === 0) {
@@ -585,6 +611,16 @@ export function CodexLocalAccessModal({
   const visibleAccounts = useMemo(() => {
     const queryText = query.trim().toLowerCase();
     const sorted = [...serviceAccounts].sort((a, b) => {
+      const aIsCurrent = currentAccountId === a.id;
+      const bIsCurrent = currentAccountId === b.id;
+      if (aIsCurrent !== bIsCurrent) {
+        return aIsCurrent ? -1 : 1;
+      }
+      const aIsSelected = selected.has(a.id);
+      const bIsSelected = selected.has(b.id);
+      if (aIsSelected !== bIsSelected) {
+        return aIsSelected ? -1 : 1;
+      }
       const aName = buildCodexAccountPresentation(a, t).displayName.toLowerCase();
       const bName = buildCodexAccountPresentation(b, t).displayName.toLowerCase();
       return aName.localeCompare(bName);
@@ -632,7 +668,7 @@ export function CodexLocalAccessModal({
 
       return true;
     });
-  }, [filterTypes, groupFilter, groupIdsByAccountId, groupNameByAccountId, query, serviceAccounts, t, tagFilter]);
+  }, [currentAccountId, filterTypes, groupFilter, groupIdsByAccountId, groupNameByAccountId, query, selected, serviceAccounts, t, tagFilter]);
 
   const visibleSelectableAccounts = useMemo(
     () =>
@@ -655,7 +691,7 @@ export function CodexLocalAccessModal({
 
   const allVisibleSelected =
     visibleSelectableAccounts.length > 0 &&
-    selectedVisibleCount > 0;
+    selectedVisibleCount === visibleSelectableAccounts.length;
 
   useEffect(() => {
     if (!selectAllCheckboxRef.current) return;
@@ -675,6 +711,40 @@ export function CodexLocalAccessModal({
     stats?.accounts.forEach((item) => next.set(item.accountId, item));
     return next;
   }, [stats?.accounts]);
+
+  const selectedMemberAccounts = useMemo(() => {
+    const configuredOrder = new Map(
+      (collection?.accountIds ?? []).map((accountId, index) => [accountId, index]),
+    );
+    return Array.from(selected)
+      .map((accountId) => accountById.get(accountId))
+      .filter((account): account is CodexAccount => Boolean(account))
+      .sort((left, right) => {
+        const leftIsCurrent = currentAccountId === left.id;
+        const rightIsCurrent = currentAccountId === right.id;
+        if (leftIsCurrent !== rightIsCurrent) {
+          return leftIsCurrent ? -1 : 1;
+        }
+        const orderDiff =
+          (configuredOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+          (configuredOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER);
+        if (orderDiff !== 0) return orderDiff;
+        const leftName = buildCodexAccountPresentation(left, t).displayName.toLowerCase();
+        const rightName = buildCodexAccountPresentation(right, t).displayName.toLowerCase();
+        return leftName.localeCompare(rightName);
+      });
+  }, [accountById, collection?.accountIds, currentAccountId, selected, t]);
+
+  const memberRemovalSelectedCount = memberRemovalSelected.size;
+  const allMembersSelectedForRemoval =
+    selectedMemberAccounts.length > 0 &&
+    memberRemovalSelectedCount === selectedMemberAccounts.length;
+
+  useEffect(() => {
+    if (!memberRemoveAllCheckboxRef.current) return;
+    memberRemoveAllCheckboxRef.current.indeterminate =
+      memberRemovalSelectedCount > 0 && !allMembersSelectedForRemoval;
+  }, [allMembersSelectedForRemoval, memberRemovalSelectedCount]);
 
   const windowStatsByAccountId = useMemo(() => {
     const next = new Map<string, NonNullable<CodexLocalAccessState['stats']>['accounts'][number]>();
@@ -801,9 +871,35 @@ export function CodexLocalAccessModal({
   const toggleSelectAllVisible = () => {
     if (actionBusy || visibleSelectableAccounts.length === 0) return;
     setSelected((prev) => {
-      if (allVisibleSelected) return new Set();
-      const firstVisible = visibleSelectableAccounts[0];
-      return firstVisible ? new Set([firstVisible.id]) : prev;
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        visibleSelectableAccounts.forEach((account) => next.delete(account.id));
+      } else {
+        visibleSelectableAccounts.forEach((account) => next.add(account.id));
+      }
+      return next;
+    });
+  };
+
+  const toggleMemberRemovalSelectAll = () => {
+    if (actionBusy || selectedMemberAccounts.length === 0) return;
+    setMemberRemovalSelected(() =>
+      allMembersSelectedForRemoval
+        ? new Set()
+        : new Set(selectedMemberAccounts.map((account) => account.id)),
+    );
+  };
+
+  const toggleMemberRemovalSelect = (accountId: string) => {
+    if (actionBusy) return;
+    setMemberRemovalSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(accountId)) {
+        next.delete(accountId);
+      } else {
+        next.add(accountId);
+      }
+      return next;
     });
   };
 
@@ -831,23 +927,71 @@ export function CodexLocalAccessModal({
     });
   };
 
+  const buildPersistedMemberIds = (source: Set<string>) =>
+    Array.from(source).filter((accountId) => {
+      const account = accountById.get(accountId);
+      if (!account) return false;
+      if (restrictFreeAccounts && isCodexExplicitFreePlanType(account.plan_type)) {
+        return false;
+      }
+      return true;
+    });
+
   const handleSaveMembers = async () => {
     setError('');
     setNotice('');
     try {
-      const filtered = Array.from(selected).filter((accountId) => {
-        const account = accountById.get(accountId);
-        if (!account) return false;
-        if (restrictFreeAccounts && isCodexExplicitFreePlanType(account.plan_type)) {
-          return false;
-        }
-        return true;
-      });
+      const filtered = buildPersistedMemberIds(selected);
       await onSaveAccounts({
         accountIds: filtered,
         restrictFreeAccounts,
       });
       onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleRemoveSelectedMembers = async () => {
+    if (memberRemovalSelected.size === 0 || actionBusy) return;
+    setError('');
+    setNotice('');
+    const nextSelected = new Set(selected);
+    memberRemovalSelected.forEach((accountId) => nextSelected.delete(accountId));
+    const removedCount = selected.size - nextSelected.size;
+    try {
+      const filtered = buildPersistedMemberIds(nextSelected);
+      await onSaveAccounts({
+        accountIds: filtered,
+        restrictFreeAccounts,
+      });
+      setSelected(nextSelected);
+      setMemberRemovalSelected(new Set());
+      setNotice(
+        t('codex.localAccess.modal.removeMembersSuccess', {
+          count: removedCount,
+          defaultValue: '已移出 {{count}} 个账号',
+        }),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleRefreshSelectedMembers = async () => {
+    if (memberRemovalSelected.size === 0 || actionBusy) return;
+    setError('');
+    setNotice('');
+    const accountIds = Array.from(memberRemovalSelected);
+    try {
+      const result = await onRefreshAccounts(accountIds);
+      setNotice(
+        t('codex.localAccess.modal.refreshMembersSuccess', {
+          count: result.successCount,
+          total: result.total,
+          defaultValue: '已刷新 {{count}} 个账号额度',
+        }),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -1682,6 +1826,102 @@ export function CodexLocalAccessModal({
                 </label>
               </div>
 
+              {selectedMemberAccounts.length > 0 && (
+                <div className="codex-local-access-current-members">
+                  <div className="codex-local-access-current-members-head">
+                    <label className="codex-local-access-current-members-check">
+                      <input
+                        ref={memberRemoveAllCheckboxRef}
+                        type="checkbox"
+                        checked={allMembersSelectedForRemoval}
+                        onChange={toggleMemberRemovalSelectAll}
+                        disabled={actionBusy}
+                      />
+                      <span>
+                        {t('codex.localAccess.modal.currentPoolMembers', {
+                          count: selectedMemberAccounts.length,
+                          defaultValue: '当前号池 {{count}} 个',
+                        })}
+                      </span>
+                    </label>
+                    <div className="codex-local-access-current-member-actions">
+                      <button
+                        type="button"
+                        className="btn btn-secondary codex-local-access-member-action-btn"
+                        onClick={() => void handleRefreshSelectedMembers()}
+                        disabled={actionBusy || memberRemovalSelectedCount === 0}
+                      >
+                        <RefreshCw
+                          size={14}
+                          className={refreshing ? 'loading-spinner' : ''}
+                        />
+                        <span>
+                          {t('common.shared.refreshQuota', '刷新配额')}
+                          {memberRemovalSelectedCount > 0 ? ` (${memberRemovalSelectedCount})` : ''}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary codex-local-access-member-action-btn is-danger"
+                        onClick={() => void handleRemoveSelectedMembers()}
+                        disabled={actionBusy || memberRemovalSelectedCount === 0}
+                      >
+                        <Trash2 size={14} />
+                        <span>
+                          {t('codex.localAccess.removeSelectedMembers', '移出 API 服务')}
+                          {memberRemovalSelectedCount > 0 ? ` (${memberRemovalSelectedCount})` : ''}
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                  <div className="codex-local-access-current-member-list">
+                    {selectedMemberAccounts.map((account) => {
+                      const presentation = buildCodexAccountPresentation(account, t);
+                      const isCurrentAccount = currentAccountId === account.id;
+                      const isRemovalChecked = memberRemovalSelected.has(account.id);
+                      const accountStats = allStatsByAccountId.get(account.id)?.usage;
+
+                      return (
+                        <label
+                          key={`pool-member-${account.id}`}
+                          className={`codex-local-access-current-member${
+                            isCurrentAccount ? ' is-active-account' : ''
+                          }${isRemovalChecked ? ' is-marked' : ''}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isRemovalChecked}
+                            onChange={() => toggleMemberRemovalSelect(account.id)}
+                            disabled={actionBusy}
+                          />
+                          <span
+                            className="codex-local-access-current-member-email"
+                            title={maskAccountText(presentation.displayName)}
+                          >
+                            {maskAccountText(presentation.displayName)}
+                          </span>
+                          {isCurrentAccount && (
+                            <span className="group-account-badge is-current">
+                              {t('codex.current', '当前')}
+                            </span>
+                          )}
+                          <span className={`tier-badge ${presentation.planClass}`}>
+                            {presentation.planLabel}
+                          </span>
+                          <span className="codex-local-access-member-metric">
+                            {t('codex.localAccess.stats.accountRequests', {
+                              count: accountStats?.requestCount ?? 0,
+                              defaultValue: '{{count}} 次请求',
+                            })}
+                          </span>
+                          {renderQuotaPreview(presentation, 1)}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               <div className="group-account-toolbar">
                 <div className="group-account-search">
                   <Search size={16} className="group-account-search-icon" />
@@ -1767,6 +2007,7 @@ export function CodexLocalAccessModal({
                   visibleAccounts.map((account) => {
                     const presentation = buildCodexAccountPresentation(account, t);
                     const isChecked = selected.has(account.id);
+                    const isCurrentAccount = currentAccountId === account.id;
                     const isFreeAccount = isCodexExplicitFreePlanType(account.plan_type);
                     const isFreeSelectionBlocked =
                       isFreeAccount && restrictFreeAccounts && !isChecked;
@@ -1776,6 +2017,8 @@ export function CodexLocalAccessModal({
                       <label
                         key={account.id}
                         className={`group-account-item${isChecked ? ' is-current' : ''}${
+                          isCurrentAccount ? ' is-active-account' : ''
+                        }${
                           isFreeSelectionBlocked ? ' is-disabled' : ''
                         }`}
                       >
@@ -1796,6 +2039,11 @@ export function CodexLocalAccessModal({
                           <span className={`tier-badge ${presentation.planClass}`}>
                               {presentation.planLabel}
                             </span>
+                          {isCurrentAccount && (
+                            <span className="group-account-badge is-current">
+                              {t('codex.current', '当前')}
+                            </span>
+                          )}
                           <span className="codex-local-access-member-metric">
                             {t('codex.localAccess.stats.accountRequests', {
                               count: accountStats?.requestCount ?? 0,

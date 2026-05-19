@@ -388,6 +388,50 @@ function getCodexAccountRecommendedSortBucket(
   return 6;
 }
 
+function compareCodexAccountTopSortPriority(
+  left: CodexAccount,
+  right: CodexAccount,
+  apiServiceSortMeta: Map<string, number>,
+  groupSortMeta: Map<string, CodexGroupSortMeta>,
+  currentAccountId: string | null,
+): number {
+  const leftBucket = getCodexAccountRecommendedSortBucket(
+    left,
+    apiServiceSortMeta,
+    groupSortMeta,
+    currentAccountId,
+  );
+  const rightBucket = getCodexAccountRecommendedSortBucket(
+    right,
+    apiServiceSortMeta,
+    groupSortMeta,
+    currentAccountId,
+  );
+  const leftTopBucket = leftBucket <= 2 ? leftBucket : 3;
+  const rightTopBucket = rightBucket <= 2 ? rightBucket : 3;
+  if (leftTopBucket !== rightTopBucket) {
+    return leftTopBucket - rightTopBucket;
+  }
+  if (leftTopBucket <= 2 && currentAccountId) {
+    const leftIsCurrent = left.id === currentAccountId;
+    const rightIsCurrent = right.id === currentAccountId;
+    if (leftIsCurrent !== rightIsCurrent) {
+      return leftIsCurrent ? -1 : 1;
+    }
+  }
+  if (leftTopBucket === 0) {
+    return compareCodexRecommendedApiServiceAccounts(
+      left,
+      right,
+      apiServiceSortMeta,
+    );
+  }
+  if (leftTopBucket === 1) {
+    return compareCodexRecommendedGroupedAccounts(left, right, groupSortMeta);
+  }
+  return 0;
+}
+
 function compareCodexRecommendedFreeAccounts(
   left: CodexAccount,
   right: CodexAccount,
@@ -717,6 +761,10 @@ export function CodexAccountsPage() {
   const [groupQuickAddGroupId, setGroupQuickAddGroupId] = useState<
     string | null
   >(null);
+  const [groupMemberRemoveGroupId, setGroupMemberRemoveGroupId] = useState<
+    string | null
+  >(null);
+  const [groupRefreshingAll, setGroupRefreshingAll] = useState(false);
   const [groupDeleteConfirm, setGroupDeleteConfirm] = useState<{
     id: string;
     name: string;
@@ -947,9 +995,9 @@ export function CodexAccountsPage() {
     openTagModal,
     handleSaveTags,
     refreshing,
-    refreshingAll,
+    refreshingAll: baseRefreshingAll,
     handleRefresh,
-    handleRefreshAll,
+    handleRefreshAll: handleBaseRefreshAll,
     handleDelete,
     handleBatchDelete,
     deleteConfirm,
@@ -4392,12 +4440,100 @@ export function CodexAccountsPage() {
     return codexGroups.find((group) => group.id === activeGroupId) ?? null;
   }, [activeGroupId, codexGroups]);
 
+  const refreshingAll = baseRefreshingAll || groupRefreshingAll;
+
+  const handleRefreshAll = useCallback(async () => {
+    if (!activeGroup) {
+      await handleBaseRefreshAll();
+      return;
+    }
+
+    const groupAccountIds = new Set(activeGroup.accountIds);
+    const targetAccountIds = accounts
+      .filter(
+        (account) =>
+          groupAccountIds.has(account.id) && !isCodexApiKeyAccount(account),
+      )
+      .map((account) => account.id);
+
+    if (targetAccountIds.length === 0) {
+      setMessage({
+        text: t("codex.refreshFailed", {
+          error: t("common.shared.quota.noData", "暂无配额数据"),
+        }),
+        tone: "error",
+      });
+      return;
+    }
+
+    setGroupRefreshingAll(true);
+    try {
+      const results = await Promise.allSettled(
+        targetAccountIds.map((accountId) => refreshQuota(accountId)),
+      );
+      await fetchAccounts();
+      await fetchCurrentAccount();
+
+      const successCount = results.filter(
+        (result) => result.status === "fulfilled",
+      ).length;
+
+      if (successCount === targetAccountIds.length) {
+        setMessage({
+          text: t("codex.refreshAllSuccess", { count: successCount }),
+        });
+      } else if (successCount > 0) {
+        setMessage({
+          text: t("codex.refreshAllPartialFailed", {
+            success: successCount,
+            total: targetAccountIds.length,
+          }),
+          tone: "error",
+        });
+      } else {
+        const firstFailure = results.find(
+          (result): result is PromiseRejectedResult =>
+            result.status === "rejected",
+        );
+        setMessage({
+          text: t("codex.refreshFailed", {
+            error: String(firstFailure?.reason ?? "").replace(
+              /^Error:\s*/,
+              "",
+            ),
+          }),
+          tone: "error",
+        });
+      }
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setGroupRefreshingAll(false);
+    }
+  }, [
+    accounts,
+    activeGroup,
+    fetchAccounts,
+    fetchCurrentAccount,
+    handleBaseRefreshAll,
+    refreshQuota,
+    setMessage,
+    t,
+  ]);
+
   const groupQuickAddGroup = useMemo(() => {
     if (!groupQuickAddGroupId) return null;
     return (
       codexGroups.find((group) => group.id === groupQuickAddGroupId) ?? null
     );
   }, [codexGroups, groupQuickAddGroupId]);
+  const groupMemberRemoveGroup = useMemo(() => {
+    if (!groupMemberRemoveGroupId) return null;
+    return (
+      codexGroups.find((group) => group.id === groupMemberRemoveGroupId) ??
+      null
+    );
+  }, [codexGroups, groupMemberRemoveGroupId]);
 
   useEffect(() => {
     if (
@@ -4416,6 +4552,15 @@ export function CodexAccountsPage() {
       setGroupQuickAddGroupId(null);
     }
   }, [codexGroups, groupQuickAddGroupId]);
+
+  useEffect(() => {
+    if (
+      groupMemberRemoveGroupId &&
+      !codexGroups.some((group) => group.id === groupMemberRemoveGroupId)
+    ) {
+      setGroupMemberRemoveGroupId(null);
+    }
+  }, [codexGroups, groupMemberRemoveGroupId]);
 
   useEffect(() => {
     const existingAccountIds = new Set(accounts.map((account) => account.id));
@@ -4521,6 +4666,22 @@ export function CodexAccountsPage() {
       await reloadCodexGroups();
     },
     [reloadCodexGroups],
+  );
+
+  const handleQuickRemoveAccountsFromGroup = useCallback(
+    async (groupId: string, accountIds: string[]) => {
+      if (accountIds.length === 0) return;
+      await removeAccountsFromCodexGroup(groupId, accountIds);
+      setSelected((prev) => {
+        if (prev.size === 0) return prev;
+        const removed = new Set(accountIds);
+        const next = new Set(prev);
+        removed.forEach((accountId) => next.delete(accountId));
+        return next;
+      });
+      await reloadCodexGroups();
+    },
+    [reloadCodexGroups, setSelected],
   );
 
   const confirmDeleteGroup = useCallback(async () => {
@@ -4996,21 +5157,22 @@ export function CodexAccountsPage() {
     t,
   ]);
 
-  const handleQuickRefreshLocalAccessQuota = useCallback(async () => {
-    if (!localAccessCollection) return;
-    const targetIds = localAccessEffectiveAccountIds.filter((accountId) => {
+  const handleRefreshLocalAccessQuotaAccounts = useCallback(async (accountIds: string[]) => {
+    const uniqueAccountIds = Array.from(new Set(accountIds));
+    const targetIds = uniqueAccountIds.filter((accountId) => {
       const account = accounts.find((item) => item.id === accountId);
       return Boolean(account && !isCodexApiKeyAccount(account));
     });
 
     if (targetIds.length === 0) {
+      const error = t("common.shared.quota.noData", "暂无配额数据");
       setMessage({
         text: t("codex.refreshFailed", {
-          error: t("common.shared.quota.noData", "暂无配额数据"),
+          error,
         }),
         tone: "error",
       });
-      return;
+      throw new Error(error);
     }
 
     setLocalAccessRefreshing(true);
@@ -5029,7 +5191,7 @@ export function CodexAccountsPage() {
         setMessage({
           text: t("codex.refreshAllSuccess", { count: successCount }),
         });
-        return;
+        return { successCount, total: targetIds.length };
       }
 
       if (successCount > 0) {
@@ -5040,19 +5202,21 @@ export function CodexAccountsPage() {
           }),
           tone: "error",
         });
-        return;
+        return { successCount, total: targetIds.length };
       }
 
       const firstFailure = results.find(
         (result): result is PromiseRejectedResult =>
           result.status === "rejected",
       );
+      const error = String(firstFailure?.reason ?? "").replace(/^Error:\s*/, "");
       setMessage({
         text: t("codex.refreshFailed", {
-          error: String(firstFailure?.reason ?? "").replace(/^Error:\s*/, ""),
+          error,
         }),
         tone: "error",
       });
+      throw new Error(error);
     } finally {
       setLocalAccessRefreshing(false);
     }
@@ -5060,11 +5224,22 @@ export function CodexAccountsPage() {
     accounts,
     fetchAccounts,
     fetchCurrentAccount,
-    localAccessCollection,
-    localAccessEffectiveAccountIds,
     refreshQuota,
     setMessage,
     t,
+  ]);
+
+  const handleQuickRefreshLocalAccessQuota = useCallback(async () => {
+    if (!localAccessCollection) return;
+    try {
+      await handleRefreshLocalAccessQuotaAccounts(localAccessEffectiveAccountIds);
+    } catch {
+      // handleRefreshLocalAccessQuotaAccounts already reports the failure.
+    }
+  }, [
+    handleRefreshLocalAccessQuotaAccounts,
+    localAccessCollection,
+    localAccessEffectiveAccountIds,
   ]);
 
   // ─── Filtering & Sorting ────────────────────────────────────────────
@@ -5116,16 +5291,20 @@ export function CodexAccountsPage() {
     localAccessRuntimeActive && localAccessEffectiveAccountIds.length > 0
       ? localAccessEffectiveAccountIds[0]
       : (currentAccount?.id ?? null);
-  const getCodexAccountPinnedPriority = useCallback(
-    (account: CodexAccount) => {
-      if (overviewCurrentAccountId === account.id) return 0;
-      return 1;
-    },
-    [overviewCurrentAccountId],
-  );
 
   const compareAccountsBySort = useCallback(
     (a: CodexAccount, b: CodexAccount) => {
+      const topPriority = compareCodexAccountTopSortPriority(
+        a,
+        b,
+        apiServiceSortMeta,
+        groupSortMeta,
+        overviewCurrentAccountId,
+      );
+      if (topPriority !== 0) {
+        return topPriority;
+      }
+
       if (sortBy === CODEX_RECOMMENDED_SORT_BY) {
         const aBucket = getCodexAccountRecommendedSortBucket(
           a,
@@ -5156,12 +5335,6 @@ export function CodexAccountsPage() {
           return compareCodexRecommendedFreeAccounts(a, b);
         }
         return compareCodexAccountTieBreak(a, b);
-      }
-
-      const pinnedPriority =
-        getCodexAccountPinnedPriority(a) - getCodexAccountPinnedPriority(b);
-      if (pinnedPriority !== 0) {
-        return pinnedPriority;
       }
 
       if (sortBy === "custom") {
@@ -5220,7 +5393,6 @@ export function CodexAccountsPage() {
     [
       apiServiceSortMeta,
       customSortOrderIndex,
-      getCodexAccountPinnedPriority,
       groupSortMeta,
       overviewCurrentAccountId,
       resolveSubscriptionPresentation,
@@ -8043,6 +8215,16 @@ export function CodexAccountsPage() {
                 <FolderPlus size={14} />
                 {t("accounts.groups.addAccounts")}
               </button>
+              {activeGroup.accountIds.length > 0 && (
+                <button
+                  className="btn btn-secondary breadcrumb-remove-btn"
+                  onClick={() => setGroupMemberRemoveGroupId(activeGroup.id)}
+                  title={t("accounts.groups.removeFromGroup")}
+                >
+                  <LogOut size={14} />
+                  {t("accounts.groups.removeFromGroup")}
+                </button>
+              )}
               {selected.size > 0 && (
                 <>
                   <button
@@ -10513,10 +10695,28 @@ export function CodexAccountsPage() {
             targetGroup={groupQuickAddGroup}
             accounts={overviewAccounts}
             accountGroups={codexGroups}
+            currentAccountId={overviewCurrentAccountId}
             maskAccountText={maskAccountText}
             onClose={() => setGroupQuickAddGroupId(null)}
             onConfirm={({ accountIds }) =>
               handleQuickAddAccountsToGroup(groupQuickAddGroupId!, accountIds)
+            }
+          />
+
+          <CodexGroupAccountPickerModal
+            isOpen={!!groupMemberRemoveGroupId}
+            targetGroup={groupMemberRemoveGroup}
+            accounts={overviewAccounts}
+            accountGroups={codexGroups}
+            mode="remove"
+            currentAccountId={overviewCurrentAccountId}
+            maskAccountText={maskAccountText}
+            onClose={() => setGroupMemberRemoveGroupId(null)}
+            onConfirm={({ accountIds }) =>
+              handleQuickRemoveAccountsFromGroup(
+                groupMemberRemoveGroupId!,
+                accountIds,
+              )
             }
           />
 
@@ -10531,6 +10731,7 @@ export function CodexAccountsPage() {
             accounts={accounts}
             accountGroups={codexGroups}
             initialSelectedIds={localAccessModalSelectedIds}
+            currentAccountId={overviewCurrentAccountId}
             maskAccountText={maskAccountText}
             onClose={() => setShowLocalAccessModal(false)}
             onSaveAccounts={({ accountIds, restrictFreeAccounts }) =>
@@ -10538,6 +10739,7 @@ export function CodexAccountsPage() {
                 restrictFreeAccounts,
               })
             }
+            onRefreshAccounts={handleRefreshLocalAccessQuotaAccounts}
             onClearStats={handleClearLocalAccessStats}
             onRefreshStats={reloadLocalAccessState}
             onRecoverHealth={handleRecoverLocalAccessHealth}
@@ -10551,6 +10753,7 @@ export function CodexAccountsPage() {
             onToggleEnabled={handleToggleLocalAccessEnabled}
             onTest={handleTestLocalAccess}
             saving={localAccessSaving}
+            refreshing={localAccessRefreshing}
             testing={localAccessTesting}
             starting={localAccessStarting}
             portCleanupBusy={localAccessPortKilling}

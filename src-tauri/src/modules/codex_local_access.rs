@@ -1,4 +1,4 @@
-use crate::models::codex::{CodexAccount, CodexApiProviderMode};
+use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexQuota, CodexQuotaErrorInfo};
 use crate::models::codex_local_access::{
     CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
     CodexLocalAccessAccountStats, CodexLocalAccessCollection, CodexLocalAccessGlobalError,
@@ -41,6 +41,7 @@ const CODEX_LOCAL_ACCESS_STATS_FILE: &str = "codex_local_access_stats.json";
 const CODEX_LOCAL_ACCESS_HEALTH_FILE: &str = "codex_local_access_health.json";
 const CODEX_LOCAL_ACCESS_AUDIT_FILE: &str = "codex_local_access_audit.jsonl";
 const CODEX_RUNTIME_MODE_FILE: &str = "codex_runtime_mode.json";
+const CODEX_LOCAL_ACCESS_DATA_ROOT_ENV: &str = "COCKPIT_LOCAL_ACCESS_DATA_ROOT";
 const CODEX_LOCAL_ACCESS_BIND_HOST: &str = "127.0.0.1";
 const CODEX_LOCAL_ACCESS_URL_HOST: &str = "127.0.0.1";
 const LITELLM_GATEWAY_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
@@ -102,6 +103,7 @@ static GATEWAY_RUNTIME: OnceLock<TokioMutex<GatewayRuntime>> = OnceLock::new();
 static GATEWAY_ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
 static UPSTREAM_HTTP_CLIENT: OnceLock<Mutex<Option<CachedUpstreamHttpClient>>> = OnceLock::new();
 static LOCAL_API_BACKPRESSURE_STATE: OnceLock<Mutex<LocalApiBackpressureState>> = OnceLock::new();
+static LOCAL_API_BACKPRESSURE_ADMISSION_QUEUE: OnceLock<TokioMutex<()>> = OnceLock::new();
 static ACTIVE_STREAM_LEASE_REGISTRY: OnceLock<Mutex<ActiveStreamLeaseRegistry>> = OnceLock::new();
 static AUDIT_TRAIL_STATUS: OnceLock<Mutex<AuditTrailStatus>> = OnceLock::new();
 
@@ -346,6 +348,19 @@ struct RoutingCandidate {
     subscription_expiry_ms: Option<i64>,
 }
 
+#[derive(Debug, Default)]
+struct PoolUnavailableSummary {
+    total_count: usize,
+    schedulable_count: usize,
+    exhausted_count: usize,
+    cooling_count: usize,
+    model_cooldown_count: usize,
+    manual_required_count: usize,
+    disabled_count: usize,
+    unknown_blocked_count: usize,
+    nearest_wait: Option<Duration>,
+}
+
 fn gateway_runtime() -> &'static TokioMutex<GatewayRuntime> {
     GATEWAY_RUNTIME.get_or_init(|| TokioMutex::new(GatewayRuntime::default()))
 }
@@ -356,6 +371,10 @@ fn upstream_http_client_cache() -> &'static Mutex<Option<CachedUpstreamHttpClien
 
 fn local_api_backpressure_state() -> &'static Mutex<LocalApiBackpressureState> {
     LOCAL_API_BACKPRESSURE_STATE.get_or_init(|| Mutex::new(LocalApiBackpressureState::default()))
+}
+
+fn local_api_backpressure_admission_queue() -> &'static TokioMutex<()> {
+    LOCAL_API_BACKPRESSURE_ADMISSION_QUEUE.get_or_init(|| TokioMutex::new(()))
 }
 
 fn active_stream_lease_registry() -> &'static Mutex<ActiveStreamLeaseRegistry> {
@@ -532,6 +551,7 @@ fn try_acquire_local_api_backpressure(
 async fn acquire_local_api_backpressure(
     config: &CodexLocalApiSafetyConfig,
 ) -> Result<LocalApiBackpressurePermit, ProxyDispatchError> {
+    let _admission_turn = local_api_backpressure_admission_queue().lock().await;
     let queue_wait = Duration::from_secs(config.max_queue_wait_seconds.max(1));
     timeout(queue_wait, async {
         loop {
@@ -742,39 +762,41 @@ fn upstream_http_client() -> Result<Client, String> {
     Ok(client)
 }
 
-fn local_access_file_path() -> Result<PathBuf, String> {
+fn local_access_data_root() -> Result<PathBuf, String> {
+    if let Ok(raw) = std::env::var(CODEX_LOCAL_ACCESS_DATA_ROOT_ENV) {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            let path = PathBuf::from(trimmed);
+            std::fs::create_dir_all(&path)
+                .map_err(|e| format!("创建本地接入临时数据目录失败: {}", e))?;
+            return Ok(path);
+        }
+    }
+
     let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    Ok(home
-        .join(".antigravity_cockpit")
-        .join(CODEX_LOCAL_ACCESS_FILE))
+    let path = home.join(".antigravity_cockpit");
+    std::fs::create_dir_all(&path).map_err(|e| format!("创建本地接入数据目录失败: {}", e))?;
+    Ok(path)
+}
+
+fn local_access_file_path() -> Result<PathBuf, String> {
+    Ok(local_access_data_root()?.join(CODEX_LOCAL_ACCESS_FILE))
 }
 
 fn local_access_stats_file_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    Ok(home
-        .join(".antigravity_cockpit")
-        .join(CODEX_LOCAL_ACCESS_STATS_FILE))
+    Ok(local_access_data_root()?.join(CODEX_LOCAL_ACCESS_STATS_FILE))
 }
 
 fn local_access_health_file_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    Ok(home
-        .join(".antigravity_cockpit")
-        .join(CODEX_LOCAL_ACCESS_HEALTH_FILE))
+    Ok(local_access_data_root()?.join(CODEX_LOCAL_ACCESS_HEALTH_FILE))
 }
 
 fn local_access_audit_file_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    Ok(home
-        .join(".antigravity_cockpit")
-        .join(CODEX_LOCAL_ACCESS_AUDIT_FILE))
+    Ok(local_access_data_root()?.join(CODEX_LOCAL_ACCESS_AUDIT_FILE))
 }
 
 fn runtime_mode_file_path() -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("Cannot find home directory")?;
-    Ok(home
-        .join(".antigravity_cockpit")
-        .join(CODEX_RUNTIME_MODE_FILE))
+    Ok(local_access_data_root()?.join(CODEX_RUNTIME_MODE_FILE))
 }
 
 fn now_ms() -> i64 {
@@ -3400,6 +3422,166 @@ fn build_cooldown_unavailable_message(model_key: &str, wait: Duration) -> String
     }
 }
 
+fn summarize_pool_unavailability(
+    registry: &CodexLocalAccessHealthRegistry,
+    account_ids: &[String],
+    model: Option<&str>,
+    now: i64,
+) -> PoolUnavailableSummary {
+    let mut summary = PoolUnavailableSummary {
+        total_count: account_ids.len(),
+        ..PoolUnavailableSummary::default()
+    };
+
+    for account_id in account_ids {
+        let account_id = account_id.trim();
+        if account_id.is_empty() {
+            summary.unknown_blocked_count += 1;
+            continue;
+        }
+
+        let mut blocked = false;
+        if let Some(account) = registry.accounts.get(account_id) {
+            match account.status {
+                CodexLocalAccessAccountHealthStatus::Healthy
+                | CodexLocalAccessAccountHealthStatus::EstimatedAvailable => {}
+                CodexLocalAccessAccountHealthStatus::CoolingDown => {
+                    if let Some(wait) = cooldown_wait_from_until_ms(account.cooldown_until_ms, now)
+                    {
+                        summary.cooling_count += 1;
+                        summary.nearest_wait = min_cooldown_wait(summary.nearest_wait, wait);
+                        blocked = true;
+                    }
+                }
+                CodexLocalAccessAccountHealthStatus::Exhausted => {
+                    summary.exhausted_count += 1;
+                    if let Some(wait) = cooldown_wait_from_until_ms(
+                        account.estimated_reset_at_ms.or(account.cooldown_until_ms),
+                        now,
+                    ) {
+                        summary.nearest_wait = min_cooldown_wait(summary.nearest_wait, wait);
+                    }
+                    blocked = true;
+                }
+                CodexLocalAccessAccountHealthStatus::AuthSuspect
+                | CodexLocalAccessAccountHealthStatus::ManualRequired => {
+                    summary.manual_required_count += 1;
+                    blocked = true;
+                }
+                CodexLocalAccessAccountHealthStatus::Disabled => {
+                    summary.disabled_count += 1;
+                    blocked = true;
+                }
+            }
+
+            if account.manual_required
+                && !matches!(
+                    account.status,
+                    CodexLocalAccessAccountHealthStatus::AuthSuspect
+                        | CodexLocalAccessAccountHealthStatus::ManualRequired
+                )
+            {
+                summary.manual_required_count += 1;
+                blocked = true;
+            }
+        }
+
+        if let Some(model) = model.map(str::trim).filter(|value| !value.is_empty()) {
+            let key = health_registry_model_key(account_id, model);
+            if let Some(wait) = registry.model_cooldowns.get(&key).and_then(|cooldown| {
+                cooldown_wait_from_until_ms(Some(cooldown.cooldown_until_ms), now)
+            }) {
+                summary.model_cooldown_count += 1;
+                summary.nearest_wait = min_cooldown_wait(summary.nearest_wait, wait);
+                blocked = true;
+            }
+        }
+
+        if !blocked && health_registry_account_is_schedulable(registry, account_id, model, now) {
+            summary.schedulable_count += 1;
+        } else if !blocked {
+            summary.unknown_blocked_count += 1;
+        }
+    }
+
+    summary
+}
+
+fn status_for_pool_unavailable(summary: &PoolUnavailableSummary) -> u16 {
+    if summary.exhausted_count > 0 || summary.cooling_count > 0 || summary.model_cooldown_count > 0
+    {
+        StatusCode::TOO_MANY_REQUESTS.as_u16()
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE.as_u16()
+    }
+}
+
+fn build_pool_unavailable_message(model_key: &str, summary: &PoolUnavailableSummary) -> String {
+    if summary.total_count == 0 {
+        return "API 服务号池为空，请先加入账号".to_string();
+    }
+
+    let model_prefix = model_key
+        .trim()
+        .is_empty()
+        .then(String::new)
+        .unwrap_or_else(|| format!("模型 {} 的", model_key.trim()));
+
+    if summary.exhausted_count == summary.total_count {
+        if let Some(wait) = summary.nearest_wait {
+            return format!(
+                "{}API 服务号池账号额度均已耗尽，请 {} 后重试",
+                model_prefix,
+                format_retry_after_duration(wait)
+            );
+        }
+        return format!(
+            "{}API 服务号池账号额度均已耗尽，且未拿到上游 reset 时间；请刷新配额、切换账号或恢复账号后重试",
+            model_prefix
+        );
+    }
+
+    if summary.manual_required_count == summary.total_count {
+        return format!(
+            "{}API 服务号池账号均需人工处理（重新登录或风控验证），请在 Cockpit 中恢复账号后重试",
+            model_prefix
+        );
+    }
+
+    let mut parts = Vec::new();
+    if summary.exhausted_count > 0 {
+        parts.push(format!("额度耗尽 {} 个", summary.exhausted_count));
+    }
+    let cooling_total = summary
+        .cooling_count
+        .saturating_add(summary.model_cooldown_count);
+    if cooling_total > 0 {
+        parts.push(format!("冷却中 {} 个", cooling_total));
+    }
+    if summary.manual_required_count > 0 {
+        parts.push(format!("需人工处理 {} 个", summary.manual_required_count));
+    }
+    if summary.disabled_count > 0 {
+        parts.push(format!("已禁用 {} 个", summary.disabled_count));
+    }
+    if summary.unknown_blocked_count > 0 {
+        parts.push(format!("状态未知 {} 个", summary.unknown_blocked_count));
+    }
+
+    if parts.is_empty() {
+        return format!(
+            "{}API 服务号池暂无可调度账号，请刷新配额或调整号池后重试",
+            model_prefix
+        );
+    }
+
+    format!(
+        "{}API 服务号池暂无可调度账号（{}）；请刷新配额、恢复账号或调整号池后重试",
+        model_prefix,
+        parts.join("，")
+    )
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CodexLocalAccessErrorType {
     UpstreamRateLimit,
@@ -3765,6 +3947,245 @@ fn classify_codex_upstream_error(
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AccountQuotaResetHint {
+    reset_at_seconds: Option<i64>,
+    reset_after_seconds: Option<i64>,
+}
+
+fn should_persist_account_quota_exhaustion(classified: &ClassifiedCodexUpstreamError) -> bool {
+    matches!(
+        classified.error_type,
+        CodexLocalAccessErrorType::UsageLimitReached | CodexLocalAccessErrorType::InsufficientQuota
+    )
+}
+
+fn normalize_unix_timestamp_seconds(value: i64) -> i64 {
+    if value > 1_000_000_000_000 {
+        value / 1000
+    } else {
+        value
+    }
+}
+
+fn first_i64_json_field<'a>(
+    value: &'a Value,
+    keys: impl IntoIterator<Item = &'a str>,
+) -> Option<i64> {
+    keys.into_iter().find_map(|key| {
+        value.get(key).and_then(|item| {
+            item.as_i64()
+                .or_else(|| item.as_u64().and_then(|v| i64::try_from(v).ok()))
+        })
+    })
+}
+
+fn extract_account_quota_reset_hint_from_body(
+    error_body: &str,
+    now_seconds: i64,
+) -> AccountQuotaResetHint {
+    let Ok(root) = serde_json::from_str::<Value>(error_body) else {
+        return AccountQuotaResetHint::default();
+    };
+    let candidates = [
+        Some(&root),
+        root.get("error"),
+        root.get("detail"),
+        root.get("data"),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        let reset_at = first_i64_json_field(candidate, ["reset_at", "resets_at"])
+            .map(normalize_unix_timestamp_seconds);
+        let reset_after_seconds = first_i64_json_field(
+            candidate,
+            [
+                "reset_after_seconds",
+                "resets_in_seconds",
+                "resetAfterSeconds",
+            ],
+        )
+        .filter(|seconds| *seconds >= 0);
+
+        if reset_at.is_some() || reset_after_seconds.is_some() {
+            return AccountQuotaResetHint {
+                reset_at_seconds: reset_at.or_else(|| {
+                    reset_after_seconds.map(|seconds| now_seconds.saturating_add(seconds))
+                }),
+                reset_after_seconds,
+            };
+        }
+    }
+
+    AccountQuotaResetHint::default()
+}
+
+fn duration_to_millis_i64(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
+}
+
+fn duration_to_ceiled_seconds_i64(duration: Duration) -> i64 {
+    let seconds = duration.as_millis().saturating_add(999) / 1000;
+    i64::try_from(seconds).unwrap_or(i64::MAX)
+}
+
+fn account_quota_reset_hint_from_classified_error(
+    classified: &ClassifiedCodexUpstreamError,
+    error_body: &str,
+    now_ms: i64,
+) -> AccountQuotaResetHint {
+    let now_seconds = now_ms.div_euclid(1000);
+    let mut hint = extract_account_quota_reset_hint_from_body(error_body, now_seconds);
+
+    if hint.reset_at_seconds.is_none() {
+        if let Some(retry_after) = classified.retry_after {
+            let reset_after_seconds = duration_to_ceiled_seconds_i64(retry_after);
+            hint.reset_at_seconds = Some(now_seconds.saturating_add(reset_after_seconds));
+            hint.reset_after_seconds.get_or_insert(reset_after_seconds);
+        }
+    }
+
+    hint
+}
+
+fn build_account_quota_exhaustion_message(
+    classified: &ClassifiedCodexUpstreamError,
+    reset_at_seconds: Option<i64>,
+) -> String {
+    let mut message = format!(
+        "Cockpit API service upstream quota exhausted: status={}, error_type={}",
+        classified.status,
+        classified.error_type.as_str()
+    );
+    if let Some(provider_code) = classified.provider_code.as_deref() {
+        message.push_str(&format!(", provider_code={}", provider_code));
+    }
+    if let Some(reset_at) = reset_at_seconds {
+        message.push_str(&format!(", reset_at={}", reset_at));
+    }
+    message
+}
+
+fn apply_account_quota_exhaustion_snapshot(
+    account: &mut CodexAccount,
+    classified: &ClassifiedCodexUpstreamError,
+    error_body: &str,
+    now_ms: i64,
+) -> bool {
+    if !should_persist_account_quota_exhaustion(classified) {
+        return false;
+    }
+
+    let now_seconds = now_ms.div_euclid(1000);
+    let previous = account.quota.as_ref();
+    let reset_hint = account_quota_reset_hint_from_classified_error(classified, error_body, now_ms);
+    let reset_at = reset_hint.reset_at_seconds;
+    let retry_after_ms = classified.retry_after.map(duration_to_millis_i64);
+
+    account.quota = Some(CodexQuota {
+        hourly_percentage: 0,
+        hourly_reset_time: reset_at.or_else(|| previous.and_then(|quota| quota.hourly_reset_time)),
+        hourly_window_minutes: previous.and_then(|quota| quota.hourly_window_minutes),
+        hourly_window_present: previous
+            .and_then(|quota| quota.hourly_window_present)
+            .or(Some(true)),
+        weekly_percentage: 0,
+        weekly_reset_time: reset_at.or_else(|| previous.and_then(|quota| quota.weekly_reset_time)),
+        weekly_window_minutes: previous.and_then(|quota| quota.weekly_window_minutes),
+        weekly_window_present: previous
+            .and_then(|quota| quota.weekly_window_present)
+            .or(Some(true)),
+        raw_data: Some(json!({
+            "source": "codex_local_access_upstream_error",
+            "quota_exhausted": true,
+            "exhausted_at": now_seconds,
+            "reset_at": reset_at,
+            "reset_after_seconds": reset_hint.reset_after_seconds,
+            "retry_after_ms": retry_after_ms,
+            "status": classified.status,
+            "error_type": classified.error_type.as_str(),
+            "provider_code": classified.provider_code.as_deref(),
+        })),
+    });
+    account.quota_error = Some(CodexQuotaErrorInfo {
+        code: classified
+            .provider_code
+            .clone()
+            .or_else(|| Some(classified.error_type.as_str().to_string())),
+        message: build_account_quota_exhaustion_message(classified, reset_at),
+        timestamp: now_seconds,
+    });
+    account.usage_updated_at = Some(now_seconds);
+    true
+}
+
+fn persist_account_quota_exhaustion_from_classified_error(
+    account_id: &str,
+    classified: &ClassifiedCodexUpstreamError,
+    error_body: &str,
+    now_ms: i64,
+) -> Result<bool, String> {
+    let account_id = account_id.trim();
+    if account_id.is_empty() || !should_persist_account_quota_exhaustion(classified) {
+        return Ok(false);
+    }
+
+    let Some(mut account) = codex_account::load_account(account_id) else {
+        return Err(format!("账号详情不存在: account_id={}", account_id));
+    };
+    if !apply_account_quota_exhaustion_snapshot(&mut account, classified, error_body, now_ms) {
+        return Ok(false);
+    }
+
+    codex_account::save_account(&account)?;
+    Ok(true)
+}
+
+fn persist_account_quota_exhaustion_with_audit(
+    account_id: &str,
+    request: &ParsedRequest,
+    classified: &ClassifiedCodexUpstreamError,
+    error_body: &str,
+) {
+    if !should_persist_account_quota_exhaustion(classified) {
+        return;
+    }
+
+    let context = build_audit_context(request, Some(account_id));
+    match persist_account_quota_exhaustion_from_classified_error(
+        account_id,
+        classified,
+        error_body,
+        now_ms(),
+    ) {
+        Ok(true) => record_audit_event_from_context(
+            &context,
+            "account_quota_snapshot",
+            Some(classified.status),
+            Some(classified.error_type.as_str()),
+            None,
+            Some("recorded"),
+            classified_audit_detail(classified),
+        ),
+        Ok(false) => {}
+        Err(err) => {
+            logger::log_warn(&format!(
+                "[CodexLocalAccess][QuotaSnapshot] 写入账号额度耗尽快照失败: {}",
+                err
+            ));
+            record_audit_event_from_context(
+                &context,
+                "account_quota_snapshot",
+                Some(classified.status),
+                Some(classified.error_type.as_str()),
+                None,
+                Some("error"),
+                BTreeMap::from([("reason".to_string(), "persist_failed".to_string())]),
+            );
+        }
+    }
+}
+
 fn empty_health_registry(now: i64) -> CodexLocalAccessHealthRegistry {
     CodexLocalAccessHealthRegistry {
         schema_version: CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION,
@@ -3783,8 +4204,95 @@ fn normalize_health_registry(
     if registry.updated_at <= 0 {
         registry.updated_at = now;
     }
+    demote_model_scoped_account_cooldowns(&mut registry, now);
     apply_estimated_quota_recovery(&mut registry, now);
     registry
+}
+
+fn is_model_scoped_cooldown_type(error_type: CodexLocalAccessErrorType) -> bool {
+    matches!(
+        error_type,
+        CodexLocalAccessErrorType::UsageLimitReached | CodexLocalAccessErrorType::ModelCapacity
+    )
+}
+
+fn is_model_scoped_cooldown_error_name(error_type: &str) -> bool {
+    matches!(
+        error_type.trim().to_ascii_lowercase().as_str(),
+        "usage_limit_reached" | "model_capacity"
+    )
+}
+
+fn is_model_scoped_cooldown(
+    classified: &ClassifiedCodexUpstreamError,
+    model: Option<&str>,
+) -> bool {
+    model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        && classified.scope == CodexLocalAccessErrorScope::Model
+        && is_model_scoped_cooldown_type(classified.error_type)
+}
+
+fn demote_model_scoped_account_cooldowns(registry: &mut CodexLocalAccessHealthRegistry, now: i64) {
+    let active_model_scoped_accounts: HashSet<String> = registry
+        .model_cooldowns
+        .values()
+        .filter(|cooldown| cooldown.cooldown_until_ms > now)
+        .filter(|cooldown| {
+            cooldown
+                .last_error_type
+                .as_deref()
+                .map(is_model_scoped_cooldown_error_name)
+                .unwrap_or(false)
+        })
+        .map(|cooldown| cooldown.account_id.trim().to_string())
+        .filter(|account_id| !account_id.is_empty())
+        .collect();
+
+    if active_model_scoped_accounts.is_empty() {
+        return;
+    }
+
+    let mut changed = false;
+    for (account_id, account) in registry.accounts.iter_mut() {
+        if !active_model_scoped_accounts.contains(account_id.as_str()) {
+            continue;
+        }
+        if !account
+            .last_error_type
+            .as_deref()
+            .map(is_model_scoped_cooldown_error_name)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if !matches!(
+            account.status,
+            CodexLocalAccessAccountHealthStatus::CoolingDown
+                | CodexLocalAccessAccountHealthStatus::Exhausted
+        ) {
+            continue;
+        }
+
+        account.status = CodexLocalAccessAccountHealthStatus::Healthy;
+        account.cooldown_until_ms = None;
+        account.exhausted_at_ms = None;
+        account.estimated_reset_at_ms = None;
+        account.estimated_remaining_percentage = None;
+        account.last_observed_remaining_percentage = None;
+        account.reset_source = None;
+        account.confidence = None;
+        account.manual_required = false;
+        account.updated_at = now;
+        changed = true;
+    }
+
+    if changed {
+        registry.schema_version = CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION;
+        registry.updated_at = now;
+    }
 }
 
 fn apply_estimated_quota_recovery(registry: &mut CodexLocalAccessHealthRegistry, now: i64) {
@@ -3901,12 +4409,15 @@ fn update_health_registry_from_classified_error(
         return;
     }
 
+    let safe_model = model.map(str::trim).filter(|m| !m.is_empty());
+    let model_scoped_cooldown = is_model_scoped_cooldown(classified, safe_model);
     let cooldown_until = classified
         .retry_after
         .or_else(|| {
             matches!(
                 classified.error_type,
                 CodexLocalAccessErrorType::UpstreamRateLimit
+                    | CodexLocalAccessErrorType::UsageLimitReached
                     | CodexLocalAccessErrorType::ModelCapacity
             )
             .then_some(DEFAULT_UNKNOWN_RATE_LIMIT_COOLDOWN)
@@ -3916,6 +4427,12 @@ fn update_health_registry_from_classified_error(
         classified.error_type,
         CodexLocalAccessErrorType::UsageLimitReached | CodexLocalAccessErrorType::InsufficientQuota
     );
+    let account_cooldown_until = if model_scoped_cooldown {
+        None
+    } else {
+        cooldown_until
+    };
+    let account_quota_zero_signal = is_quota_zero_signal && !model_scoped_cooldown;
 
     let (status, manual_required) = if classified.manual_required {
         (CodexLocalAccessAccountHealthStatus::ManualRequired, true)
@@ -3927,6 +4444,12 @@ fn update_health_registry_from_classified_error(
             }
             CodexLocalAccessErrorType::InsufficientQuota => {
                 (CodexLocalAccessAccountHealthStatus::Exhausted, false)
+            }
+            CodexLocalAccessErrorType::UsageLimitReached
+            | CodexLocalAccessErrorType::ModelCapacity
+                if model_scoped_cooldown =>
+            {
+                (CodexLocalAccessAccountHealthStatus::Healthy, false)
             }
             CodexLocalAccessErrorType::UsageLimitReached
             | CodexLocalAccessErrorType::UpstreamRateLimit
@@ -3942,19 +4465,20 @@ fn update_health_registry_from_classified_error(
         safe_account_id.to_string(),
         CodexLocalAccessAccountHealth {
             status,
-            cooldown_until_ms: cooldown_until,
-            exhausted_at_ms: is_quota_zero_signal.then_some(now),
-            estimated_reset_at_ms: cooldown_until.filter(|_| {
+            cooldown_until_ms: account_cooldown_until,
+            exhausted_at_ms: account_quota_zero_signal.then_some(now),
+            estimated_reset_at_ms: account_cooldown_until.filter(|_| {
                 matches!(
                     classified.error_type,
                     CodexLocalAccessErrorType::UsageLimitReached
                         | CodexLocalAccessErrorType::InsufficientQuota
                 )
             }),
-            estimated_remaining_percentage: is_quota_zero_signal.then_some(0),
-            last_observed_remaining_percentage: is_quota_zero_signal.then_some(0),
-            reset_source: health_registry_reset_source(classified),
-            confidence: is_quota_zero_signal.then_some("confirmed".to_string()),
+            estimated_remaining_percentage: account_quota_zero_signal.then_some(0),
+            last_observed_remaining_percentage: account_quota_zero_signal.then_some(0),
+            reset_source: account_cooldown_until
+                .and_then(|_| health_registry_reset_source(classified)),
+            confidence: account_quota_zero_signal.then_some("confirmed".to_string()),
             manual_required,
             last_status: Some(classified.status),
             last_error_type: Some(classified.error_type.as_str().to_string()),
@@ -3964,10 +4488,7 @@ fn update_health_registry_from_classified_error(
         },
     );
 
-    if let (Some(model), Some(cooldown_until)) = (
-        model.map(str::trim).filter(|m| !m.is_empty()),
-        cooldown_until,
-    ) {
+    if let (Some(model), Some(cooldown_until)) = (safe_model, cooldown_until) {
         let key = health_registry_model_key(safe_account_id, model);
         registry.model_cooldowns.insert(
             key,
@@ -6613,6 +7134,30 @@ fn is_stream_request(headers: &HashMap<String, String>, body: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
+fn is_websocket_upgrade_request(headers: &HashMap<String, String>) -> bool {
+    let upgrade_to_websocket = headers
+        .get("upgrade")
+        .map(|value| value.trim().eq_ignore_ascii_case("websocket"))
+        .unwrap_or(false);
+    let connection_has_upgrade = headers
+        .get("connection")
+        .map(|value| {
+            value
+                .split(',')
+                .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
+        })
+        .unwrap_or(false);
+    let has_websocket_key = headers.contains_key("sec-websocket-key");
+
+    upgrade_to_websocket || (connection_has_upgrade && has_websocket_key)
+}
+
+fn is_responses_websocket_upgrade_request(request: &ParsedRequest) -> bool {
+    request.method.eq_ignore_ascii_case("GET")
+        && is_responses_request(&request.target)
+        && is_websocket_upgrade_request(&request.headers)
+}
+
 fn resolve_upstream_account_id(account: &CodexAccount) -> Option<String> {
     account
         .account_id
@@ -7099,9 +7644,14 @@ fn persist_health_registry_with_audit(
                         | CodexLocalAccessErrorType::ModelCapacity
                 )
             {
+                let phase = if is_model_scoped_cooldown(classified, model_key) {
+                    "model_cooldown_applied"
+                } else {
+                    "account_cooldown_applied"
+                };
                 record_audit_event_from_context(
                     &context,
-                    "account_cooldown_applied",
+                    phase,
                     Some(classified.status),
                     Some(classified.error_type.as_str()),
                     None,
@@ -7153,6 +7703,8 @@ fn classify_codex_api_failure(status: Option<u16>, detail: &str) -> &'static str
         || detail.contains("鉴权")
     {
         "auth_failed"
+    } else if detail.contains("websocket") || detail.contains("web socket") {
+        "unsupported_websocket"
     } else if detail.contains("本地接入队列")
         || detail.contains("本地接入请求超时")
         || detail.contains("local backpressure")
@@ -8286,6 +8838,11 @@ async fn send_upstream_request(
                     | "content-length"
                     | "connection"
                     | "accept-encoding"
+                    | "upgrade"
+                    | "sec-websocket-key"
+                    | "sec-websocket-version"
+                    | "sec-websocket-protocol"
+                    | "sec-websocket-extensions"
                     | "x-api-key"
             ) {
                 continue;
@@ -8791,6 +9348,12 @@ async fn proxy_request_with_account_pool(
                     request,
                     &classified,
                 );
+                persist_account_quota_exhaustion_with_audit(
+                    &account.id,
+                    request,
+                    &classified,
+                    &body,
+                );
                 let message = classified.safe_message.clone();
                 log_codex_api_failure(
                     None,
@@ -8878,15 +9441,32 @@ async fn proxy_request_with_account_pool(
         retry_round += 1;
     }
 
+    let pool_summary = summarize_pool_unavailability(
+        &health_registry,
+        &routing_account_ids,
+        Some(&routing_hint.model_key),
+        now_ms(),
+    );
+    let use_pool_unavailable_summary = attempts == 0 && pool_summary.schedulable_count == 0;
+    let pool_retry_after = if use_pool_unavailable_summary {
+        pool_summary.nearest_wait
+    } else {
+        None
+    };
+
     Err(ProxyDispatchError {
-        status: if last_status == 503 {
+        status: if use_pool_unavailable_summary {
+            status_for_pool_unavailable(&pool_summary)
+        } else if last_status == 503 {
             earliest_cooldown_wait
                 .map(|_| StatusCode::TOO_MANY_REQUESTS.as_u16())
                 .unwrap_or(last_status)
         } else {
             last_status
         },
-        message: if matches!(last_status, 429 | 503) {
+        message: if use_pool_unavailable_summary {
+            build_pool_unavailable_message(&routing_hint.model_key, &pool_summary)
+        } else if matches!(last_status, 429 | 503) {
             earliest_cooldown_wait
                 .map(|wait| build_cooldown_unavailable_message(&routing_hint.model_key, wait))
                 .unwrap_or(last_error)
@@ -8895,7 +9475,7 @@ async fn proxy_request_with_account_pool(
         },
         account_id: last_account_id,
         account_email: last_account_email,
-        retry_after: earliest_cooldown_wait,
+        retry_after: earliest_cooldown_wait.or(pool_retry_after),
     })
 }
 
@@ -9143,6 +9723,32 @@ async fn handle_connection(
         BTreeMap::from([("method".to_string(), prepared_request.method.clone())]),
     );
 
+    if is_responses_websocket_upgrade_request(&prepared_request) {
+        let latency_ms = started_at.elapsed().as_millis() as u64;
+        record_audit_event_from_context(
+            &request_audit_context,
+            "websocket_unsupported",
+            Some(StatusCode::BAD_REQUEST.as_u16()),
+            Some("unsupported_websocket"),
+            None,
+            Some("fallback_required"),
+            BTreeMap::from([("fallback".to_string(), "responses_http_sse".to_string())]),
+        );
+        write_json_error_response(
+            &mut stream,
+            Some(&addr),
+            Some(&prepared_request),
+            StatusCode::BAD_REQUEST.as_u16(),
+            "Bad Request",
+            "Responses WebSocket is not supported by Cockpit local API service; retry with HTTP/SSE fallback",
+            None,
+            None,
+            Some(latency_ms),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let mut backpressure_permit =
         match acquire_local_api_backpressure(&collection.safety_config).await {
             Ok(permit) => permit,
@@ -9246,13 +9852,14 @@ mod tests {
         build_chat_completion_stream_body, build_codex_api_failure_log,
         build_effective_local_access_account_ids, build_health_summary_from_registry,
         build_images_api_payload, build_local_models_response, build_ordered_account_ids,
-        build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
-        build_runtime_mode_state, classify_active_stream_terminal_error,
+        build_pool_unavailable_message, build_request_routing_hint, build_routing_pool_account_ids,
+        build_runtime_account, build_runtime_mode_state, classify_active_stream_terminal_error,
         classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
         extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
         grant_active_stream_lease, health_registry_account_cooldown_wait,
         health_registry_account_is_schedulable, health_registry_model_key,
-        is_responses_completion_event, json_response_with_retry_after,
+        is_responses_completion_event, is_responses_websocket_upgrade_request,
+        is_websocket_upgrade_request, json_response_with_retry_after,
         load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
@@ -9264,15 +9871,15 @@ mod tests {
         retry_failover_max_retries, save_health_registry_to_path, set_runtime_integration_mode,
         should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
-        should_try_next_account, sort_account_ids_by_health_estimate,
-        update_health_registry_from_classified_error, upsert_process_sticky_binding,
-        ActiveStreamTerminal, AuditContext, AuditTrailStatus, CodexLocalAccessErrorType,
-        GatewayResponseAdapter, LocalApiBackpressureState, ParsedRequest, ResponseUsageCollector,
-        StreamWriteState, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID,
-        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME, DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES,
-        PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
+        should_try_next_account, sort_account_ids_by_health_estimate, status_for_pool_unavailable,
+        summarize_pool_unavailability, update_health_registry_from_classified_error,
+        upsert_process_sticky_binding, ActiveStreamTerminal, AuditContext, AuditTrailStatus,
+        CodexLocalAccessErrorType, GatewayResponseAdapter, LocalApiBackpressureState,
+        ParsedRequest, ResponseUsageCollector, StreamWriteState,
+        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME,
+        DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES, PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
     };
-    use crate::models::codex::{CodexAccount, CodexApiProviderMode};
+    use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexQuota, CodexTokens};
     use crate::models::codex_local_access::{
         CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
         CodexLocalAccessCollection, CodexLocalAccessHealthSummary, CodexLocalAccessModelCooldown,
@@ -9289,6 +9896,57 @@ mod tests {
     use tokio::time::Duration;
 
     static LOCAL_BACKPRESSURE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+    static LOCAL_ACCESS_ENV_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn test_codex_account(id: &str) -> CodexAccount {
+        CodexAccount::new(
+            id.to_string(),
+            format!("{}@example.com", id),
+            CodexTokens {
+                id_token: String::new(),
+                access_token: String::new(),
+                refresh_token: None,
+            },
+        )
+    }
+
+    #[test]
+    fn local_access_file_paths_honor_data_root_env_override() {
+        let _guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-env-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+
+        assert_eq!(
+            super::local_access_file_path().expect("local access path should resolve"),
+            root.join(super::CODEX_LOCAL_ACCESS_FILE)
+        );
+        assert_eq!(
+            super::local_access_health_file_path().expect("health path should resolve"),
+            root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE)
+        );
+        assert_eq!(
+            super::local_access_audit_file_path().expect("audit path should resolve"),
+            root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE)
+        );
+        assert_eq!(
+            super::runtime_mode_file_path().expect("runtime mode path should resolve"),
+            root.join(super::CODEX_RUNTIME_MODE_FILE)
+        );
+
+        match previous {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn extracts_usage_from_codex_response_completed_payload() {
@@ -9432,6 +10090,102 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn api_service_usage_limit_writes_zero_quota_snapshot_with_reset_hint() {
+        let now_ms = 1_700_000_000_000;
+        let mut account = test_codex_account("api-service-quota");
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 64,
+            hourly_reset_time: Some(111),
+            hourly_window_minutes: Some(300),
+            hourly_window_present: Some(true),
+            weekly_percentage: 27,
+            weekly_reset_time: Some(222),
+            weekly_window_minutes: Some(10080),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+        let body = r#"{"error":{"type":"usage_limit_reached","resets_at":1700000360,"resets_in_seconds":360,"message":"raw prompt text sk-secret user@example.com"}}"#;
+        let classified = classify_codex_upstream_error(StatusCode::TOO_MANY_REQUESTS, None, body);
+
+        assert!(super::apply_account_quota_exhaustion_snapshot(
+            &mut account,
+            &classified,
+            body,
+            now_ms,
+        ));
+
+        let quota = account.quota.as_ref().expect("quota snapshot");
+        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.hourly_reset_time, Some(1_700_000_360));
+        assert_eq!(quota.weekly_reset_time, Some(1_700_000_360));
+        assert_eq!(account.usage_updated_at, Some(1_700_000_000));
+        assert_eq!(
+            account
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("usage_limit_reached")
+        );
+        assert_eq!(
+            quota
+                .raw_data
+                .as_ref()
+                .and_then(|value| value.get("source"))
+                .and_then(Value::as_str),
+            Some("codex_local_access_upstream_error")
+        );
+        assert_eq!(
+            quota
+                .raw_data
+                .as_ref()
+                .and_then(|value| value.get("reset_after_seconds"))
+                .and_then(Value::as_i64),
+            Some(360)
+        );
+
+        let serialized = serde_json::to_string(&account).expect("account should serialize");
+        for secret in ["raw prompt text", "sk-secret", "user@example.com"] {
+            assert!(
+                !serialized.contains(secret),
+                "quota snapshot leaked {secret}"
+            );
+        }
+    }
+
+    #[test]
+    fn api_service_unknown_rate_limit_does_not_zero_account_quota() {
+        let now_ms = 1_700_000_000_000;
+        let mut account = test_codex_account("api-service-rate-limit");
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 64,
+            hourly_reset_time: Some(111),
+            hourly_window_minutes: Some(300),
+            hourly_window_present: Some(true),
+            weekly_percentage: 27,
+            weekly_reset_time: Some(222),
+            weekly_window_minutes: Some(10080),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+        let body = r#"{"error":{"type":"rate_limit_exceeded","message":"slow down"}}"#;
+        let classified = classify_codex_upstream_error(StatusCode::TOO_MANY_REQUESTS, None, body);
+
+        assert!(!super::apply_account_quota_exhaustion_snapshot(
+            &mut account,
+            &classified,
+            body,
+            now_ms,
+        ));
+
+        let quota = account.quota.as_ref().expect("quota should stay");
+        assert_eq!(quota.hourly_percentage, 64);
+        assert_eq!(quota.weekly_percentage, 27);
+        assert!(account.quota_error.is_none());
+        assert!(account.usage_updated_at.is_none());
+    }
+
+    #[test]
     fn retry_after_http_date_parser_uses_supplied_now() {
         let now = chrono::DateTime::parse_from_rfc2822("Sun, 17 May 2026 00:00:00 GMT")
             .expect("valid now")
@@ -9495,7 +10249,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn health_registry_marks_usage_limit_cooldown_without_sensitive_fields() {
+    fn health_registry_marks_usage_limit_model_cooldown_without_sensitive_fields() {
         let mut registry = empty_health_registry(1_700_000_000_000);
         let classified = classify_codex_upstream_error(
             StatusCode::TOO_MANY_REQUESTS,
@@ -9516,20 +10270,23 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .accounts
             .get("account-1")
             .expect("account health should be recorded");
-        assert_eq!(
-            account.status,
-            CodexLocalAccessAccountHealthStatus::CoolingDown
-        );
+        assert_eq!(account.status, CodexLocalAccessAccountHealthStatus::Healthy);
         assert_eq!(
             account.last_error_type.as_deref(),
             Some("usage_limit_reached")
         );
         assert_eq!(account.last_request_id.as_deref(), Some("req-1"));
-        assert!(account.cooldown_until_ms.unwrap_or_default() > 1_700_000_000_000);
+        assert_eq!(account.cooldown_until_ms, None);
         assert!(!health_registry_account_is_schedulable(
             &registry,
             "account-1",
             Some("gpt-5.5"),
+            1_700_000_000_000
+        ));
+        assert!(health_registry_account_is_schedulable(
+            &registry,
+            "account-1",
+            Some("gpt-5.5-mini"),
             1_700_000_000_000
         ));
 
@@ -9537,6 +10294,53 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         for secret in ["raw prompt text", "sk-secret", "user@example.com"] {
             assert!(!serialized.contains(secret), "registry leaked {secret}");
         }
+    }
+
+    #[test]
+    fn model_scoped_usage_limit_does_not_block_other_models() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        let classified = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"type":"usage_limit_reached","resets_in_seconds":60}}"#,
+        );
+
+        update_health_registry_from_classified_error(
+            &mut registry,
+            "account-model-scope",
+            Some("gpt-5.4-mini"),
+            Some("req-mini-limit"),
+            &classified,
+            now,
+        );
+
+        let account = registry
+            .accounts
+            .get("account-model-scope")
+            .expect("account health should be recorded");
+        assert_eq!(account.status, CodexLocalAccessAccountHealthStatus::Healthy);
+        assert!(!health_registry_account_is_schedulable(
+            &registry,
+            "account-model-scope",
+            Some("gpt-5.4-mini"),
+            now
+        ));
+        assert!(health_registry_account_is_schedulable(
+            &registry,
+            "account-model-scope",
+            Some("gpt-5.5"),
+            now
+        ));
+        assert_eq!(
+            health_registry_account_cooldown_wait(
+                &registry,
+                "account-model-scope",
+                Some("gpt-5.4-mini"),
+                now
+            ),
+            Some(Duration::from_secs(60))
+        );
     }
 
     #[test]
@@ -9628,7 +10432,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         update_health_registry_from_classified_error(
             &mut registry,
             "account-reset",
-            Some("gpt-5.5"),
+            None,
             Some("req-reset"),
             &classified,
             now,
@@ -9668,6 +10472,59 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             "account-reset",
             Some("gpt-5.5"),
             now + 61_000
+        ));
+    }
+
+    #[test]
+    fn normalize_demotes_legacy_model_scoped_usage_limit_account_cooldown() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "legacy-account".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::CoolingDown,
+                cooldown_until_ms: Some(now + 60_000),
+                exhausted_at_ms: Some(now - 1),
+                estimated_reset_at_ms: Some(now + 60_000),
+                estimated_remaining_percentage: Some(0),
+                last_observed_remaining_percentage: Some(0),
+                reset_source: Some("upstream_reset_hint".to_string()),
+                confidence: Some("confirmed".to_string()),
+                last_error_type: Some("usage_limit_reached".to_string()),
+                updated_at: now - 1,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.model_cooldowns.insert(
+            health_registry_model_key("legacy-account", "gpt-5.4-mini"),
+            CodexLocalAccessModelCooldown {
+                account_id: "legacy-account".to_string(),
+                model: "gpt-5.4-mini".to_string(),
+                cooldown_until_ms: now + 60_000,
+                last_error_type: Some("usage_limit_reached".to_string()),
+                updated_at: now - 1,
+                ..CodexLocalAccessModelCooldown::default()
+            },
+        );
+
+        let normalized = normalize_health_registry(registry, now);
+        let account = normalized
+            .accounts
+            .get("legacy-account")
+            .expect("legacy account should remain tracked");
+        assert_eq!(account.status, CodexLocalAccessAccountHealthStatus::Healthy);
+        assert_eq!(account.cooldown_until_ms, None);
+        assert!(health_registry_account_is_schedulable(
+            &normalized,
+            "legacy-account",
+            Some("gpt-5.5"),
+            now
+        ));
+        assert!(!health_registry_account_is_schedulable(
+            &normalized,
+            "legacy-account",
+            Some("gpt-5.4-mini"),
+            now
         ));
     }
 
@@ -9753,6 +10610,51 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             None,
             1_700_000_000_001
         ));
+    }
+
+    #[test]
+    fn pool_unavailable_summary_reports_blocking_reason() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "cooling-account".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::CoolingDown,
+                cooldown_until_ms: Some(now + 30_000),
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.accounts.insert(
+            "manual-account".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::ManualRequired,
+                manual_required: true,
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+
+        let summary = summarize_pool_unavailability(
+            &registry,
+            &["cooling-account".to_string(), "manual-account".to_string()],
+            Some("gpt-5.5"),
+            now,
+        );
+
+        assert_eq!(summary.total_count, 2);
+        assert_eq!(summary.schedulable_count, 0);
+        assert_eq!(summary.cooling_count, 1);
+        assert_eq!(summary.manual_required_count, 1);
+        assert_eq!(summary.nearest_wait, Some(Duration::from_secs(30)));
+        assert_eq!(
+            status_for_pool_unavailable(&summary),
+            StatusCode::TOO_MANY_REQUESTS.as_u16()
+        );
+
+        let message = build_pool_unavailable_message("gpt-5.5", &summary);
+        assert!(message.contains("冷却中 1 个"));
+        assert!(message.contains("需人工处理 1 个"));
     }
 
     #[test]
@@ -10530,6 +11432,55 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("released admission permit should not wait for active stream body");
 
         drop(second);
+        reset_local_api_backpressure_for_tests();
+    }
+
+    #[tokio::test]
+    async fn local_backpressure_admission_queue_is_fifo_across_start_interval() {
+        let _guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        reset_local_api_backpressure_for_tests();
+        let mut config = CodexLocalApiSafetyConfig::default();
+        config.max_concurrent_requests = 1;
+        config.min_request_interval_seconds = 2;
+        config.max_queue_wait_seconds = 3;
+
+        let first = acquire_local_api_backpressure(&config)
+            .await
+            .expect("initial request should acquire permit");
+        drop(first);
+
+        let first_waiter_config = config.clone();
+        let first_waiter = tokio::spawn(async move {
+            let permit = acquire_local_api_backpressure(&first_waiter_config)
+                .await
+                .expect("first queued waiter should acquire next start slot");
+            drop(permit);
+            std::time::Instant::now()
+        });
+
+        tokio::time::sleep(Duration::from_millis(250)).await;
+
+        let second_waiter_config = config.clone();
+        let second_waiter = tokio::spawn(async move {
+            let permit = acquire_local_api_backpressure(&second_waiter_config)
+                .await
+                .expect("later queued waiter should not time out behind the first waiter");
+            drop(permit);
+            std::time::Instant::now()
+        });
+
+        let first_started = tokio::time::timeout(Duration::from_secs(6), first_waiter)
+            .await
+            .expect("first queued waiter should not hang")
+            .expect("first queued waiter task should not panic");
+        let second_started = tokio::time::timeout(Duration::from_secs(6), second_waiter)
+            .await
+            .expect("second queued waiter should not hang")
+            .expect("second queued waiter task should not panic");
+
+        assert!(second_started >= first_started);
         reset_local_api_backpressure_for_tests();
     }
 
@@ -11408,6 +12359,36 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             }
             _ => panic!("expected responses stream passthrough adapter"),
         }
+    }
+
+    #[test]
+    fn detects_responses_websocket_upgrade_probe() {
+        let request = ParsedRequest {
+            method: "GET".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([
+                ("connection".to_string(), "keep-alive, Upgrade".to_string()),
+                ("upgrade".to_string(), "websocket".to_string()),
+                ("sec-websocket-key".to_string(), "test-key".to_string()),
+            ]),
+            body: Vec::new(),
+        };
+
+        assert!(is_websocket_upgrade_request(&request.headers));
+        assert!(is_responses_websocket_upgrade_request(&request));
+    }
+
+    #[test]
+    fn websocket_upgrade_probe_must_not_match_regular_responses_stream() {
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([("accept".to_string(), "text/event-stream".to_string())]),
+            body: br#"{"model":"gpt-5.4","stream":true,"input":"hello"}"#.to_vec(),
+        };
+
+        assert!(!is_websocket_upgrade_request(&request.headers));
+        assert!(!is_responses_websocket_upgrade_request(&request));
     }
 
     #[test]
