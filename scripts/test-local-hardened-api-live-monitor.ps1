@@ -183,11 +183,13 @@ try {
     -RequireStreamCompletion `
     -Quiet 2>$null
 
-  Assert-True ($LASTEXITCODE -eq 2) "expected cross-request fallback fixture exit code 2"
+  Assert-True ($LASTEXITCODE -eq 1) "expected cross-request fallback fixture exit code 1"
   $crossRequestSummary = Convert-JsonOutput $crossRequestOutput "cross-request fallback fixture"
-  Assert-Equal $crossRequestSummary.overall "blocked" "expected cross-request fallback fixture overall blocked"
+  Assert-Equal $crossRequestSummary.overall "fail" "expected cross-request fallback fixture overall fail"
   Assert-Equal $crossRequestSummary.audit.fallbackCycleCount 0 "cross-request 200 must not count as same-request fallback cycle"
+  Assert-Equal $crossRequestSummary.audit.retryLimitErrorFound $true "fallback-selected final 429 must count as retry-limit regression"
   Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "quota_fallback_audit_contract").status) "blocked" "expected cross-request fallback to block quota fallback contract"
+  Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "retry_limit_regression_absent").status) "fail" "expected unrecovered fallback 429 to fail retry-limit regression"
 
   $dataRootBlocked = Join-Path $tempRoot "data-blocked"
   $auditBlocked = Join-Path $dataRootBlocked "codex_local_access_audit.jsonl"
@@ -208,6 +210,40 @@ try {
   $blockedSummary = Convert-JsonOutput $blockedOutput "blocked fixture"
   Assert-Equal $blockedSummary.overall "blocked" "expected blocked fixture overall"
   Assert-Equal (($blockedSummary.results | Where-Object name -eq "quota_fallback_audit_contract").status) "blocked" "expected missing fallback blocked"
+
+  $dataRootRequestReuse = Join-Path $tempRoot "data-request-reuse"
+  $auditRequestReuse = Join-Path $dataRootRequestReuse "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditRequestReuse @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-reused"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-reused"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; outcome = "response_received" },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-reused"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active" },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-reused"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok" },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-reused"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed" },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-reused"; phase = "lease_released"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed" },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-reused"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-reused"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 503; errorType = "pool_unavailable"; outcome = "error"; detail = [ordered]@{ message = "模型 gpt-5.5 的API 服务号池账号额度均已耗尽，请 1 小时后重试" } }
+  )
+  $requestReuseOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootRequestReuse `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireStreamCompletion `
+    -RequiredCompletedStreams 1 `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor request reuse fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $requestReuseSummary = Convert-JsonOutput $requestReuseOutput "request reuse fixture"
+  Assert-Equal $requestReuseSummary.overall "pass" "expected request reuse fixture overall"
+  Assert-Equal $requestReuseSummary.audit.startedStreamCount 1 "expected one real stream instance for reused request id"
+  Assert-Equal $requestReuseSummary.audit.completedStreamCount 1 "expected completed stream to remain completed"
+  Assert-Equal $requestReuseSummary.audit.retryLimitErrorFound $false "local pool unavailable must not be reported as retry-limit"
+  Assert-Equal $requestReuseSummary.audit.localPoolUnavailableCount 1 "expected local pool unavailable to be tracked separately"
+  Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "accepted_stream_continuity").status) "pass" "expected reused request stream continuity pass"
+  Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "retry_limit_regression_absent").status) "pass" "expected local pool unavailable not to fail retry-limit regression"
 
   $dataRootFail = Join-Path $tempRoot "data-fail"
   $auditFail = Join-Path $dataRootFail "codex_local_access_audit.jsonl"

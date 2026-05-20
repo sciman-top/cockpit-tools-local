@@ -1310,6 +1310,15 @@
   cursor: not-allowed;
 }
 
+.codex-local-access-remove-member-btn {
+  color: var(--danger, #dc2626);
+}
+
+.codex-local-access-remove-member-btn:hover:not(:disabled) {
+  background: rgba(220, 38, 38, 0.1);
+  color: #b91c1c;
+}
+
 .codex-local-access-current-member-email {
   min-width: 110px;
   flex: 1 1 160px;

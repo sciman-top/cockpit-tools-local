@@ -164,14 +164,14 @@ function resolveSafetyPresetId(
   if (!isBaseHardened) return 'custom';
   if (
     config.minRequestIntervalSeconds === 60 &&
-    config.maxRetryAccounts === 1 &&
+    config.maxRetryAccounts === 2 &&
     config.fallbackMode === 'disabled'
   ) {
     return 'maximum_safety';
   }
   if (
     config.minRequestIntervalSeconds === 20 &&
-    config.maxRetryAccounts === 1 &&
+    config.maxRetryAccounts === 2 &&
     config.fallbackMode === 'disabled'
   ) {
     return 'balanced_self_use';
@@ -311,12 +311,12 @@ export function CodexLocalAccessModal({
         {
           id: 'maximum_safety',
           label: t('codex.localAccess.safetyPreset.maximumSafety', '最高安全'),
-          desc: t('codex.localAccess.safetyPreset.maximumSafetyDesc', '1 并发 · 60s'),
+          desc: t('codex.localAccess.safetyPreset.maximumSafetyDesc', '1 并发 · 60s · 2账号'),
         },
         {
           id: 'balanced_self_use',
           label: t('codex.localAccess.safetyPreset.balancedSelfUse', '自用均衡'),
-          desc: t('codex.localAccess.safetyPreset.balancedSelfUseDesc', '1 并发 · 20s'),
+          desc: t('codex.localAccess.safetyPreset.balancedSelfUseDesc', '1 并发 · 20s · 2账号'),
         },
         {
           id: 'quota_drain_careful',
@@ -1047,16 +1047,19 @@ export function CodexLocalAccessModal({
     }
   };
 
-  const handleRemoveSelectedMembers = async () => {
-    if (memberRemovalSelected.size === 0 || actionBusy) return;
+  const removeMemberIds = async (accountIds: Iterable<string>) => {
+    if (actionBusy) return;
+    const removalIds = new Set(accountIds);
+    if (removalIds.size === 0) return;
     setError('');
     setNotice('');
     const nextSelected = new Set(selected);
-    memberRemovalSelected.forEach((accountId) => nextSelected.delete(accountId));
-    const removedCount = selected.size - nextSelected.size;
+    removalIds.forEach((accountId) => nextSelected.delete(accountId));
     const nextOrder = selectedOrderForSave.filter(
-      (accountId) => !memberRemovalSelected.has(accountId),
+      (accountId) => !removalIds.has(accountId),
     );
+    const removedCount = selectedOrderForSave.length - nextOrder.length;
+    if (removedCount === 0) return;
     try {
       const filtered = buildPersistedMemberIds(nextOrder);
       await onSaveAccounts({
@@ -1065,7 +1068,16 @@ export function CodexLocalAccessModal({
       });
       setSelected(nextSelected);
       setSelectedOrder(nextOrder);
-      setMemberRemovalSelected(new Set());
+      setMemberRemovalSelected((prev) => {
+        if (prev.size === 0) return prev;
+        const next = new Set<string>();
+        for (const accountId of prev) {
+          if (!removalIds.has(accountId)) {
+            next.add(accountId);
+          }
+        }
+        return next;
+      });
       setNotice(
         t('codex.localAccess.modal.removeMembersSuccess', {
           count: removedCount,
@@ -1075,6 +1087,14 @@ export function CodexLocalAccessModal({
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+  };
+
+  const handleRemoveSelectedMembers = async () => {
+    await removeMemberIds(memberRemovalSelected);
+  };
+
+  const handleRemoveMember = async (accountId: string) => {
+    await removeMemberIds([accountId]);
   };
 
   const handleRefreshSelectedMembers = async () => {
@@ -2078,6 +2098,16 @@ export function CodexLocalAccessModal({
                               aria-label={t('codex.sort.customMoveBottom', '置底')}
                             >
                               <ChevronsDown size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="folder-icon-btn codex-local-access-order-btn codex-local-access-remove-member-btn"
+                              onClick={() => void handleRemoveMember(account.id)}
+                              disabled={actionBusy}
+                              title={t('codex.localAccess.removeMember', '移出 API 服务')}
+                              aria-label={t('codex.localAccess.removeMember', '移出 API 服务')}
+                            >
+                              <Trash2 size={14} />
                             </button>
                           </span>
                         </div>

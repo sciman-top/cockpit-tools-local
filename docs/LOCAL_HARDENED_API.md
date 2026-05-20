@@ -22,7 +22,7 @@ API service 的默认安全配置等价于 `balanced_self_use`；需要更保守
 | `maxQueueWaitSeconds` | `21` | 本地排队等待上限，至少覆盖启动间隔并留 1 秒余量 |
 | `requestTimeoutSeconds` | `600` | 长任务允许继续写出 |
 | `maxRetries` | `1` | 单账号有限 retry |
-| `maxRetryAccounts` | `1` | 默认不在同一请求内扫账号池 |
+| `maxRetryAccounts` | `2` | 默认允许 failover-safe 429 在同一请求内无感切到下一个健康账号 |
 | `fallbackMode` | `disabled` | 下一个请求才重新选择账号 |
 | `logging.includePromptResponse` | `false` | 不记录正文 |
 | `logging.includeRawUpstreamBody` | `false` | 不记录上游原始 body |
@@ -36,7 +36,7 @@ API service 的默认安全配置等价于 `balanced_self_use`；需要更保守
 - 单账号或单 sticky 账号。
 - `maxConcurrentRequests = 1`
 - `minRequestIntervalSeconds >= 60` 可用于更保守场景；当前代码默认 20 秒。
-- `maxRetryAccounts = 1`
+- `maxRetryAccounts = 2`（单账号池实际仍只尝试 1 个账号）
 - `fallbackMode = disabled`
 - 自动配额刷新关闭或不低于 60 分钟。
 - 唤醒/keepalive 默认关闭。
@@ -48,7 +48,7 @@ API service 的默认安全配置等价于 `balanced_self_use`；需要更保守
 - `maxConcurrentRequests = 1`
 - `minRequestIntervalSeconds = 20..30`
 - sticky/fill-first 优先；当前账号健康时不轮换。
-- `maxRetryAccounts = 1`，可手动提升到 `2` 但必须保留 stream guard。
+- `maxRetryAccounts = 2` 起步；可手动提升到 `3+`，但必须保留 stream guard。
 - 账号进入 cooldown/manual/auth 状态后排到后面。
 - 自动刷新不扫描 API service OAuth 池。
 
@@ -72,9 +72,10 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 
 - “添加至 API 服务”保存的账号列表是 API 服务号池的配置真相；`effectiveAccountIds` 应与该列表一致。
 - 健康状态、cooldown、exhausted、manual-required 只影响运行时是否可调度，不应把账号从配置号池或 UI 有效号池里隐式移除。
+- API 服务面板和 smoke report 默认展示当前配置号池作用域的 health summary；历史 `codex_local_access_health.json` 仍保留旧账号记录，但只能作为 `healthRegistry` 历史证据，不能污染当前号池健康判断。
 - 在账号卡片或分组内点击普通“切换”只切换当前 Codex 账号，不清空、不替换 API 服务号池；只有显式开启“跟随当前账号”时才同步号池，且同步方式是把当前账号置前并保留原成员。
 - 在账号卡片主页点击“API 服务”卡片本体进入服务面板；卡片内“添加账号”按钮进入号池成员选择。
-- 当号池成员全部不可调度时，请求方会收到本地 429/503 JSON error；卡片根据 health summary 显示“额度均已耗尽”或“暂无可调度账号”的原因摘要。
+- 当号池成员全部不可调度时，请求方会收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`；卡片根据 health summary 显示“额度均已耗尽”或“暂无可调度账号”的原因摘要，不能伪装成 upstream `429/rate_limited`。
 
 ## 单号池实跑优先级
 
@@ -102,7 +103,7 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 .\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -Expect429 -WriteReport
 ```
 
-若上一轮已把该账号/模型写入 cooldown，后续同模型 smoke 应直接返回本地 429 和 `Retry-After`，不再继续打上游。
+若上一轮已把该账号/模型写入 cooldown，后续同模型 smoke 应直接返回本地 `503/pool_unavailable` 和 `Retry-After`，不再继续打上游。
 
 ## 额度耗尽后的请求边界
 
@@ -112,15 +113,15 @@ Hardened API Mode 的目标是接近 Direct OAuth 的稳定体验，但不伪造
 - 本地 cooldown、exhausted、health registry 或 `selection_eligible=false` 只影响新的 admission，不 retroactively cancel active stream。
 - 新的独立请求不需要等待其他 active stream 结束；调度器可以立即避开 cooldown/exhausted 账号，选择健康账号。
 - 带 `previous_response_id` 的 continuation 优先粘原账号；不能把原账号的 `previous_response_id` 直接发给新账号。
-- 如果原账号在 continuation admission 阶段真实返回 429，只能 bounded backoff、返回 429，或在有完整上下文/压缩上下文重放时把它作为新 admission 交给健康账号。
+- 如果原账号在 continuation admission 阶段真实返回 429，只能 bounded backoff、返回本地 `503/pool_unavailable`，或在有完整上下文/压缩上下文重放时把它作为新 admission 交给健康账号。
 
-单号池通过后，再放入 2-3 个账号，但第一步仍保持 `maxRetryAccounts = 1`，只验证 selector/sticky/health 不乱轮换：
+单号池通过后，再放入 2-3 个账号，保持 `maxRetryAccounts >= 2`，验证 selector/sticky/health 不乱轮换且 failover-safe 429 可在同一请求切到下一个健康账号：
 
 ```powershell
 .\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -WriteReport
 ```
 
-只有小池稳定后，才临时切到 `fallbackMode = next_request_only` 且 `maxRetryAccounts = 2`，做有限 fallback 探针：
+只有小池稳定后，才在 `maxRetryAccounts >= 2` 下做有限 fallback 探针；`fallbackMode` 可保持默认 `disabled`，它不阻断当前请求内的 failover-safe 429 切号：
 
 ```powershell
 .\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -WriteReport
@@ -269,6 +270,7 @@ CLI 会话中启动只读监测入口：
 - fallback 后由同一个 `requestId` 内的不同健康账号返回 `200`
 - 已接纳 stream 完成，且没有在 stream 已开始后被本地 cooldown 中断
 - 历史 `exceeded retry limit, last status: 429 Too Many Requests` 是否复现
+- 本地号池耗尽是否被单独记录为 `pool_unavailable`，而不是 retry-limit regression
 - 当前 CLI `config.toml` / `auth.json` 是否保持不变，以及 Codex App 进程集合是否稳定
 
 报告中的 `audit.fallbackTransitions`、`audit.streamSummaries` 和 `audit.accountSummaries` 用于复盘多账号切换：
@@ -310,7 +312,7 @@ Codex CLI -> LiteLLM -> Cockpit API service -> ChatGPT/Codex upstream
 codex exec --skip-git-repo-check --json "Reply with exactly OK"
 ```
 
-若直连 Cockpit 正常、LiteLLM 失败，应优先查 LiteLLM route/config；若 Cockpit 返回 429，先判断是当前账号 cooldown/额度耗尽还是网关故障。
+若直连 Cockpit 正常、LiteLLM 失败，应优先查 LiteLLM route/config；若 Cockpit 返回 upstream 429，先判断是否已写入 cooldown 并触发 fallback；若返回本地 `503/pool_unavailable`，先看当前号池是否还有可调度账号。
 
 ## 风险边界
 

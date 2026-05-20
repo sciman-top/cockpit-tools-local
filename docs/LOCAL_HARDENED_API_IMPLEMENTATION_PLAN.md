@@ -55,9 +55,9 @@
 
 阶段顺序：
 
-1. `single`：账号池恰好 1 个账号，`maxRetryAccounts = 1`。
-2. `small_pool`：账号池 2-3 个账号，但仍保持 `maxRetryAccounts = 1`，只验证 selector/sticky/health 不乱轮换。
-3. `fallback_probe`：账号池 2-3 个账号，`fallbackMode = next_request_only` 且 `maxRetryAccounts = 2`，只验证有限 fallback 边界。
+1. `single`：账号池恰好 1 个账号，`maxRetryAccounts >= 2` 也只会实际尝试 1 个账号。
+2. `small_pool`：账号池 2-3 个账号，保持 `maxRetryAccounts >= 2`，验证 selector/sticky/health 不乱轮换且 failover-safe 429 可同请求切号。
+3. `fallback_probe`：账号池 2-3 个账号，`maxRetryAccounts >= 2`，只验证有限 fallback 边界；`fallbackMode` 不阻断当前请求内的 failover-safe 429 切号。
 
 显式传入 `-RunUpstreamSmoke` 后才发起一次真实 `/v1/chat/completions`。若真实请求返回 429，验收重点不是“马上换号”，而是：
 
@@ -65,7 +65,7 @@
 - `Retry-After` / reset 字段进入 cooldown。
 - `codex_local_access_health.json` 被动写入账号或模型状态。
 - `codex_local_access_audit.jsonl` 能串起 listener、selector、classifier、health update、final/stream 边界。
-- 单号池仍保持 `maxRetryAccounts = 1`，不扫账号池。
+- 单号池即使配置 `maxRetryAccounts >= 2`，实际仍只尝试本池唯一账号。
 
 重点与难点：
 
@@ -218,7 +218,7 @@ flowchart TD
 - [x] hardened 默认同一时间最多 1 个上游请求。
 - [x] 新请求启动默认至少间隔 20 秒。
 - [x] 本地排队等待默认覆盖启动间隔；旧配置 `maxQueueWaitSeconds < minRequestIntervalSeconds + 1` 会在加载时自动规范化。
-- [x] 等待超时返回本地 429/503，并带 `Retry-After`。
+- [x] 等待超时返回本地 429/503，并带 `Retry-After`；号池全部不可调度时使用 `503/pool_unavailable`，不伪装成 upstream quota 429。
 - [x] 本地 backpressure 返回的错误使用 `error_type = local_backpressure` 或等价结构，不能伪装成 upstream quota。
 - [x] streaming 成功、客户端断开、上游异常都会通过 scoped permit drop 释放 permit；HLA-05 继续覆盖 stream 已写出后的禁止重试/切号。
 - [x] `/v1/models` 不占用上游请求 permit。
@@ -331,12 +331,12 @@ flowchart TD
 
 描述：把 retry、cooldown、single-account retry、next-account fallback、stream guard 统一到一个控制器。
 
-状态：2026-05-18 已完成首个控制器边界切片：`maxRetries` 进入单账号状态重试和请求级冷却等待重试，`maxRetryAccounts` + `fallbackMode` 进入有效账号尝试上限，默认仍只尝试 1 个账号；新增 stream write state，headers 或首个 chunk 写出后禁止 fallback 的契约已单测固化。完整 `RetryFailoverController` 类型拆分、client disconnect 分类和 UI 高级开关继续留在后续切片。
+状态：2026-05-20 已修正当前请求 failover 边界：`maxRetries` 仍控制单账号状态重试和请求级冷却等待重试；`maxRetryAccounts` 控制 failover-safe 错误后的 distinct account 尝试上限，默认/legacy `1` 会按有效 `2` 处理，`fallbackMode` 不再阻断当前请求的安全切号；stream write state 继续保证 headers 或首个 chunk 写出后禁止 fallback。
 
 验收：
 
 - [x] 默认 `maxRetries = 1`。
-- [x] 默认 `maxRetryAccounts = 1` 表示一个请求最多使用 1 个 distinct account，不扫完整账号池。
+- [x] 默认有效 `maxRetryAccounts = 2`，failover-safe 429 可在同一请求内切到下一个健康账号；需要 3 账号验收时可配置 `maxRetryAccounts = 3`。
 - [x] 只有在未向客户端写出 headers 和 payload 前才允许 fallback。
 - [x] 首字节后上游错误只结束当前请求，不切号续接。当前由 stream write state 和写出路径约束；client disconnect 细分日志待补。
 - [x] local 429 与 upstream 429 的 `error_type` 不同。
@@ -358,7 +358,7 @@ flowchart TD
 
 描述：在护栏完成后，移除 `take(1)` / `break` 裁剪，保存用户选择的多个有效账号。
 
-状态：2026-05-18 已完成数据面切片：UI 可多选，保存/规范化层保留多个有效账号并去重过滤无效账号；请求选择器可看到完整账号池，但实际上游尝试仍受 HLA-05 的 `maxRetryAccounts` 与 `fallbackMode` 控制，默认一个请求只尝试 1 个账号，不提升并发或缩短请求间隔。500+ selector cap 与 sticky/fill-first 默认路由已在 HLA-07 落地。
+状态：2026-05-20 已完成数据面修正：UI 可多选，保存/规范化层保留多个有效账号并去重过滤无效账号；请求选择器可看到完整账号池，实际上游尝试受 `maxRetryAccounts` 控制，默认同请求最多尝试 2 个 distinct account，不提升并发或缩短请求间隔。500+ selector cap 与 sticky/fill-first 默认路由已在 HLA-07 落地。
 
 验收：
 
@@ -419,7 +419,7 @@ flowchart TD
 
 描述：UI 展示 API service 健康状态，并提供手动恢复/暂停，不展示敏感内容。
 
-状态：2026-05-18 已完成只读可观测性与手动恢复切片：`CodexLocalAccessState.health` 暴露脱敏 health summary，包含 healthy/cooling/auth/manual/model cooldown 计数、sticky account hash、最近错误类型和最近 cooldown 到期时间；API 服务面板展示这些字段。`codex_local_access_recover_health` 仅在用户显式点击时本地清理单账号或当前模型 cooldown，写入脱敏 audit event，不发起上游请求、不刷新额度、不展示账号 ID/邮箱。手动暂停仍留到后续切片。
+状态：2026-05-18 已完成只读可观测性与手动恢复切片：`CodexLocalAccessState.health` 暴露脱敏 health summary，包含 healthy/cooling/auth/manual/model cooldown 计数、sticky account hash、最近错误类型和最近 cooldown 到期时间；API 服务面板展示这些字段。2026-05-20 修正为按当前 API 服务号池作用域汇总 health，未记录过的新成员按 estimated available 计入，旧账号的历史 cooldown/429 只留在 `healthRegistry` 历史证据中，不污染当前号池判断。`codex_local_access_recover_health` 仅在用户显式点击时本地清理单账号或当前模型 cooldown，写入脱敏 audit event，不发起上游请求、不刷新额度、不展示账号 ID/邮箱。手动暂停仍留到后续切片。
 
 验收：
 
@@ -432,6 +432,7 @@ flowchart TD
 验证：
 
 - [x] health summary 脱敏单测：`cargo test --package cockpit-tools health_summary --quiet`
+- [x] current-pool scoped health 单测：`cargo test --package cockpit-tools scoped_health_summary_ignores_accounts_outside_current_pool --quiet`
 - [x] 手动恢复单测：`cargo test --package cockpit-tools manual_recovery --quiet`
 - [x] `npm run typecheck`
 - [ ] 手动 UI smoke。
@@ -518,7 +519,7 @@ flowchart TD
 
 核心规则：
 
-- `pre-stream 429`：没有 `2xx`、没有有效 SSE 首事件、没有 `response.created`、没有 background `response_id`，视为 admission rejected；标记 cooldown/backoff，按策略返回 429 或在新 admission 层选择健康账号。
+- `pre-stream 429`：没有 `2xx`、没有有效 SSE 首事件、没有 `response.created`、没有 background `response_id`，视为 admission rejected；标记 cooldown/backoff，按策略在新 admission 层选择健康账号；若号池全部不可调度，返回本地 `503/pool_unavailable`。
 - `upstream admitted`：一旦上游已返回 `2xx` 或 stream 出现可判定接纳信号，grant lease；后续本地 cooldown、账号 exhausted 标记和 selection eligibility 变化只影响新 admission，不关闭该 stream。
 - `active stream`：不切账号、不跨账号续接，只 pipe 到 terminal event、upstream terminal error、client abort、explicit cancel 或 transport fatal error。
 - `new independent request`：不需要等待其他 active stream 完成；可立即避开 cooldown/exhausted 账号，选择健康账号。
@@ -529,7 +530,7 @@ flowchart TD
 - [x] active SSE stream 被 grant lease 后，同账号随后被标记 cooldown/exhausted，stream 仍继续到 terminal 或真实 transport error。
 - [x] pre-stream 429 会写入 health/cooldown/audit，但不会影响同账号已有 active lease。
 - [x] active stream 期间同账号另一个请求返回 429，不 retroactively cancel active stream。
-- [x] new admission 遇到 cooldown/exhausted 账号，会避开或返回本地 429；不等待无关 active stream 结束。
+- [x] new admission 遇到 cooldown/exhausted 账号，会避开；若号池全部不可调度，返回本地 `503/pool_unavailable`，不等待无关 active stream 结束。
 - [x] `previous_response_id` affinity 强绑定原 account hash/route；不会跨账号直接复用旧 `previous_response_id`。
 - [x] client abort、upstream terminal error、normal completed 都会 release lease，不泄漏 active count。
 - [x] health registry 状态变更只更新 `selection_eligible`，不会直接 cancel active leases。
@@ -550,7 +551,7 @@ flowchart TD
 
 - `reports/local-hardened-api-smoke/smoke-20260518-234934.json`：`small_pool` 首轮 contract/loopback/auth pass；真实上游单账号请求 fail 后写入 cooldown/audit，audit phases 包含 `account_cooldown_applied` 与 `fallback_selected`。
 - `reports/local-hardened-api-smoke/smoke-20260518-234939.json`：`fallback_probe` 上游实跑 pass，audit phases 包含 `selector` 与 `upstream_admitted`。
-- `reports/local-hardened-api-smoke/smoke-20260518-235038.json`：`small_pool` 复跑 pass，证明 health/selector 会避开刚冷却账号且不扩大 `maxRetryAccounts=1`。
+- `reports/local-hardened-api-smoke/smoke-20260518-235038.json`：历史 `small_pool` 复跑 pass，证明 health/selector 会避开刚冷却账号；2026-05-20 后默认有效 `maxRetryAccounts=2` 用于同请求无感 failover。
 
 可能文件：
 

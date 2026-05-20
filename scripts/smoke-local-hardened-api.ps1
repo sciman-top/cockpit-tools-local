@@ -386,7 +386,7 @@ function Set-TemporaryFallbackProbeConfig {
   Set-JsonProperty $safety "maxConcurrentRequests" 1
   Set-JsonProperty $safety "maxRetries" 1
   Set-JsonProperty $safety "maxRetryAccounts" 2
-  Set-JsonProperty $safety "fallbackMode" "next_request_only"
+  Set-JsonProperty $safety "fallbackMode" "disabled"
   Set-JsonProperty $safety.logging "redactSensitiveValues" $true
   Set-JsonProperty $safety.logging "includePromptResponse" $false
   Set-JsonProperty $safety.logging "includeRawUpstreamBody" $false
@@ -398,10 +398,11 @@ function Set-TemporaryFallbackProbeConfig {
     status = "applied"
     path = $path
     accountCount = $accountCount
+    accountHashes = @(Get-AccountHashList @($config.accountIds))
     accountPoolSource = "existing_config"
     enabled = $true
     maxRetryAccounts = 2
-    fallbackMode = "next_request_only"
+    fallbackMode = "disabled"
     restoredBy = "Stop-EphemeralGateway"
   }
 }
@@ -495,6 +496,148 @@ function Get-JsonFileSummary {
   } catch {
     $summary.parseError = $_.Exception.Message
   }
+  $summary
+}
+
+function Get-AccountHashList {
+  param([object[]]$AccountIds)
+  $hashes = @()
+  foreach ($accountId in @($AccountIds)) {
+    $value = [string]$accountId
+    if (-not $value.Trim()) {
+      continue
+    }
+    $hashes += Get-StableHashPrefix $value
+  }
+  @($hashes)
+}
+
+function Update-NearestCooldownMs {
+  param([System.Collections.IDictionary]$Summary, [object]$CooldownUntilMs, [int64]$NowMs)
+  if ($null -eq $CooldownUntilMs) {
+    return
+  }
+  $until = [int64]$CooldownUntilMs
+  if ($until -le $NowMs) {
+    return
+  }
+  if ($null -eq $Summary.nearestCooldownUntilMs -or $until -lt [int64]$Summary.nearestCooldownUntilMs) {
+    $Summary.nearestCooldownUntilMs = $until
+  }
+}
+
+function Get-ScopedHealthFileSummary {
+  param($Config, [string]$Path)
+  $accountIds = if ($Config -and $Config.accountIds) { @($Config.accountIds) } else { @() }
+  $accountSet = @{}
+  foreach ($accountId in $accountIds) {
+    $value = [string]$accountId
+    if ($value.Trim()) {
+      $accountSet[$value] = $true
+    }
+  }
+
+  $summary = [ordered]@{
+    exists = (Test-Path -LiteralPath $Path)
+    scope = "current_config_account_ids"
+    accountCount = $accountIds.Count
+    accountHashes = @(Get-AccountHashList $accountIds)
+    registryAccountCount = 0
+    registryModelCooldownCount = 0
+    healthyCount = 0
+    estimatedAvailableCount = 0
+    coolingCount = 0
+    exhaustedCount = 0
+    authSuspectCount = 0
+    manualRequiredCount = 0
+    disabledCount = 0
+    activeModelCooldownCount = 0
+    nearestCooldownUntilMs = $null
+    lastErrorType = $null
+    lastStatus = $null
+    lastRequestId = $null
+    lastGlobalError = $null
+  }
+  if (-not $summary.exists) {
+    return $summary
+  }
+
+  $item = Get-Item -LiteralPath $Path
+  $summary.length = $item.Length
+  $summary.lastWriteTime = $item.LastWriteTime.ToString("o")
+  $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $lastErrorUpdatedAt = [int64]::MinValue
+  $observed = @{}
+
+  try {
+    $json = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    $summary.schemaVersion = $json.schemaVersion
+    $summary.registryAccountCount = if ($json.accounts) { ($json.accounts.PSObject.Properties | Measure-Object).Count } else { 0 }
+    $summary.registryModelCooldownCount = if ($json.modelCooldowns) { ($json.modelCooldowns.PSObject.Properties | Measure-Object).Count } else { 0 }
+    $summary.lastGlobalError = if ($json.lastGlobalError) { $json.lastGlobalError.errorType } else { $null }
+
+    if ($json.accounts) {
+      foreach ($prop in $json.accounts.PSObject.Properties) {
+        $accountId = [string]$prop.Name
+        if (-not $accountSet.ContainsKey($accountId)) {
+          continue
+        }
+        $observed[$accountId] = $true
+        $account = $prop.Value
+        switch ([string]$account.status) {
+          "healthy" { $summary.healthyCount++ }
+          "estimated_available" { $summary.estimatedAvailableCount++ }
+          "cooling_down" { $summary.coolingCount++ }
+          "exhausted" { $summary.exhaustedCount++ }
+          "auth_suspect" { $summary.authSuspectCount++ }
+          "manual_required" { $summary.manualRequiredCount++ }
+          "disabled" { $summary.disabledCount++ }
+          default { $summary.estimatedAvailableCount++ }
+        }
+        if ($account.manualRequired -and [string]$account.status -ne "manual_required") {
+          $summary.manualRequiredCount++
+        }
+        Update-NearestCooldownMs $summary $account.cooldownUntilMs $nowMs
+        Update-NearestCooldownMs $summary $account.estimatedResetAtMs $nowMs
+        if ($account.lastErrorType -and [int64]$account.updatedAt -ge $lastErrorUpdatedAt) {
+          $lastErrorUpdatedAt = [int64]$account.updatedAt
+          $summary.lastErrorType = [string]$account.lastErrorType
+          $summary.lastStatus = $account.lastStatus
+          $summary.lastRequestId = $account.lastRequestId
+        }
+      }
+    }
+
+    foreach ($accountId in $accountIds) {
+      $value = [string]$accountId
+      if ($value.Trim() -and -not $observed.ContainsKey($value)) {
+        $summary.estimatedAvailableCount++
+      }
+    }
+
+    if ($json.modelCooldowns) {
+      foreach ($prop in $json.modelCooldowns.PSObject.Properties) {
+        $cooldown = $prop.Value
+        $accountId = [string]$cooldown.accountId
+        if (-not $accountSet.ContainsKey($accountId)) {
+          continue
+        }
+        if ([int64]$cooldown.cooldownUntilMs -gt $nowMs) {
+          $summary.activeModelCooldownCount++
+          Update-NearestCooldownMs $summary $cooldown.cooldownUntilMs $nowMs
+        }
+        if ($cooldown.lastErrorType -and [int64]$cooldown.updatedAt -ge $lastErrorUpdatedAt) {
+          $lastErrorUpdatedAt = [int64]$cooldown.updatedAt
+          $summary.lastErrorType = [string]$cooldown.lastErrorType
+          $summary.lastStatus = $null
+          $summary.lastRequestId = $cooldown.lastRequestId
+        }
+      }
+    }
+  } catch {
+    $summary.parseError = $_.Exception.Message
+  }
+
   $summary
 }
 
@@ -645,19 +788,22 @@ function Test-LocalAccessConfigContract {
 
   $accountCount = if ($Config.accountIds) { @($Config.accountIds).Count } else { 0 }
   $safety = $Config.safetyConfig
+  $effectiveMaxRetryAccounts = [Math]::Max([int]$safety.maxRetryAccounts, 2)
   $evidence = @{
     enabled = [bool]$Config.enabled
     port = [int]$Config.port
     accountCount = $accountCount
+    accountHashes = @(Get-AccountHashList @($Config.accountIds))
     hardenedLocalMode = [bool]$safety.hardenedLocalMode
     maxConcurrentRequests = [int]$safety.maxConcurrentRequests
     minRequestIntervalSeconds = [int]$safety.minRequestIntervalSeconds
     maxRetryAccounts = [int]$safety.maxRetryAccounts
+    effectiveMaxRetryAccounts = [int]$effectiveMaxRetryAccounts
     fallbackMode = [string]$safety.fallbackMode
   }
 
-  if (-not $safety.hardenedLocalMode -or $safety.maxConcurrentRequests -ne 1 -or $safety.maxRetryAccounts -ne 1) {
-    if ($Stage -ne "fallback_probe" -or $safety.maxRetryAccounts -ne 2) {
+  if (-not $safety.hardenedLocalMode -or $safety.maxConcurrentRequests -ne 1 -or $effectiveMaxRetryAccounts -lt 2) {
+    if ($Stage -ne "fallback_probe" -or $effectiveMaxRetryAccounts -lt 2) {
       Set-SmokeFail $result "安全配置不是当前阶段允许的 hardened 合同" $evidence
       return $result
     }
@@ -668,8 +814,8 @@ function Test-LocalAccessConfigContract {
       Set-SmokeBlocked $result "single 阶段要求 accountIds 恰好为 1" $evidence
       return $result
     }
-    if ($safety.maxRetryAccounts -ne 1) {
-      Set-SmokeBlocked $result "single 阶段要求 maxRetryAccounts = 1" $evidence
+    if ($effectiveMaxRetryAccounts -lt 2) {
+      Set-SmokeBlocked $result "single 阶段要求有效 maxRetryAccounts >= 2；单账号池仍只会尝试 1 个账号" $evidence
       return $result
     }
   } elseif ($Stage -eq "small_pool") {
@@ -677,8 +823,8 @@ function Test-LocalAccessConfigContract {
       Set-SmokeBlocked $result "small_pool 阶段要求 accountIds 为 2 到 3 个" $evidence
       return $result
     }
-    if ($safety.maxRetryAccounts -ne 1) {
-      Set-SmokeBlocked $result "small_pool 阶段仍要求 maxRetryAccounts = 1，只验证 selector/sticky 不乱轮换" $evidence
+    if ($effectiveMaxRetryAccounts -lt 2) {
+      Set-SmokeBlocked $result "small_pool 阶段要求有效 maxRetryAccounts >= 2，以覆盖无感当前请求 failover" $evidence
       return $result
     }
   } elseif ($Stage -eq "fallback_probe") {
@@ -686,8 +832,8 @@ function Test-LocalAccessConfigContract {
       Set-SmokeBlocked $result "fallback_probe 阶段要求 accountIds 为 2 到 3 个" $evidence
       return $result
     }
-    if ($safety.maxRetryAccounts -ne 2 -or $safety.fallbackMode -ne "next_request_only") {
-      Set-SmokeBlocked $result "fallback_probe 阶段要求 maxRetryAccounts = 2 且 fallbackMode = next_request_only" $evidence
+    if ($effectiveMaxRetryAccounts -lt 2) {
+      Set-SmokeBlocked $result "fallback_probe 阶段要求有效 maxRetryAccounts >= 2；fallbackMode 不阻断当前请求安全 failover" $evidence
       return $result
     }
     if (-not $RunUpstreamSmoke -and -not $RunCodexExecSmoke) {
@@ -1227,7 +1373,8 @@ try {
   $results += Invoke-QuotaDrainUntilFallback $resolvedBaseUrl $resolvedApiKey $Model $auditPath
   $results += Invoke-CodexExecSmoke $resolvedBaseUrl $resolvedApiKey $Model
 
-  $healthSummary = Get-JsonFileSummary $healthPath
+  $healthRegistrySummary = Get-JsonFileSummary $healthPath
+  $healthSummary = Get-ScopedHealthFileSummary $config $healthPath
   $auditSummary = Get-AuditTailSummary $auditPath
   $results += Test-QuotaFallbackAudit $auditPath
 } finally {
@@ -1287,6 +1434,7 @@ $report = [ordered]@{
   }
   results = $results
   health = $healthSummary
+  healthRegistry = $healthRegistrySummary
   audit = $auditSummary
   safetyNotes = @(
     "report redacts API key and account identity",

@@ -358,7 +358,7 @@ npm install
 npm run tauri dev
 ```
 
-日常开发中，如果最新代码未运行且需要通过 `npm run dev`、`npm run tauri dev`、`npm run tauri build` 等长时间或影响会话的命令实时查看效果，先说明命令、实时验证原因、窗口/端口/单实例唤醒/资源占用/Codex 或 Cockpit 连续性影响，并询问当前任务是否允许执行。维护 Cockpit 且当前 Codex 正在使用时，先把 Codex 放到已验证可用的 Direct API 或 Direct OAuth 兜底，并用真实 `codex exec` 探针确认连通；未经当前任务明确授权，不要自动停止、重启、kill、拉起 Codex App / `codex` 进程，也不要自动启动开发或构建命令；授权执行后再复测 Codex 连通性。
+日常开发中，AI agent 应自主执行有限验证命令，例如 `npm run typecheck`、`npm run build`、Cargo tests 和 focused script checks；不要把所有 `npm run` 都当成需要确认。只有当实时查看最新代码必须启动、重启或重跑 `npm run dev`、`npm run tauri dev`、`npm run tauri build` 等长时间或影响会话的 app/server 流程时，才先说明命令、实时验证原因、窗口/端口/单实例唤醒/资源占用/Codex 或 Cockpit 连续性影响，并询问当前任务是否允许执行。维护 Cockpit 且当前 Codex 正在使用时，先把 Codex 放到已验证可用的 Direct API 或 Direct OAuth 兜底，并用真实 `codex exec` 探针确认连通；未经当前任务明确授权，不要自动停止、重启、kill、拉起 Codex App / `codex` 进程，也不要自动启动上述 live dev/build 流程；授权执行后再复测 Codex 连通性。
 
 ### 构建产物
 

@@ -291,12 +291,31 @@ function Test-ValidAccountHash {
   -not [string]::IsNullOrWhiteSpace($AccountHash) -and $AccountHash -ne "-"
 }
 
+function Test-LocalPoolUnavailableEvent {
+  param([System.Collections.IDictionary]$Event)
+  if ($Event.errorType -eq "pool_unavailable") {
+    return $true
+  }
+  if ($Event.rawLine -match 'pool_unavailable|API 服务号池|API 服务账号均在冷却|可用账号均在冷却|本地接入集合暂无可用账号') {
+    return $true
+  }
+  $detail = $Event.detail
+  if ($detail -and $detail.PSObject.Properties["message"]) {
+    $message = [string]$detail.message
+    if ($message -match 'API 服务号池|API 服务账号均在冷却|可用账号均在冷却|本地接入集合暂无可用账号') {
+      return $true
+    }
+  }
+  $false
+}
+
 function Get-AuditAcceptanceSummary {
   param([object[]]$Events)
   $parsedEvents = @($Events | Where-Object { $_.parsed })
   $retryLimitEvents = @($Events | Where-Object {
-    $_.rawLine -match 'exceeded retry limit|last status:\s*429|429 Too Many Requests'
+    ($_.rawLine -match 'exceeded retry limit|last status:\s*429|429 Too Many Requests') -and -not (Test-LocalPoolUnavailableEvent $_)
   })
+  $localPoolUnavailableEvents = @($parsedEvents | Where-Object { Test-LocalPoolUnavailableEvent $_ })
 
   $first429Index = -1
   $firstFallbackIndex = -1
@@ -319,6 +338,7 @@ function Get-AuditAcceptanceSummary {
   $first200After429AccountHash = $null
   $fallbackTransitions = @()
   $healthyAccountHashesAfterFallback = @()
+  $unrecoveredFallback429Events = @()
   for ($i = 0; $i -lt $parsedEvents.Count; $i++) {
     $event = $parsedEvents[$i]
     if ($first429Index -ge 0 -and $i -gt $first429Index -and $event.status -eq 200) {
@@ -335,13 +355,21 @@ function Get-AuditAcceptanceSummary {
 
     if ($event.phase -eq "fallback_selected") {
       $next200 = $null
+      $terminal429 = $null
       for ($j = $i + 1; $j -lt $parsedEvents.Count; $j++) {
         $candidate = $parsedEvents[$j]
         if ($candidate.requestId -ne $event.requestId) {
           continue
         }
+        if ($candidate.phase -eq "listener") {
+          break
+        }
         if ($candidate.status -eq 200 -and (Test-ValidAccountHash $candidate.accountHash)) {
           $next200 = $candidate
+          break
+        }
+        if ($candidate.phase -eq "final_response" -and $candidate.status -eq 429 -and -not (Test-LocalPoolUnavailableEvent $candidate)) {
+          $terminal429 = $candidate
           break
         }
       }
@@ -353,6 +381,9 @@ function Get-AuditAcceptanceSummary {
       if ($hasDifferent) {
         $healthyAccountHashesAfterFallback += $next200.accountHash
       }
+      if (-not $next200 -and $terminal429) {
+        $unrecoveredFallback429Events += $terminal429
+      }
 
       $fallbackTransitions += [ordered]@{
         fallbackRequestId = $event.requestId
@@ -362,6 +393,8 @@ function Get-AuditAcceptanceSummary {
         next200AccountHash = if ($next200) { $next200.accountHash } else { $null }
         next200Timestamp = if ($next200) { $next200.timestamp } else { $null }
         next200Phase = if ($next200) { $next200.phase } else { $null }
+        terminal429Timestamp = if ($terminal429) { $terminal429.timestamp } else { $null }
+        terminal429AccountHash = if ($terminal429) { $terminal429.accountHash } else { $null }
         sameRequest = [bool]($next200 -and $next200.requestId -eq $event.requestId)
         completed = [bool]($null -ne $next200)
         differentAccount = [bool]$hasDifferent
@@ -369,8 +402,10 @@ function Get-AuditAcceptanceSummary {
     }
   }
 
-  $streamGroups = @{}
+  $streamGroups = @()
+  $activeStreamGroups = @{}
   $accountGroups = @{}
+  $streamSequence = 0
   foreach ($event in $parsedEvents) {
     $requestId = $event.requestId
     if (Test-ValidAccountHash $event.accountHash) {
@@ -416,8 +451,12 @@ function Get-AuditAcceptanceSummary {
     if (-not $requestId -or $requestId -eq "-") {
       continue
     }
-    if (-not $streamGroups.ContainsKey($requestId)) {
-      $streamGroups[$requestId] = [ordered]@{
+    $isStreamEvent = $event.phase -in @("lease_granted", "stream_write", "stream_completed", "lease_released")
+    $group = $null
+    if ($event.phase -eq "lease_granted") {
+      $streamSequence++
+      $group = [ordered]@{
+        streamKey = "{0}#{1}" -f $requestId, $streamSequence
         requestId = $requestId
         firstTimestamp = $event.timestamp
         lastTimestamp = $event.timestamp
@@ -432,8 +471,36 @@ function Get-AuditAcceptanceSummary {
         statuses = @()
         accountHashes = @()
       }
+      $streamGroups += $group
+      $activeStreamGroups[$requestId] = $group
+    } elseif ($isStreamEvent -and $activeStreamGroups.ContainsKey($requestId)) {
+      $group = $activeStreamGroups[$requestId]
+    } elseif ($isStreamEvent) {
+      $streamSequence++
+      $group = [ordered]@{
+        streamKey = "{0}#{1}" -f $requestId, $streamSequence
+        requestId = $requestId
+        firstTimestamp = $event.timestamp
+        lastTimestamp = $event.timestamp
+        eventCount = 0
+        started = $false
+        completed = $false
+        terminalError = $false
+        interruptedByCooldown = $false
+        firstAccountHash = $event.accountHash
+        lastAccountHash = $event.accountHash
+        phases = @()
+        statuses = @()
+        accountHashes = @()
+      }
+      $streamGroups += $group
+      $activeStreamGroups[$requestId] = $group
+    } elseif ($activeStreamGroups.ContainsKey($requestId)) {
+      $group = $activeStreamGroups[$requestId]
     }
-    $group = $streamGroups[$requestId]
+    if (-not $group) {
+      continue
+    }
     $group.eventCount++
     $group.lastTimestamp = $event.timestamp
     $group.lastAccountHash = $event.accountHash
@@ -450,21 +517,25 @@ function Get-AuditAcceptanceSummary {
     if ($event.phase -eq "stream_completed" -or ($event.phase -eq "lease_released" -and $event.outcome -eq "completed") -or ($event.phase -eq "final_response" -and $event.status -eq 200)) {
       $group.completed = $true
     }
-    if ($event.phase -eq "final_response" -and $event.status -ge 400) {
+    if ($event.phase -eq "final_response" -and $event.status -ge 400 -and -not $group.completed) {
       $group.terminalError = $true
     }
     if ($group.started -and $event.phase -eq "model_cooldown_applied") {
       $group.interruptedByCooldown = $true
     }
+    if (($event.phase -eq "stream_completed" -or $event.phase -eq "lease_released" -or $event.phase -eq "final_response") -and ($group.completed -or $group.terminalError)) {
+      [void]$activeStreamGroups.Remove($requestId)
+    }
   }
 
-  $streams = @($streamGroups.Values)
+  $streams = @($streamGroups)
   $startedStreams = @($streams | Where-Object { $_.started })
   $completedStreams = @($startedStreams | Where-Object { $_.completed })
   $openStreams = @($startedStreams | Where-Object { -not $_.completed -and -not $_.terminalError })
   $interruptedStreams = @($startedStreams | Where-Object { $_.interruptedByCooldown })
   $completedFallbackTransitions = @($fallbackTransitions | Where-Object { $_.completed -and $_.differentAccount })
   $distinctHealthyAccountHashesAfterFallback = @($healthyAccountHashesAfterFallback | Sort-Object -Unique)
+  $retryLimitErrorCount = [int]$retryLimitEvents.Count + [int]$unrecoveredFallback429Events.Count
 
   [ordered]@{
     eventCount = $Events.Count
@@ -484,14 +555,20 @@ function Get-AuditAcceptanceSummary {
     first429AccountHash = $first429AccountHash
     firstFallbackAccountHash = $firstFallbackAccountHash
     first200After429AccountHash = $first200After429AccountHash
-    retryLimitErrorFound = [bool]$retryLimitEvents.Count
-    retryLimitErrorCount = $retryLimitEvents.Count
+    retryLimitErrorFound = [bool]$retryLimitErrorCount
+    retryLimitErrorCount = $retryLimitErrorCount
+    retryLimitTextMatchCount = $retryLimitEvents.Count
+    unrecoveredFallback429Count = $unrecoveredFallback429Events.Count
+    unrecoveredFallback429RequestIds = @($unrecoveredFallback429Events | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    localPoolUnavailableCount = $localPoolUnavailableEvents.Count
+    localPoolUnavailableRequestIds = @($localPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     startedStreamCount = $startedStreams.Count
     completedStreamCount = $completedStreams.Count
     openStreamCount = $openStreams.Count
     interruptedStreamCount = $interruptedStreams.Count
     streamSummaries = @($streams | ForEach-Object {
       [ordered]@{
+        streamKey = $_.streamKey
         requestId = $_.requestId
         firstTimestamp = $_.firstTimestamp
         lastTimestamp = $_.lastTimestamp
@@ -548,6 +625,7 @@ function New-AcceptanceResults {
     first429AccountHash = $AuditSummary.first429AccountHash
     firstFallbackAccountHash = $AuditSummary.firstFallbackAccountHash
     first200After429AccountHash = $AuditSummary.first200After429AccountHash
+    localPoolUnavailableCount = [int]$AuditSummary.localPoolUnavailableCount
   }
   $quotaPass = $AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.hasFallbackSelected -and $AuditSummary.has200After429 -and $AuditSummary.fallbackCycleCount -ge $RequiredFallbackCycles
   if ($quotaPass) {
@@ -612,9 +690,14 @@ function New-AcceptanceResults {
   $retryEvidence = @{
     retryLimitErrorFound = [bool]$AuditSummary.retryLimitErrorFound
     retryLimitErrorCount = [int]$AuditSummary.retryLimitErrorCount
+    retryLimitTextMatchCount = [int]$AuditSummary.retryLimitTextMatchCount
+    unrecoveredFallback429Count = [int]$AuditSummary.unrecoveredFallback429Count
+    unrecoveredFallback429RequestIds = @($AuditSummary.unrecoveredFallback429RequestIds)
+    localPoolUnavailableCount = [int]$AuditSummary.localPoolUnavailableCount
+    localPoolUnavailableRequestIds = @($AuditSummary.localPoolUnavailableRequestIds)
   }
   if ($AuditSummary.retryLimitErrorFound) {
-    $results += Set-MonitorStatus $retry "fail" "监测窗口内出现历史 retry-limit/429 错误文本" $retryEvidence
+    $results += Set-MonitorStatus $retry "fail" "监测窗口内出现历史 retry-limit/429 错误文本或 fallback 后未恢复的 final 429" $retryEvidence
   } else {
     $results += Set-MonitorStatus $retry "pass" $null $retryEvidence
   }
@@ -671,7 +754,7 @@ do {
     $events += @($lines | ForEach-Object { Convert-AuditLine $_ })
     if (-not $Quiet) {
       $summary = Get-AuditAcceptanceSummary $events
-      Write-Host ("events={0}; has429={1}; fallback={2}; has200After429={3}; fallbackCycles={4}; healthyAccounts={5}; streams={6}/{7}; retryLimit={8}" -f $summary.eventCount, $summary.has429, $summary.hasFallbackSelected, $summary.has200After429, $summary.fallbackCycleCount, $summary.distinctHealthyAccountCountAfterFallback, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound)
+      Write-Host ("events={0}; has429={1}; fallback={2}; has200After429={3}; fallbackCycles={4}; healthyAccounts={5}; streams={6}/{7}; retryLimit={8}; poolUnavailable={9}" -f $summary.eventCount, $summary.has429, $summary.hasFallbackSelected, $summary.has200After429, $summary.fallbackCycleCount, $summary.distinctHealthyAccountCountAfterFallback, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.localPoolUnavailableCount)
     }
   }
 

@@ -63,6 +63,7 @@ pub mod local_hardened_api_smoke {
                 "fallbackMode": item.fallback_mode,
             })),
             "health": {
+                "scope": "current_pool",
                 "unavailable": state.health.unavailable,
                 "healthyCount": state.health.healthy_count,
                 "coolingCount": state.health.cooling_count,

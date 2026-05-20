@@ -3221,16 +3221,7 @@ fn retry_failover_max_retries(config: &CodexLocalApiSafetyConfig) -> usize {
 }
 
 fn retry_failover_account_attempt_limit(config: &CodexLocalApiSafetyConfig) -> usize {
-    if !matches!(
-        config.fallback_mode,
-        CodexLocalApiFallbackMode::NextRequestOnly
-    ) {
-        return 1;
-    }
-
-    (config.max_retry_accounts.max(2) as usize)
-        .clamp(1, MAX_RETRY_CREDENTIALS_PER_REQUEST)
-        .min(2)
+    (config.max_retry_accounts.max(2) as usize).clamp(1, MAX_RETRY_CREDENTIALS_PER_REQUEST)
 }
 
 fn build_effective_local_access_account_ids(
@@ -3522,12 +3513,8 @@ fn summarize_pool_unavailability(
 }
 
 fn status_for_pool_unavailable(summary: &PoolUnavailableSummary) -> u16 {
-    if summary.exhausted_count > 0 || summary.cooling_count > 0 || summary.model_cooldown_count > 0
-    {
-        StatusCode::TOO_MANY_REQUESTS.as_u16()
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE.as_u16()
-    }
+    let _ = summary;
+    StatusCode::SERVICE_UNAVAILABLE.as_u16()
 }
 
 fn should_use_pool_unavailable_summary(summary: &PoolUnavailableSummary) -> bool {
@@ -4796,9 +4783,31 @@ fn update_health_summary_nearest_cooldown(
     });
 }
 
+#[cfg(test)]
 fn build_health_summary_from_registry(
     registry: &CodexLocalAccessHealthRegistry,
     now: i64,
+) -> CodexLocalAccessHealthSummary {
+    build_health_summary_from_registry_with_scope(registry, now, None)
+}
+
+fn build_health_summary_from_registry_for_accounts(
+    registry: &CodexLocalAccessHealthRegistry,
+    now: i64,
+    account_ids: &[String],
+) -> CodexLocalAccessHealthSummary {
+    let scoped_account_ids: HashSet<&str> = account_ids
+        .iter()
+        .map(|account_id| account_id.trim())
+        .filter(|account_id| !account_id.is_empty())
+        .collect();
+    build_health_summary_from_registry_with_scope(registry, now, Some(&scoped_account_ids))
+}
+
+fn build_health_summary_from_registry_with_scope(
+    registry: &CodexLocalAccessHealthRegistry,
+    now: i64,
+    account_scope: Option<&HashSet<&str>>,
 ) -> CodexLocalAccessHealthSummary {
     let mut summary = CodexLocalAccessHealthSummary {
         schema_version: registry.schema_version,
@@ -4807,8 +4816,18 @@ fn build_health_summary_from_registry(
     };
 
     let mut last_error_updated_at = i64::MIN;
+    let mut observed_scoped_accounts: HashSet<&str> = HashSet::new();
+    let account_is_in_scope = |account_id: &str| {
+        account_scope
+            .map(|scope| scope.contains(account_id.trim()))
+            .unwrap_or(true)
+    };
 
-    for account in registry.accounts.values() {
+    for (account_id, account) in registry.accounts.iter() {
+        if !account_is_in_scope(account_id) {
+            continue;
+        }
+        observed_scoped_accounts.insert(account_id.as_str());
         match account.status {
             CodexLocalAccessAccountHealthStatus::Healthy => summary.healthy_count += 1,
             CodexLocalAccessAccountHealthStatus::EstimatedAvailable => {
@@ -4841,7 +4860,18 @@ fn build_health_summary_from_registry(
         }
     }
 
+    if let Some(scope) = account_scope {
+        for account_id in scope {
+            if !observed_scoped_accounts.contains(account_id) {
+                summary.estimated_available_count += 1;
+            }
+        }
+    }
+
     for cooldown in registry.model_cooldowns.values() {
+        if !account_is_in_scope(cooldown.account_id.as_str()) {
+            continue;
+        }
         if cooldown.cooldown_until_ms > now {
             summary.active_model_cooldown_count += 1;
             update_health_summary_nearest_cooldown(
@@ -4867,7 +4897,7 @@ fn build_health_summary_from_registry(
     }
 
     if let Some(binding) = registry.sticky_bindings.get(PROCESS_STICKY_BINDING_KEY) {
-        if binding.expires_at_ms > now {
+        if binding.expires_at_ms > now && account_is_in_scope(binding.account_id.as_str()) {
             let account_hash = failure_log_account_hash(Some(binding.account_id.as_str()));
             if account_hash != "-" {
                 summary.sticky_account_hash = Some(account_hash);
@@ -4890,10 +4920,14 @@ fn build_unavailable_health_summary(now: i64, err: &str) -> CodexLocalAccessHeal
     }
 }
 
-fn build_health_summary_from_disk() -> CodexLocalAccessHealthSummary {
+fn build_health_summary_from_disk_for_accounts(
+    account_ids: &[String],
+) -> CodexLocalAccessHealthSummary {
     let now = now_ms();
     let mut summary = match load_health_registry_from_disk() {
-        Ok(registry) => build_health_summary_from_registry(&registry, now),
+        Ok(registry) => {
+            build_health_summary_from_registry_for_accounts(&registry, now, account_ids)
+        }
         Err(err) => build_unavailable_health_summary(now, &err),
     };
     apply_audit_trail_status_to_health_summary(&mut summary, &current_audit_trail_status());
@@ -5775,18 +5809,14 @@ fn normalize_local_api_safety_config(collection: &mut CodexLocalAccessCollection
         &mut config.max_retry_accounts,
         defaults.max_retry_accounts,
         1,
-        2,
+        MAX_RETRY_CREDENTIALS_PER_REQUEST as u32,
     );
-    if matches!(config.fallback_mode, CodexLocalApiFallbackMode::Unknown) {
-        config.fallback_mode = defaults.fallback_mode;
+    if config.max_retry_accounts < 2 {
+        config.max_retry_accounts = 2;
         changed = true;
     }
-    if matches!(
-        config.fallback_mode,
-        CodexLocalApiFallbackMode::NextRequestOnly
-    ) && config.max_retry_accounts < 2
-    {
-        config.max_retry_accounts = 2;
+    if matches!(config.fallback_mode, CodexLocalApiFallbackMode::Unknown) {
+        config.fallback_mode = defaults.fallback_mode;
         changed = true;
     }
 
@@ -5818,12 +5848,12 @@ fn local_api_safety_config_for_preset(
     match preset {
         CodexLocalApiSafetyPresetId::MaximumSafety => {
             config.min_request_interval_seconds = 60;
-            config.max_retry_accounts = 1;
+            config.max_retry_accounts = 2;
             config.fallback_mode = CodexLocalApiFallbackMode::Disabled;
         }
         CodexLocalApiSafetyPresetId::BalancedSelfUse => {
             config.min_request_interval_seconds = 20;
-            config.max_retry_accounts = 1;
+            config.max_retry_accounts = 2;
             config.fallback_mode = CodexLocalApiFallbackMode::Disabled;
         }
         CodexLocalApiSafetyPresetId::QuotaDrainCareful => {
@@ -6285,7 +6315,7 @@ fn build_state_snapshot(runtime: &GatewayRuntime) -> CodexLocalAccessState {
     let model_ids = supported_codex_model_ids();
     let mut stats = runtime.stats.clone();
     stats.events.clear();
-    let health = build_health_summary_from_disk();
+    let health = build_health_summary_from_disk_for_accounts(&effective_account_ids);
 
     CodexLocalAccessState {
         collection,
@@ -7740,6 +7770,12 @@ fn classify_codex_api_failure(status: Option<u16>, detail: &str) -> &'static str
         || detail.contains("鉴权")
     {
         "auth_failed"
+    } else if detail.contains("api 服务号池")
+        || detail.contains("api 服务账号均在冷却")
+        || detail.contains("可用账号均在冷却")
+        || detail.contains("本地接入集合暂无可用账号")
+    {
+        "pool_unavailable"
     } else if detail.contains("websocket") || detail.contains("web socket") {
         "unsupported_websocket"
     } else if detail.contains("本地接入队列")
@@ -9437,18 +9473,39 @@ async fn proxy_request_with_account_pool(
 
                 if classified.safe_for_request_failover() {
                     let context = build_audit_context(request, Some(account.id.as_str()));
+                    let mut detail = classified_audit_detail(&classified);
+                    detail.insert("attempt".to_string(), attempts.to_string());
+                    detail.insert(
+                        "max_credential_attempts".to_string(),
+                        max_credential_attempts.to_string(),
+                    );
+                    let can_try_next_account = attempts < max_credential_attempts;
                     record_audit_event_from_context(
                         &context,
-                        "fallback_selected",
+                        if can_try_next_account {
+                            "fallback_selected"
+                        } else {
+                            "fallback_blocked"
+                        },
                         Some(status.as_u16()),
                         Some(classified.error_type.as_str()),
                         None,
-                        Some("next_account"),
-                        classified_audit_detail(&classified),
+                        Some(if can_try_next_account {
+                            "next_account"
+                        } else {
+                            "attempt_limit"
+                        }),
+                        detail,
                     );
                     last_status = status.as_u16();
-                    last_error =
-                        format!("账号 {} 当前不可用，已尝试轮转: {}", account.email, message);
+                    last_error = if can_try_next_account {
+                        format!("账号 {} 当前不可用，已尝试轮转: {}", account.email, message)
+                    } else {
+                        format!(
+                            "账号 {} 当前不可用，已达到本次请求切号上限: {}",
+                            account.email, message
+                        )
+                    };
                     break;
                 }
 
@@ -9471,9 +9528,25 @@ async fn proxy_request_with_account_pool(
             || wait > MAX_REQUEST_RETRY_WAIT
         {
             if !attempted_in_round {
+                let pool_summary = summarize_pool_unavailability(
+                    &health_registry,
+                    &routing_account_ids,
+                    Some(&routing_hint.model_key),
+                    now_ms(),
+                );
+                let use_pool_unavailable_summary =
+                    should_use_pool_unavailable_summary(&pool_summary);
                 return Err(ProxyDispatchError {
-                    status: StatusCode::TOO_MANY_REQUESTS.as_u16(),
-                    message: build_cooldown_unavailable_message(&routing_hint.model_key, wait),
+                    status: if use_pool_unavailable_summary {
+                        status_for_pool_unavailable(&pool_summary)
+                    } else {
+                        StatusCode::SERVICE_UNAVAILABLE.as_u16()
+                    },
+                    message: if use_pool_unavailable_summary {
+                        build_pool_unavailable_message(&routing_hint.model_key, &pool_summary)
+                    } else {
+                        build_cooldown_unavailable_message(&routing_hint.model_key, wait)
+                    },
                     account_id: affinity_account_id.clone(),
                     account_email: None,
                     retry_after: Some(wait),
@@ -9555,6 +9628,10 @@ async fn write_proxy_dispatch_error_response(
             retry_after.as_millis().to_string(),
         );
     }
+    detail.insert(
+        "message".to_string(),
+        safe_log_field(Some(message.as_str()), 512),
+    );
     record_audit_event_from_context(
         &context,
         "final_response",
@@ -9896,17 +9973,18 @@ mod tests {
         build_audit_context, build_audit_event, build_chat_completion_payload,
         build_chat_completion_stream_body, build_codex_api_failure_log,
         build_effective_local_access_account_ids, build_follow_current_local_access_account_ids,
-        build_health_summary_from_registry, build_images_api_payload, build_local_models_response,
-        build_ordered_account_ids, build_pool_unavailable_message,
-        build_projection_seed_local_access_account_ids, build_request_routing_hint,
-        build_routing_pool_account_ids, build_runtime_account, build_runtime_mode_state,
-        classify_active_stream_terminal_error, classify_codex_upstream_error,
-        constrain_previous_response_affinity, empty_health_registry, extract_usage_capture,
-        filter_local_access_account_ids, first_stable_local_access_port, grant_active_stream_lease,
-        health_registry_account_cooldown_wait, health_registry_account_is_schedulable,
-        health_registry_model_key, is_responses_completion_event,
-        is_responses_websocket_upgrade_request, is_websocket_upgrade_request,
-        json_response_with_retry_after, load_health_registry_from_path, load_runtime_mode_state,
+        build_health_summary_from_registry, build_health_summary_from_registry_for_accounts,
+        build_images_api_payload, build_local_models_response, build_ordered_account_ids,
+        build_pool_unavailable_message, build_projection_seed_local_access_account_ids,
+        build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
+        build_runtime_mode_state, classify_active_stream_terminal_error,
+        classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
+        extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
+        grant_active_stream_lease, health_registry_account_cooldown_wait,
+        health_registry_account_is_schedulable, health_registry_model_key,
+        is_responses_completion_event, is_responses_websocket_upgrade_request,
+        is_websocket_upgrade_request, json_response_with_retry_after,
+        load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
         parse_codex_retry_after, parse_responses_payload_from_upstream,
@@ -10696,7 +10774,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(summary.nearest_wait, Some(Duration::from_secs(30)));
         assert_eq!(
             status_for_pool_unavailable(&summary),
-            StatusCode::TOO_MANY_REQUESTS.as_u16()
+            StatusCode::SERVICE_UNAVAILABLE.as_u16()
         );
 
         let message = build_pool_unavailable_message("gpt-5.5", &summary);
@@ -10733,7 +10811,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(should_use_pool_unavailable_summary(&summary));
         assert_eq!(
             status_for_pool_unavailable(&summary),
-            StatusCode::TOO_MANY_REQUESTS.as_u16()
+            StatusCode::SERVICE_UNAVAILABLE.as_u16()
         );
 
         let message = build_pool_unavailable_message("gpt-5.5", &summary);
@@ -10998,6 +11076,61 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 "health summary leaked {secret}"
             );
         }
+    }
+
+    #[test]
+    fn scoped_health_summary_ignores_accounts_outside_current_pool() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "current-healthy".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::Healthy,
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.accounts.insert(
+            "old-cooling".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::CoolingDown,
+                cooldown_until_ms: Some(now + 60_000),
+                last_error_type: Some("usage_limit_reached".to_string()),
+                last_status: Some(429),
+                last_request_id: Some("old-req".to_string()),
+                updated_at: now + 1,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.model_cooldowns.insert(
+            health_registry_model_key("old-cooling", "gpt-5.5"),
+            CodexLocalAccessModelCooldown {
+                account_id: "old-cooling".to_string(),
+                model: "gpt-5.5".to_string(),
+                cooldown_until_ms: now + 60_000,
+                last_error_type: Some("usage_limit_reached".to_string()),
+                last_request_id: Some("old-req".to_string()),
+                updated_at: now + 1,
+                ..CodexLocalAccessModelCooldown::default()
+            },
+        );
+        upsert_process_sticky_binding(&mut registry, "old-cooling", now);
+
+        let account_ids = vec![
+            "current-healthy".to_string(),
+            "current-no-record".to_string(),
+        ];
+        let summary = build_health_summary_from_registry_for_accounts(&registry, now, &account_ids);
+
+        assert_eq!(summary.healthy_count, 1);
+        assert_eq!(summary.estimated_available_count, 1);
+        assert_eq!(summary.cooling_count, 0);
+        assert_eq!(summary.active_model_cooldown_count, 0);
+        assert_eq!(summary.nearest_cooldown_until_ms, None);
+        assert_eq!(summary.last_error_type, None);
+        assert_eq!(summary.last_status, None);
+        assert_eq!(summary.last_request_id, None);
+        assert_eq!(summary.sticky_account_hash, None);
     }
 
     #[test]
@@ -11355,7 +11488,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             (MAX_HTTP_REQUEST_BYTES / (1024 * 1024)) as u32
         );
         assert_eq!(collection.safety_config.max_retries, 1);
-        assert_eq!(collection.safety_config.max_retry_accounts, 1);
+        assert_eq!(collection.safety_config.max_retry_accounts, 2);
         assert_eq!(collection.safety_config.fallback_mode.as_str(), "disabled");
         assert!(collection.safety_config.logging.redact_sensitive_values);
         assert!(!collection.safety_config.logging.include_prompt_response);
@@ -11400,7 +11533,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(collection.safety_config.schema_version, 1);
         assert!(collection.safety_config.hardened_local_mode);
         assert_eq!(collection.safety_config.max_concurrent_requests, 1);
-        assert_eq!(collection.safety_config.max_retry_accounts, 1);
+        assert_eq!(collection.safety_config.max_retry_accounts, 2);
         assert_eq!(collection.safety_config.fallback_mode.as_str(), "disabled");
         assert!(collection.safety_config.logging.redact_sensitive_values);
         assert!(!collection.safety_config.logging.include_prompt_response);
@@ -11415,7 +11548,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(maximum_safety.max_concurrent_requests, 1);
         assert_eq!(maximum_safety.min_request_interval_seconds, 60);
         assert_eq!(maximum_safety.max_queue_wait_seconds, 61);
-        assert_eq!(maximum_safety.max_retry_accounts, 1);
+        assert_eq!(maximum_safety.max_retry_accounts, 2);
         assert_eq!(maximum_safety.fallback_mode.as_str(), "disabled");
         assert!(maximum_safety.logging.redact_sensitive_values);
         assert!(!maximum_safety.logging.include_prompt_response);
@@ -11426,7 +11559,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(balanced.max_concurrent_requests, 1);
         assert_eq!(balanced.min_request_interval_seconds, 20);
         assert_eq!(balanced.max_queue_wait_seconds, 21);
-        assert_eq!(balanced.max_retry_accounts, 1);
+        assert_eq!(balanced.max_retry_accounts, 2);
         assert_eq!(balanced.fallback_mode.as_str(), "disabled");
 
         let quota_drain =
@@ -11474,7 +11607,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(collection.safety_config.max_concurrent_requests, 1);
         assert_eq!(collection.safety_config.min_request_interval_seconds, 60);
         assert_eq!(collection.safety_config.max_queue_wait_seconds, 61);
-        assert_eq!(collection.safety_config.max_retry_accounts, 1);
+        assert_eq!(collection.safety_config.max_retry_accounts, 2);
         assert_eq!(collection.safety_config.fallback_mode.as_str(), "disabled");
     }
 
@@ -11721,6 +11854,20 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn pool_unavailable_failure_log_has_local_error_type_even_with_quota_words() {
+        let line = build_codex_api_failure_log(
+            None,
+            Some(StatusCode::SERVICE_UNAVAILABLE.as_u16()),
+            None,
+            Some(10),
+            "模型 gpt-5.5 的API 服务号池账号额度均已耗尽，请 1 小时后重试",
+        );
+
+        assert!(line.contains("error_type=pool_unavailable"));
+        assert!(!line.contains("error_type=rate_limited"));
+    }
+
+    #[test]
     fn does_not_retry_forbidden_without_quota_or_capacity_markers() {
         assert!(!should_try_next_account(
             StatusCode::FORBIDDEN,
@@ -11857,7 +12004,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(routing_pool.len(), 500);
         assert_eq!(
             retry_failover_account_attempt_limit(&collection.safety_config),
-            1
+            2
         );
 
         let mut candidate_ids = apply_collection_routing_strategy(&routing_pool, &collection);
@@ -11953,11 +12100,51 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn retry_failover_defaults_to_one_retry_and_one_account() {
+    fn retry_failover_defaults_to_one_retry_and_current_request_failover_account() {
         let config = CodexLocalApiSafetyConfig::default();
 
         assert_eq!(retry_failover_max_retries(&config), 1);
-        assert_eq!(retry_failover_account_attempt_limit(&config), 1);
+        assert_eq!(retry_failover_account_attempt_limit(&config), 2);
+    }
+
+    #[test]
+    fn retry_failover_account_limit_supports_three_account_acceptance() {
+        let config = CodexLocalApiSafetyConfig {
+            max_retry_accounts: 3,
+            fallback_mode: CodexLocalApiFallbackMode::Disabled,
+            ..CodexLocalApiSafetyConfig::default()
+        };
+
+        assert_eq!(retry_failover_account_attempt_limit(&config), 3);
+    }
+
+    #[test]
+    fn local_api_safety_config_keeps_three_retry_accounts_for_acceptance() {
+        let mut collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "ck-test".to_string(),
+            safety_config: CodexLocalApiSafetyConfig {
+                max_retry_accounts: 3,
+                fallback_mode: CodexLocalApiFallbackMode::NextRequestOnly,
+                ..CodexLocalApiSafetyConfig::default()
+            },
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec![
+                "acc-primary".to_string(),
+                "acc-secondary".to_string(),
+                "acc-third".to_string(),
+            ],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        let changed = normalize_local_api_safety_config(&mut collection);
+
+        assert!(!changed);
+        assert_eq!(collection.safety_config.max_retry_accounts, 3);
     }
 
     #[test]

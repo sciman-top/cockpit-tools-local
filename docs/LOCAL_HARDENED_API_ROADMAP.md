@@ -336,7 +336,7 @@ Phase 1 checkpoint：
 2. sticky task/process account，若可用。
 3. healthy 且非 cooldown 账号。
 4. Hardened 默认保留用户排序作为 fill-first；非 hardened/高级模式才按 plan/quota/最近失败/最近成功排序。
-5. 无健康账号时返回明确 429/503，不扫射。
+5. 无健康账号时返回明确 `503/pool_unavailable`，不扫射、不伪装成 upstream 429。
 
 验收：
 
