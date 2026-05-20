@@ -1903,6 +1903,15 @@
         "modalTitle": "API Service Account Pool Stats",
         "empty": "No quota stats yet"
       },
+      "poolUnavailable": {
+        "allExhausted": "All API service pool accounts have exhausted quota. Refresh quotas, adjust the pool, or recover accounts before retrying.",
+        "blocked": "The API service pool has no schedulable accounts ({{reasons}}). Refresh quotas, adjust the pool, or recover accounts before retrying.",
+        "exhausted": "{{count}} exhausted",
+        "cooling": "{{count}} cooling",
+        "manualRequired": "{{count}} require manual action",
+        "disabled": "{{count}} disabled",
+        "unknown": "unknown status"
+      },
       "memberTitle": "Account Pool Members",
       "routingStrategy": {
         "auto": "Auto (Recommended)",
@@ -1921,7 +1930,7 @@
         "balancedSelfUse": "Balanced Self-use",
         "balancedSelfUseDesc": "1 concurrent · 20s",
         "quotaDrainCareful": "Careful Quota Drain",
-        "quotaDrainCarefulDesc": "1 concurrent · 30s"
+        "quotaDrainCarefulDesc": "1 concurrent · 30s · 2 accounts"
       },
       "stats": {
         "requests": "Requests",
@@ -2265,10 +2274,12 @@
       "subscriptionExpiry": "Subscription term",
       "custom": "Custom order",
       "customModalTitle": "Custom account order",
-      "customModalDesc": "Drag accounts or use the up and down buttons to adjust the display order.",
+      "customModalDesc": "Drag accounts or use top, up, down, and bottom buttons to adjust the display order.",
       "customDragHandle": "Drag to sort",
+      "customMoveTop": "Move to top",
       "customMoveUp": "Move up",
       "customMoveDown": "Move down",
+      "customMoveBottom": "Move to bottom",
       "customReset": "Reset custom order"
     },
     "opencodeSwitch": "OpenCode switch toggle",
@@ -2516,7 +2527,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Move into Group"
+      "addToGroup": "Move into Group",
+      "reorder": "Reorder group",
+      "orderSaved": "Group order saved"
     },
     "speed": {
       "title": "Speed",

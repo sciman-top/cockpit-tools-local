@@ -7,6 +7,7 @@ import {
   Fragment,
   type ReactElement,
   type MouseEvent as ReactMouseEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
   type DragEvent as ReactDragEvent,
 } from "react";
 import {
@@ -34,6 +35,8 @@ import {
   ArrowDownWideNarrow,
   ArrowUp,
   ArrowDown,
+  ChevronsUp,
+  ChevronsDown,
   GripVertical,
   Clock,
   Calendar,
@@ -82,6 +85,7 @@ import {
   deleteCodexGroup,
   getCodexAccountGroups,
   removeAccountsFromCodexGroup,
+  updateCodexGroupAccountOrder,
 } from "../services/codexAccountGroupService";
 import {
   hasCodexAccountStructure,
@@ -99,6 +103,13 @@ import {
   type CodexQuotaErrorInfo,
 } from "../types/codex";
 import { buildCodexAccountPresentation } from "../presentation/platformAccountPresentation";
+import {
+  areStringArraysEqual,
+  moveIdInOrder,
+  moveIdsBeforeTarget,
+  normalizeAccountOrder,
+  type AccountOrderMove,
+} from "../utils/accountOrder";
 
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -2023,6 +2034,8 @@ export function CodexAccountsPage() {
   const [draggedAccountIds, setDraggedAccountIds] = useState<string[]>([]);
   const [dragOverAccountDropTarget, setDragOverAccountDropTarget] =
     useState<string | null>(null);
+  const [activeGroupOrderDropTargetId, setActiveGroupOrderDropTargetId] =
+    useState<string | null>(null);
   const repairSessionVisibilityAcrossInstances = useCodexInstanceStore(
     (state) => state.repairSessionVisibilityAcrossInstances,
   );
@@ -2257,6 +2270,10 @@ export function CodexAccountsPage() {
       setCustomSortDropTargetId(null);
     }
   }, [showCustomSortModal]);
+
+  useEffect(() => {
+    setActiveGroupOrderDropTargetId(null);
+  }, [activeGroupId]);
 
   useEffect(() => {
     void reloadManagedProviders();
@@ -4100,6 +4117,23 @@ export function CodexAccountsPage() {
         .filter((account): account is CodexAccount => Boolean(account)),
     [accounts, localAccessEffectiveAccountIds],
   );
+  const localAccessCurrentRefreshAccountId = useMemo(() => {
+    const candidateIds =
+      localAccessEffectiveAccountIds.length > 0
+        ? localAccessEffectiveAccountIds
+        : (localAccessCollection?.accountIds ?? []);
+    for (const accountId of candidateIds) {
+      const account = accounts.find((item) => item.id === accountId);
+      if (account && !isCodexApiKeyAccount(account)) {
+        return account.id;
+      }
+    }
+    return null;
+  }, [
+    accounts,
+    localAccessCollection?.accountIds,
+    localAccessEffectiveAccountIds,
+  ]);
   const localAccessQuotaPoolSummary = useMemo(
     () => summarizeCodexQuotaPool(localAccessAccounts),
     [localAccessAccounts],
@@ -4187,6 +4221,63 @@ export function CodexAccountsPage() {
     setShowLocalAccessModal(true);
   }, []);
 
+  const shouldIgnoreLocalAccessCardActivation = useCallback(
+    (target: EventTarget | null, currentTarget: HTMLElement) => {
+      const targetElement =
+        target instanceof Element
+          ? target
+          : target instanceof Node
+            ? target.parentElement
+            : null;
+      if (!targetElement) {
+        return false;
+      }
+      const interactiveTarget = targetElement.closest(
+        "button,a,input,select,textarea,[role='button'],[role='combobox'],[role='menuitem']",
+      );
+      return Boolean(
+        interactiveTarget &&
+          interactiveTarget !== currentTarget &&
+          currentTarget.contains(interactiveTarget),
+      );
+    },
+    [],
+  );
+
+  const handleLocalAccessCardClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (
+        shouldIgnoreLocalAccessCardActivation(
+          event.target,
+          event.currentTarget,
+        )
+      ) {
+        return;
+      }
+      openLocalAccessPanel();
+    },
+    [openLocalAccessPanel, shouldIgnoreLocalAccessCardActivation],
+  );
+
+  const handleLocalAccessCardKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      if (
+        shouldIgnoreLocalAccessCardActivation(
+          event.target,
+          event.currentTarget,
+        )
+      ) {
+        return;
+      }
+      event.preventDefault();
+      openLocalAccessPanel();
+    },
+    [openLocalAccessPanel, shouldIgnoreLocalAccessCardActivation],
+  );
+
   const handleHideLocalAccessEntry = useCallback(() => {
     setShowLocalAccessHideConfirm(true);
   }, []);
@@ -4247,6 +4338,7 @@ export function CodexAccountsPage() {
         const filteredAccountIds = accountIds.filter((accountId) => {
           const account = accountById.get(accountId);
           if (!account) return false;
+          if (isCodexApiKeyAccount(account)) return false;
           if (
             restrictFreeAccounts &&
             isCodexExplicitFreePlanType(account.plan_type)
@@ -5231,15 +5323,28 @@ export function CodexAccountsPage() {
 
   const handleQuickRefreshLocalAccessQuota = useCallback(async () => {
     if (!localAccessCollection) return;
+    if (!localAccessCurrentRefreshAccountId) {
+      setMessage({
+        text: t("codex.refreshFailed", {
+          error: t("common.shared.quota.noData", "暂无配额数据"),
+        }),
+        tone: "error",
+      });
+      return;
+    }
     try {
-      await handleRefreshLocalAccessQuotaAccounts(localAccessEffectiveAccountIds);
+      await handleRefreshLocalAccessQuotaAccounts([
+        localAccessCurrentRefreshAccountId,
+      ]);
     } catch {
       // handleRefreshLocalAccessQuotaAccounts already reports the failure.
     }
   }, [
     handleRefreshLocalAccessQuotaAccounts,
     localAccessCollection,
-    localAccessEffectiveAccountIds,
+    localAccessCurrentRefreshAccountId,
+    setMessage,
+    t,
   ]);
 
   // ─── Filtering & Sorting ────────────────────────────────────────────
@@ -5250,26 +5355,53 @@ export function CodexAccountsPage() {
     });
     return map;
   }, [customSortOrder]);
+  const directRuntimeAccountId =
+    codexRuntimeMode?.mode === "cockpit_api_service"
+      ? null
+      : (currentAccount?.id ?? null);
+  const directRuntimeGroupIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (!directRuntimeAccountId) return ids;
+    for (const group of codexGroups) {
+      if (group.accountIds.includes(directRuntimeAccountId)) {
+        ids.add(group.id);
+      }
+    }
+    return ids;
+  }, [codexGroups, directRuntimeAccountId]);
+  const displayCodexGroups = useMemo(() => {
+    if (directRuntimeGroupIds.size === 0) return codexGroups;
+    return [...codexGroups].sort((left, right) => {
+      const priorityDiff =
+        Number(!directRuntimeGroupIds.has(left.id)) -
+        Number(!directRuntimeGroupIds.has(right.id));
+      if (priorityDiff !== 0) return priorityDiff;
+      const sortDiff = left.sortOrder - right.sortOrder;
+      if (sortDiff !== 0) return sortDiff;
+      const createdDiff = left.createdAt - right.createdAt;
+      return createdDiff !== 0 ? createdDiff : left.id.localeCompare(right.id);
+    });
+  }, [codexGroups, directRuntimeGroupIds]);
   const groupSortMeta = useMemo(() => {
     const map = new Map<string, CodexGroupSortMeta>();
-    for (const group of codexGroups) {
+    displayCodexGroups.forEach((group, groupIndex) => {
       group.accountIds.forEach((accountId, accountIndex) => {
         const existing = map.get(accountId);
         if (
           !existing ||
-          group.sortOrder < existing.sortOrder ||
-          (group.sortOrder === existing.sortOrder &&
+          groupIndex < existing.sortOrder ||
+          (groupIndex === existing.sortOrder &&
             accountIndex < existing.accountIndex)
         ) {
           map.set(accountId, {
-            sortOrder: group.sortOrder,
+            sortOrder: groupIndex,
             accountIndex,
           });
         }
       });
-    }
+    });
     return map;
-  }, [codexGroups]);
+  }, [displayCodexGroups]);
   const groupedAccountIdSet = useMemo(() => {
     const set = new Set<string>();
     for (const group of codexGroups) {
@@ -5520,16 +5652,8 @@ export function CodexAccountsPage() {
     [customSortAccounts],
   );
   const moveCustomSortAccount = useCallback(
-    (accountId: string, direction: "up" | "down") => {
-      const currentIndex = customSortAccountIds.indexOf(accountId);
-      if (currentIndex < 0) return;
-      const targetIndex =
-        direction === "up" ? currentIndex - 1 : currentIndex + 1;
-      if (targetIndex < 0 || targetIndex >= customSortAccountIds.length) return;
-      const next = [...customSortAccountIds];
-      const [moved] = next.splice(currentIndex, 1);
-      next.splice(targetIndex, 0, moved);
-      setCustomSortOrder(next);
+    (accountId: string, move: AccountOrderMove) => {
+      setCustomSortOrder(moveIdInOrder(customSortAccountIds, accountId, move));
     },
     [customSortAccountIds],
   );
@@ -5699,6 +5823,7 @@ export function CodexAccountsPage() {
   const handleAccountDragEnd = useCallback(() => {
     setDraggedAccountIds([]);
     setDragOverAccountDropTarget(null);
+    setActiveGroupOrderDropTargetId(null);
   }, []);
 
   const handleAccountDropTargetDragOver = useCallback(
@@ -5797,6 +5922,96 @@ export function CodexAccountsPage() {
     [readAccountDropIds, reloadCodexGroups, setMessage, setSelected, t],
   );
 
+  const persistActiveGroupAccountOrder = useCallback(
+    async (nextOrder: string[]) => {
+      if (!activeGroup) return;
+      const normalizedOrder = normalizeAccountOrder(
+        nextOrder,
+        activeGroup.accountIds,
+      );
+      if (areStringArraysEqual(normalizedOrder, activeGroup.accountIds)) return;
+
+      try {
+        await updateCodexGroupAccountOrder(activeGroup.id, normalizedOrder);
+        await reloadCodexGroups();
+        setMessage({
+          text: t("codex.groups.orderSaved", "分组内顺序已保存"),
+        });
+      } catch (error) {
+        setMessage({
+          text: t("messages.actionFailed", {
+            action: t("codex.groups.reorder", "调整分组顺序"),
+            error: String(error).replace(/^Error:\s*/, ""),
+          }),
+          tone: "error",
+        });
+      }
+    },
+    [activeGroup, reloadCodexGroups, setMessage, t],
+  );
+
+  const moveActiveGroupAccount = useCallback(
+    async (accountId: string, move: AccountOrderMove) => {
+      if (!activeGroup) return;
+      await persistActiveGroupAccountOrder(
+        moveIdInOrder(activeGroup.accountIds, accountId, move),
+      );
+    },
+    [activeGroup, persistActiveGroupAccountOrder],
+  );
+
+  const handleActiveGroupOrderDragOver = useCallback(
+    (event: ReactDragEvent<HTMLElement>, targetAccountId: string) => {
+      if (!activeGroup || draggedAccountIds.length === 0) return;
+      const activeGroupIds = new Set(activeGroup.accountIds);
+      if (!activeGroupIds.has(targetAccountId)) return;
+      if (!draggedAccountIds.some((accountId) => activeGroupIds.has(accountId))) {
+        return;
+      }
+      event.preventDefault();
+      event.dataTransfer.dropEffect = "move";
+      setActiveGroupOrderDropTargetId(targetAccountId);
+    },
+    [activeGroup, draggedAccountIds],
+  );
+
+  const handleActiveGroupOrderDragLeave = useCallback(
+    (event: ReactDragEvent<HTMLElement>, targetAccountId: string) => {
+      const nextTarget = event.relatedTarget;
+      if (
+        nextTarget instanceof Node &&
+        event.currentTarget.contains(nextTarget)
+      ) {
+        return;
+      }
+      setActiveGroupOrderDropTargetId((current) =>
+        current === targetAccountId ? null : current,
+      );
+    },
+    [],
+  );
+
+  const handleDropAccountsForActiveGroupOrder = useCallback(
+    async (event: ReactDragEvent<HTMLElement>, targetAccountId: string) => {
+      if (!activeGroup) return;
+      const activeGroupIds = new Set(activeGroup.accountIds);
+      const accountIds = readAccountDropIds(event).filter((accountId) =>
+        activeGroupIds.has(accountId),
+      );
+      if (accountIds.length === 0 || accountIds.includes(targetAccountId)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setDraggedAccountIds([]);
+      setDragOverAccountDropTarget(null);
+      setActiveGroupOrderDropTargetId(null);
+      await persistActiveGroupAccountOrder(
+        moveIdsBeforeTarget(activeGroup.accountIds, accountIds, targetAccountId),
+      );
+    },
+    [activeGroup, persistActiveGroupAccountOrder, readAccountDropIds],
+  );
+
   const resolveGroupAccounts = useCallback(
     (group: CodexAccountGroup) =>
       group.accountIds
@@ -5818,6 +6033,66 @@ export function CodexAccountsPage() {
     if (teamAccountIds.length === 0) return;
     void hydrateAccountProfilesIfNeeded(teamAccountIds);
   }, [filteredAccounts, hydrateAccountProfilesIfNeeded]);
+
+  const renderActiveGroupOrderControls = (
+    accountId: string,
+    className: string,
+    iconSize = 14,
+  ) => {
+    if (!activeGroup) return null;
+    const index = activeGroup.accountIds.indexOf(accountId);
+    if (index < 0) return null;
+    const count = activeGroup.accountIds.length;
+    const disabled = count <= 1;
+    const move = (placement: AccountOrderMove) => {
+      void moveActiveGroupAccount(accountId, placement);
+    };
+
+    return (
+      <span className="codex-inline-order-controls" data-no-account-drag="true">
+        <button
+          type="button"
+          className={className}
+          onClick={() => move("first")}
+          disabled={disabled || index === 0}
+          title={t("codex.sort.customMoveTop", "置顶")}
+          aria-label={t("codex.sort.customMoveTop", "置顶")}
+        >
+          <ChevronsUp size={iconSize} />
+        </button>
+        <button
+          type="button"
+          className={className}
+          onClick={() => move("previous")}
+          disabled={disabled || index === 0}
+          title={t("codex.sort.customMoveUp", "上移")}
+          aria-label={t("codex.sort.customMoveUp", "上移")}
+        >
+          <ArrowUp size={iconSize} />
+        </button>
+        <button
+          type="button"
+          className={className}
+          onClick={() => move("next")}
+          disabled={disabled || index === count - 1}
+          title={t("codex.sort.customMoveDown", "下移")}
+          aria-label={t("codex.sort.customMoveDown", "下移")}
+        >
+          <ArrowDown size={iconSize} />
+        </button>
+        <button
+          type="button"
+          className={className}
+          onClick={() => move("last")}
+          disabled={disabled || index === count - 1}
+          title={t("codex.sort.customMoveBottom", "置底")}
+          aria-label={t("codex.sort.customMoveBottom", "置底")}
+        >
+          <ChevronsDown size={iconSize} />
+        </button>
+      </span>
+    );
+  };
 
   const resolveGroupLabel = (groupKey: string) =>
     groupKey === untaggedKey
@@ -5871,13 +6146,24 @@ export function CodexAccountsPage() {
       const showCompactExpiry =
         !isApiKeyAccount && subscriptionInfo.bucket !== "active";
       const isDraggingAccount = draggedAccountIdSet.has(account.id);
+      const isGroupOrderDropTarget =
+        activeGroupOrderDropTargetId === account.id;
       return (
         <div
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`codex-compact-row ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""} ${isDraggingAccount ? "is-account-dragging" : ""}`}
+          className={`codex-compact-row ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""} ${isDraggingAccount ? "is-account-dragging" : ""} ${isGroupOrderDropTarget ? "is-group-order-drop-target" : ""}`}
           draggable
           onDragStart={(event) => handleAccountDragStart(event, account.id)}
           onDragEnd={handleAccountDragEnd}
+          onDragOver={(event) =>
+            handleActiveGroupOrderDragOver(event, account.id)
+          }
+          onDragLeave={(event) =>
+            handleActiveGroupOrderDragLeave(event, account.id)
+          }
+          onDrop={(event) =>
+            void handleDropAccountsForActiveGroupOrder(event, account.id)
+          }
         >
           <div className="codex-compact-select">
             <input
@@ -5960,6 +6246,11 @@ export function CodexAccountsPage() {
           >
             <FolderPlus size={13} />
           </button>
+          {renderActiveGroupOrderControls(
+            account.id,
+            "codex-compact-note-btn",
+            13,
+          )}
           {activeGroupId && (
             <button
               className="codex-compact-note-btn"
@@ -6059,13 +6350,24 @@ export function CodexAccountsPage() {
       const subscriptionInfo = resolveSubscriptionPresentation(account);
       const isSubscriptionInfoMissing = subscriptionInfo.bucket === "missing";
       const isDraggingAccount = draggedAccountIdSet.has(account.id);
+      const isGroupOrderDropTarget =
+        activeGroupOrderDropTargetId === account.id;
       return (
         <div
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`codex-account-card ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""} ${isDraggingAccount ? "is-account-dragging" : ""}`}
+          className={`codex-account-card ${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isSelected ? "selected" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""} ${isDraggingAccount ? "is-account-dragging" : ""} ${isGroupOrderDropTarget ? "is-group-order-drop-target" : ""}`}
           draggable
           onDragStart={(event) => handleAccountDragStart(event, account.id)}
           onDragEnd={handleAccountDragEnd}
+          onDragOver={(event) =>
+            handleActiveGroupOrderDragOver(event, account.id)
+          }
+          onDragLeave={(event) =>
+            handleActiveGroupOrderDragLeave(event, account.id)
+          }
+          onDrop={(event) =>
+            void handleDropAccountsForActiveGroupOrder(event, account.id)
+          }
         >
           <div className="card-top">
             <div className="card-select">
@@ -6389,6 +6691,10 @@ export function CodexAccountsPage() {
                 >
                   <FolderPlus size={14} />
                 </button>
+                {renderActiveGroupOrderControls(
+                  account.id,
+                  "card-action-btn",
+                )}
                 {activeGroupId && (
                   <button
                     className="card-action-btn"
@@ -6513,6 +6819,75 @@ export function CodexAccountsPage() {
       "codex.localAccess.emptyMembers",
       "当前集合暂无账号",
     );
+    const localAccessHealth = localAccessState?.health ?? null;
+    const localAccessAvailableAccountCount =
+      (localAccessHealth?.healthyCount ?? 0) +
+      (localAccessHealth?.estimatedAvailableCount ?? 0);
+    const localAccessBlockedAccountCount =
+      (localAccessHealth?.exhaustedCount ?? 0) +
+      (localAccessHealth?.coolingCount ?? 0) +
+      (localAccessHealth?.manualRequiredCount ?? 0) +
+      (localAccessHealth?.disabledCount ?? 0) +
+      (localAccessHealth?.activeModelCooldownCount ?? 0);
+    const localAccessPoolUnavailableReasonParts: string[] = [];
+    if ((localAccessHealth?.exhaustedCount ?? 0) > 0) {
+      localAccessPoolUnavailableReasonParts.push(
+        t("codex.localAccess.poolUnavailable.exhausted", {
+          count: localAccessHealth?.exhaustedCount ?? 0,
+          defaultValue: "额度耗尽 {{count}} 个",
+        }),
+      );
+    }
+    if (
+      (localAccessHealth?.coolingCount ?? 0) +
+        (localAccessHealth?.activeModelCooldownCount ?? 0) >
+      0
+    ) {
+      localAccessPoolUnavailableReasonParts.push(
+        t("codex.localAccess.poolUnavailable.cooling", {
+          count:
+            (localAccessHealth?.coolingCount ?? 0) +
+            (localAccessHealth?.activeModelCooldownCount ?? 0),
+          defaultValue: "冷却中 {{count}} 个",
+        }),
+      );
+    }
+    if ((localAccessHealth?.manualRequiredCount ?? 0) > 0) {
+      localAccessPoolUnavailableReasonParts.push(
+        t("codex.localAccess.poolUnavailable.manualRequired", {
+          count: localAccessHealth?.manualRequiredCount ?? 0,
+          defaultValue: "需人工处理 {{count}} 个",
+        }),
+      );
+    }
+    if ((localAccessHealth?.disabledCount ?? 0) > 0) {
+      localAccessPoolUnavailableReasonParts.push(
+        t("codex.localAccess.poolUnavailable.disabled", {
+          count: localAccessHealth?.disabledCount ?? 0,
+          defaultValue: "已禁用 {{count}} 个",
+        }),
+      );
+    }
+    const localAccessPoolUnavailableMessage =
+      localAccessCollection &&
+      configuredMemberCount > 0 &&
+      localAccessHealth &&
+      localAccessAvailableAccountCount === 0 &&
+      localAccessBlockedAccountCount > 0
+        ? localAccessHealth.exhaustedCount >= configuredMemberCount &&
+          localAccessBlockedAccountCount === localAccessHealth.exhaustedCount
+          ? t(
+              "codex.localAccess.poolUnavailable.allExhausted",
+              "API 服务号池账号额度均已耗尽，请刷新配额、调整号池或恢复账号后重试",
+            )
+          : t("codex.localAccess.poolUnavailable.blocked", {
+              reasons:
+                localAccessPoolUnavailableReasonParts.join("，") ||
+                t("codex.localAccess.poolUnavailable.unknown", "状态未知"),
+              defaultValue:
+                "API 服务号池暂无可调度账号（{{reasons}}）；请刷新配额、调整号池或恢复账号后重试",
+            })
+        : null;
 
     return (
       <div
@@ -6524,6 +6899,10 @@ export function CodexAccountsPage() {
             ? "is-account-drop-target"
             : ""
         }`}
+        role="button"
+        tabIndex={0}
+        onClick={handleLocalAccessCardClick}
+        onKeyDown={handleLocalAccessCardKeyDown}
         onDragOver={(event) =>
           handleAccountDropTargetDragOver(
             event,
@@ -6870,6 +7249,13 @@ export function CodexAccountsPage() {
               </div>
             )}
 
+            {localAccessPoolUnavailableMessage && (
+              <div className="quota-error-inline">
+                <CircleAlert size={14} />
+                <span>{localAccessPoolUnavailableMessage}</span>
+              </div>
+            )}
+
             {localAccessState?.lastError && (
               <div className="quota-error-inline">
                 <CircleAlert size={14} />
@@ -6993,7 +7379,7 @@ export function CodexAccountsPage() {
 
     if (!activeGroupId && !groupByTag) {
       cards.push(
-        ...codexGroups.map((group) => {
+        ...displayCodexGroups.map((group) => {
           const groupAccounts = resolveGroupAccounts(group);
           const previewAccounts = groupAccounts.slice(0, 4);
           const hiddenCount = Math.max(
@@ -7183,13 +7569,24 @@ export function CodexAccountsPage() {
       const isFallbackLocalAccess = isEffectiveLocalAccess && !isInLocalAccess;
       const subscriptionInfo = resolveSubscriptionPresentation(account);
       const isDraggingAccount = draggedAccountIdSet.has(account.id);
+      const isGroupOrderDropTarget =
+        activeGroupOrderDropTargetId === account.id;
       return (
         <tr
           key={groupKey ? `${groupKey}-${account.id}` : account.id}
-          className={`${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""} ${isDraggingAccount ? "is-account-dragging" : ""}`}
+          className={`${isCurrent ? "current" : ""} ${isSessionActivated ? "session-activated" : ""} ${isNewApiAccount ? "new-api-exclusive" : ""} ${isDraggingAccount ? "is-account-dragging" : ""} ${isGroupOrderDropTarget ? "is-group-order-drop-target" : ""}`}
           draggable
           onDragStart={(event) => handleAccountDragStart(event, account.id)}
           onDragEnd={handleAccountDragEnd}
+          onDragOver={(event) =>
+            handleActiveGroupOrderDragOver(event, account.id)
+          }
+          onDragLeave={(event) =>
+            handleActiveGroupOrderDragLeave(event, account.id)
+          }
+          onDrop={(event) =>
+            void handleDropAccountsForActiveGroupOrder(event, account.id)
+          }
         >
           <td>
             <input
@@ -7512,6 +7909,7 @@ export function CodexAccountsPage() {
               >
                 <FolderPlus size={14} />
               </button>
+              {renderActiveGroupOrderControls(account.id, "action-btn")}
               {activeGroupId && (
                 <button
                   className="action-btn"
@@ -7581,7 +7979,7 @@ export function CodexAccountsPage() {
   const renderGroupTableRows = () => {
     if (activeGroupId || groupByTag) return null;
 
-    const rows: ReactElement[] = codexGroups.map((group) => {
+    const rows: ReactElement[] = displayCodexGroups.map((group) => {
       const groupAccounts = resolveGroupAccounts(group);
       const groupDropTarget = makeCodexGroupDropTarget(group.id);
       return (
@@ -10072,7 +10470,22 @@ export function CodexAccountsPage() {
                               type="button"
                               className="folder-icon-btn"
                               onClick={() =>
-                                moveCustomSortAccount(account.id, "up")
+                                moveCustomSortAccount(account.id, "first")
+                              }
+                              disabled={index === 0}
+                              title={t("codex.sort.customMoveTop", "置顶")}
+                              aria-label={t(
+                                "codex.sort.customMoveTop",
+                                "置顶",
+                              )}
+                            >
+                              <ChevronsUp size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="folder-icon-btn"
+                              onClick={() =>
+                                moveCustomSortAccount(account.id, "previous")
                               }
                               disabled={index === 0}
                               title={t("codex.sort.customMoveUp", "上移")}
@@ -10084,7 +10497,7 @@ export function CodexAccountsPage() {
                               type="button"
                               className="folder-icon-btn"
                               onClick={() =>
-                                moveCustomSortAccount(account.id, "down")
+                                moveCustomSortAccount(account.id, "next")
                               }
                               disabled={index === customSortAccounts.length - 1}
                               title={t("codex.sort.customMoveDown", "下移")}
@@ -10094,6 +10507,21 @@ export function CodexAccountsPage() {
                               )}
                             >
                               <ArrowDown size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="folder-icon-btn"
+                              onClick={() =>
+                                moveCustomSortAccount(account.id, "last")
+                              }
+                              disabled={index === customSortAccounts.length - 1}
+                              title={t("codex.sort.customMoveBottom", "置底")}
+                              aria-label={t(
+                                "codex.sort.customMoveBottom",
+                                "置底",
+                              )}
+                            >
+                              <ChevronsDown size={14} />
                             </button>
                           </div>
                         </div>

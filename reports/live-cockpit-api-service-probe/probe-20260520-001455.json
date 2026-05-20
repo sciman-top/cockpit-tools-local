@@ -1,0 +1,346 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-20T00:15:22.5246544+08:00",
+  "overall": "fail",
+  "configRestored": true,
+  "originalMode": {
+    "mode": "direct_projection",
+    "accountKind": "api",
+    "currentAccountId": "codex_apikey_8b8853f15e823dc53bd156163035bc78",
+    "updatedAt": 1779204531157
+  },
+  "originalAccountCount": 2,
+  "probePort": 45335,
+  "results": [
+    {
+      "orderName": "configured",
+      "accountIds": [
+        "codex_227bd75cc227b04a1668567c0f0576a4",
+        "codex_4403b30265823bd3a761050646d6d2cb"
+      ],
+      "requestId": "live-failover-20260520-001455-configured",
+      "baseUrl": "http://127.0.0.1:45335/v1",
+      "port": 45335,
+      "httpStatus": 400,
+      "contentType": "application/json; charset=utf-8",
+      "bodyLength": 24,
+      "bodyHasOK": false,
+      "latencyMs": 1468,
+      "fallbackSeen": false,
+      "selected200": false,
+      "upstream200": false,
+      "phases": [
+        "listener",
+        "auth_projection",
+        "admission_attempt",
+        "upstream_forward",
+        "upstream_forward",
+        "classifier",
+        "health_update",
+        "final_response"
+      ],
+      "statuses": [
+        400,
+        400,
+        400,
+        400
+      ],
+      "auditEvents": [
+        {
+          "timestamp": 1779207296321,
+          "requestId": "live-failover-20260520-001455-configured",
+          "phase": "listener",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "accepted",
+          "detail": {
+            "method": "POST"
+          }
+        },
+        {
+          "timestamp": 1779207296390,
+          "requestId": "live-failover-20260520-001455-configured",
+          "phase": "auth_projection",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": null,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "prepared",
+          "detail": {
+            "source": "prepared_account"
+          }
+        },
+        {
+          "timestamp": 1779207296390,
+          "requestId": "live-failover-20260520-001455-configured",
+          "phase": "admission_attempt",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": null,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "started",
+          "detail": {
+            "attempt": "1",
+            "model_key": "gpt-5.5"
+          }
+        },
+        {
+          "timestamp": 1779207296398,
+          "requestId": "live-failover-20260520-001455-configured",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": null,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "send_started",
+          "detail": {
+            "model_key": "gpt-5.5"
+          }
+        },
+        {
+          "timestamp": 1779207297725,
+          "requestId": "live-failover-20260520-001455-configured",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": 400,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "response_received",
+          "detail": {
+            "model_key": "gpt-5.5"
+          }
+        },
+        {
+          "timestamp": 1779207297727,
+          "requestId": "live-failover-20260520-001455-configured",
+          "phase": "classifier",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": 400,
+          "errorType": "unknown",
+          "streamState": null,
+          "outcome": "error",
+          "detail": {
+            "failover_safe": "false",
+            "manual_required": "false",
+            "scope": "unknown",
+            "source": "upstream"
+          }
+        },
+        {
+          "timestamp": 1779207297742,
+          "requestId": "live-failover-20260520-001455-configured",
+          "phase": "health_update",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": 400,
+          "errorType": "unknown",
+          "streamState": null,
+          "outcome": "recorded",
+          "detail": {
+            "failover_safe": "false",
+            "manual_required": "false",
+            "scope": "unknown",
+            "source": "upstream"
+          }
+        },
+        {
+          "timestamp": 1779207297745,
+          "requestId": "live-failover-20260520-001455-configured",
+          "phase": "final_response",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": 400,
+          "errorType": "upstream_status",
+          "streamState": null,
+          "outcome": "error",
+          "detail": {
+            "latency_ms": "1423"
+          }
+        }
+      ],
+      "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-cockpit-api-service-probe\\configured.stdout.log",
+      "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-cockpit-api-service-probe\\configured.stderr.log"
+    },
+    {
+      "orderName": "reversed",
+      "accountIds": [
+        "codex_4403b30265823bd3a761050646d6d2cb",
+        "codex_227bd75cc227b04a1668567c0f0576a4"
+      ],
+      "requestId": "live-failover-20260520-001455-reversed",
+      "baseUrl": "http://127.0.0.1:45335/v1",
+      "port": 45335,
+      "httpStatus": 400,
+      "contentType": "application/json; charset=utf-8",
+      "bodyLength": 24,
+      "bodyHasOK": false,
+      "latencyMs": 1382,
+      "fallbackSeen": false,
+      "selected200": false,
+      "upstream200": false,
+      "phases": [
+        "listener",
+        "auth_projection",
+        "admission_attempt",
+        "upstream_forward",
+        "upstream_forward",
+        "classifier",
+        "health_update",
+        "final_response"
+      ],
+      "statuses": [
+        400,
+        400,
+        400,
+        400
+      ],
+      "auditEvents": [
+        {
+          "timestamp": 1779207320308,
+          "requestId": "live-failover-20260520-001455-reversed",
+          "phase": "listener",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "accepted",
+          "detail": {
+            "method": "POST"
+          }
+        },
+        {
+          "timestamp": 1779207320378,
+          "requestId": "live-failover-20260520-001455-reversed",
+          "phase": "auth_projection",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": null,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "prepared",
+          "detail": {
+            "source": "prepared_account"
+          }
+        },
+        {
+          "timestamp": 1779207320379,
+          "requestId": "live-failover-20260520-001455-reversed",
+          "phase": "admission_attempt",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": null,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "started",
+          "detail": {
+            "attempt": "1",
+            "model_key": "gpt-5.5"
+          }
+        },
+        {
+          "timestamp": 1779207320390,
+          "requestId": "live-failover-20260520-001455-reversed",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": null,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "send_started",
+          "detail": {
+            "model_key": "gpt-5.5"
+          }
+        },
+        {
+          "timestamp": 1779207321630,
+          "requestId": "live-failover-20260520-001455-reversed",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": 400,
+          "errorType": null,
+          "streamState": null,
+          "outcome": "response_received",
+          "detail": {
+            "model_key": "gpt-5.5"
+          }
+        },
+        {
+          "timestamp": 1779207321632,
+          "requestId": "live-failover-20260520-001455-reversed",
+          "phase": "classifier",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": 400,
+          "errorType": "unknown",
+          "streamState": null,
+          "outcome": "error",
+          "detail": {
+            "failover_safe": "false",
+            "manual_required": "false",
+            "scope": "unknown",
+            "source": "upstream"
+          }
+        },
+        {
+          "timestamp": 1779207321647,
+          "requestId": "live-failover-20260520-001455-reversed",
+          "phase": "health_update",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": 400,
+          "errorType": "unknown",
+          "streamState": null,
+          "outcome": "recorded",
+          "detail": {
+            "failover_safe": "false",
+            "manual_required": "false",
+            "scope": "unknown",
+            "source": "upstream"
+          }
+        },
+        {
+          "timestamp": 1779207321651,
+          "requestId": "live-failover-20260520-001455-reversed",
+          "phase": "final_response",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:b13854bc4d53",
+          "status": 400,
+          "errorType": "upstream_status",
+          "streamState": null,
+          "outcome": "error",
+          "detail": {
+            "latency_ms": "1342"
+          }
+        }
+      ],
+      "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-cockpit-api-service-probe\\reversed.stdout.log",
+      "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-cockpit-api-service-probe\\reversed.stderr.log"
+    }
+  ]
+}

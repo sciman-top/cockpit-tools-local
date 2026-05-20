@@ -146,6 +146,33 @@ export async function removeAccountsFromCodexGroup(groupId: string, accountIds: 
   return group;
 }
 
+export async function updateCodexGroupAccountOrder(
+  groupId: string,
+  accountIds: string[],
+): Promise<CodexAccountGroup | null> {
+  const groups = await loadGroups();
+  const group = groups.find((g) => g.id === groupId);
+  if (!group) return null;
+
+  const currentIds = new Set(group.accountIds);
+  const seen = new Set<string>();
+  const nextIds: string[] = [];
+  for (const accountId of accountIds) {
+    if (!currentIds.has(accountId) || seen.has(accountId)) continue;
+    nextIds.push(accountId);
+    seen.add(accountId);
+  }
+  for (const accountId of group.accountIds) {
+    if (seen.has(accountId)) continue;
+    nextIds.push(accountId);
+    seen.add(accountId);
+  }
+
+  group.accountIds = nextIds;
+  await saveGroups(groups);
+  return group;
+}
+
 /** 清理不存在的账号ID（当账号被删除时调用） */
 export async function cleanupDeletedCodexAccounts(existingAccountIds: Set<string>): Promise<void> {
   const groups = await loadGroups();

@@ -18,11 +18,6 @@ param(
   [switch]$AssertCodexCliConfigUntouched,
   [string]$CodexHome = (Join-Path $HOME ".codex"),
   [switch]$AppSafeIsolatedProbe,
-  [switch]$AutoPopulateProbeAccountPool,
-  [ValidateRange(2, 3)]
-  [int]$AutoPopulateProbeAccountCount = 2,
-  [ValidateRange(2, 20)]
-  [int]$AutoPopulateProbeMaxRefreshAttempts = 2,
   [switch]$AutoDrainFirstFreeAccountUntilFallback,
   [ValidateRange(1, 200)]
   [int]$AutoDrainMaxRequests = 30,
@@ -38,14 +33,10 @@ $ErrorActionPreference = "Stop"
 $liveUpstreamRiskRequests = [ordered]@{
   runUpstreamSmoke = [bool]$RunUpstreamSmoke
   runCodexExecSmoke = [bool]$RunCodexExecSmoke
-  autoPopulateProbeAccountPool = [bool]$AutoPopulateProbeAccountPool
   autoDrainFirstFreeAccountUntilFallback = [bool]$AutoDrainFirstFreeAccountUntilFallback
 }
 $liveUpstreamRiskRequested = [bool](@($liveUpstreamRiskRequests.GetEnumerator() | Where-Object { $_.Value }).Count)
 $expandedLiveUpstreamRiskReasons = @()
-if ($AutoPopulateProbeAccountPool -and $AutoPopulateProbeMaxRefreshAttempts -gt 2) {
-  $expandedLiveUpstreamRiskReasons += "auto_populate_refresh_attempts_gt_2"
-}
 if ($AutoDrainFirstFreeAccountUntilFallback -and $AutoDrainMaxRequests -gt 30) {
   $expandedLiveUpstreamRiskReasons += "drain_max_requests_gt_30"
 }
@@ -59,7 +50,6 @@ if ($liveUpstreamRiskRequested -and -not $AcknowledgeLiveUpstreamRisk) {
     reason = "live_upstream_risk_ack_required"
     requiredSwitch = "-AcknowledgeLiveUpstreamRisk"
     requested = $liveUpstreamRiskRequests
-    maxRefreshAttempts = $AutoPopulateProbeMaxRefreshAttempts
     drainMaxRequests = $AutoDrainMaxRequests
     drainRequestIntervalSeconds = $AutoDrainRequestIntervalSeconds
   } | ConvertTo-Json -Depth 8
@@ -72,14 +62,12 @@ if ($expandedLiveUpstreamRiskReasons.Count -gt 0 -and -not $AcknowledgeExpandedL
     reason = "expanded_live_upstream_risk_ack_required"
     requiredSwitch = "-AcknowledgeExpandedLiveUpstreamRisk"
     expandedReasons = @($expandedLiveUpstreamRiskReasons)
-    maxRefreshAttempts = $AutoPopulateProbeMaxRefreshAttempts
     drainMaxRequests = $AutoDrainMaxRequests
     drainRequestIntervalSeconds = $AutoDrainRequestIntervalSeconds
   } | ConvertTo-Json -Depth 8
   exit 2
 }
 
-. (Join-Path $PSScriptRoot "lib\local-hardened-api-probe-account-pool.ps1")
 $script:LiveDataRoot = $DataRoot
 $script:ProbeDataRoot = $DataRoot
 $script:AppSafeProbe = [ordered]@{
@@ -193,21 +181,6 @@ function Get-UniqueTrimmedStrings {
     $result += $text
   }
   $result
-}
-
-function Resolve-ProbeOAuthAccountPool {
-  param(
-    [object[]]$ExistingAccountIds,
-    [int]$RequiredCount
-  )
-
-  Resolve-CockpitProbeOAuthAccountPool `
-    -ExistingAccountIds $ExistingAccountIds `
-    -RequiredCount $RequiredCount `
-    -DataRoot (Get-LiveDataRoot) `
-    -RefreshQuotaScript ${function:Invoke-CodexWhamUsageForProbeSelection} `
-    -MaxRefreshAttempts $AutoPopulateProbeMaxRefreshAttempts `
-    -AllowFirstAccountDrain:$AutoDrainFirstFreeAccountUntilFallback
 }
 
 function Get-CodexCliGuardState {
@@ -393,23 +366,9 @@ function Set-TemporaryFallbackProbeConfig {
   }
 
   $config = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
-  $autoPopulatePool = [ordered]@{
-    requested = [bool]$AutoPopulateProbeAccountPool
-    status = if ($AutoPopulateProbeAccountPool) { "pending" } else { "not_requested" }
-  }
-  if ($AutoPopulateProbeAccountPool) {
-    $autoPopulatePool = Resolve-ProbeOAuthAccountPool `
-      -ExistingAccountIds @($config.accountIds) `
-      -RequiredCount $AutoPopulateProbeAccountCount
-    Set-JsonProperty $config "accountIds" @($autoPopulatePool.accountIds)
-    if ($autoPopulatePool.Contains("accountIds")) {
-      $autoPopulatePool.Remove("accountIds")
-    }
-  }
-
   $accountCount = if ($config.accountIds) { @($config.accountIds).Count } else { 0 }
   if ($accountCount -lt 2) {
-    throw "fallback_probe 需要至少 2 个 accountIds，当前 accountCount=$accountCount；App-safe 验收可加 -AutoPopulateProbeAccountPool 从现有 OAuth 账号仓库自动补齐临时号池"
+    throw "fallback_probe 需要手动配置 2 到 3 个 API 服务号池账号，当前 accountCount=$accountCount；请先在 Cockpit API 服务号池中添加账号后再运行验收"
   }
 
   if ($null -eq $config.safetyConfig) {
@@ -439,7 +398,7 @@ function Set-TemporaryFallbackProbeConfig {
     status = "applied"
     path = $path
     accountCount = $accountCount
-    autoPopulateProbeAccountPool = $autoPopulatePool
+    accountPoolSource = "existing_config"
     enabled = $true
     maxRetryAccounts = 2
     fallbackMode = "next_request_only"
@@ -512,82 +471,6 @@ function Invoke-JsonRequest {
     retryAfter = $response.Headers["Retry-After"]
     contentType = $response.Headers["Content-Type"]
     body = if ($errorBody) { $errorBody } else { [string]$response.Content }
-  }
-}
-
-function Invoke-CodexWhamUsageForProbeSelection {
-  param([object]$Account)
-
-  $tokens = $Account.tokens
-  $accessToken = if ($tokens -and $tokens.access_token) { ([string]$tokens.access_token).Trim() } else { "" }
-  if (-not $accessToken) {
-    return [ordered]@{
-      status = "error"
-      source = "wham_usage_refresh"
-      error = "access_token_missing"
-    }
-  }
-
-  $headers = @{
-    Authorization = "Bearer $accessToken"
-    Accept = "application/json"
-  }
-  $chatgptAccountId = if ($Account.account_id) { ([string]$Account.account_id).Trim() } else { "" }
-  if ($chatgptAccountId) {
-    $headers["ChatGPT-Account-Id"] = $chatgptAccountId
-  }
-
-  $uri = "https://chatgpt.com/backend-api/wham/usage"
-  try {
-    $response = Invoke-WebRequest -Method "GET" -Uri $uri -Headers $headers -TimeoutSec 30 -SkipHttpErrorCheck
-  } catch {
-    return [ordered]@{
-      status = "error"
-      source = "wham_usage_refresh"
-      error = $_.Exception.Message
-    }
-  }
-
-  $statusCode = [int]$response.StatusCode
-  $body = [string]$response.Content
-  if ($statusCode -lt 200 -or $statusCode -ge 300) {
-    $detailCode = $null
-    try {
-      $errorJson = $body | ConvertFrom-Json
-      if ($errorJson.detail -and $errorJson.detail.code) {
-        $detailCode = [string]$errorJson.detail.code
-      } elseif ($errorJson.error -and $errorJson.error.code) {
-        $detailCode = [string]$errorJson.error.code
-      }
-    } catch {
-    }
-    return [ordered]@{
-      status = "error"
-      source = "wham_usage_refresh"
-      statusCode = $statusCode
-      detailCode = $detailCode
-      bodyLength = $body.Length
-    }
-  }
-
-  try {
-    $usage = $body | ConvertFrom-Json
-  } catch {
-    return [ordered]@{
-      status = "error"
-      source = "wham_usage_refresh"
-      statusCode = $statusCode
-      error = "usage_json_parse_failed"
-      bodyLength = $body.Length
-    }
-  }
-
-  [ordered]@{
-    status = "ok"
-    source = "wham_usage_refresh"
-    statusCode = $statusCode
-    usage = $usage
-    planType = if ($usage.plan_type) { [string]$usage.plan_type } else { $null }
   }
 }
 
@@ -1309,24 +1192,8 @@ if ($TemporaryFallbackConfig -and $Stage -ne "fallback_probe") {
   throw "-TemporaryFallbackConfig 只适用于 -Stage fallback_probe"
 }
 
-if ($AutoPopulateProbeAccountPool -and -not $AppSafeIsolatedProbe) {
-  throw "-AutoPopulateProbeAccountPool 只能与 -AppSafeIsolatedProbe 一起使用，避免改动 live API service 号池"
-}
-
-if ($AutoPopulateProbeAccountPool -and -not $TemporaryFallbackConfig) {
-  throw "-AutoPopulateProbeAccountPool 只能与 -TemporaryFallbackConfig 一起使用"
-}
-
-if ($AutoDrainFirstFreeAccountUntilFallback -and -not $AutoPopulateProbeAccountPool) {
-  throw "-AutoDrainFirstFreeAccountUntilFallback 只能与 -AutoPopulateProbeAccountPool 一起使用"
-}
-
 if ($AutoDrainFirstFreeAccountUntilFallback -and -not $RequireQuotaFallback) {
   throw "-AutoDrainFirstFreeAccountUntilFallback 需要同时传入 -RequireQuotaFallback"
-}
-
-if ($AutoPopulateProbeAccountPool -and $AutoPopulateProbeAccountCount -ne 2) {
-  throw "-AutoPopulateProbeAccountPool 的 fallback continuity 验收号池必须恰好 2 个账号：第一个 exhausted free OAuth，第二个 available free OAuth"
 }
 
 if ($AppSafeIsolatedProbe) {
@@ -1399,7 +1266,6 @@ $report = [ordered]@{
   runUpstreamSmoke = [bool]$RunUpstreamSmoke
   runCodexExecSmoke = [bool]$RunCodexExecSmoke
   requireQuotaFallback = [bool]$RequireQuotaFallback
-  autoPopulateProbeAccountPool = [bool]$AutoPopulateProbeAccountPool
   autoDrainFirstFreeAccountUntilFallback = [bool]$AutoDrainFirstFreeAccountUntilFallback
   autoDrainMaxRequests = $AutoDrainMaxRequests
   autoDrainRequestIntervalSeconds = $AutoDrainRequestIntervalSeconds
@@ -1431,9 +1297,7 @@ $report = [ordered]@{
     "use -RequireQuotaFallback when the acceptance target is real quota-exhaustion continuity; the report blocks unless audit shows 429, model cooldown, fallback selection, and 200",
     "use -StartEphemeralGateway to exercise the same gateway code path without switching live Codex provider",
     "use -TemporaryFallbackConfig only with -StartEphemeralGateway; the original codex_local_access.json is restored afterward",
-    "use -AppSafeIsolatedProbe to keep probe local access config, health, audit, and port allocation in an isolated temp data root",
-    "use -AutoPopulateProbeAccountPool only with -AppSafeIsolatedProbe; it refreshes wham/usage for OAuth candidates and writes exactly two free weekly OAuth account IDs only to the isolated probe config",
-    "AutoPopulateProbeAccountPool defaults to max 2 live wham/usage refreshes; raise -AutoPopulateProbeMaxRefreshAttempts only for an explicit wider scan",
+    "use -AppSafeIsolatedProbe to keep probe local access config, health, audit, and port allocation in an isolated temp data root; the probe copies the existing API service account pool and does not auto-populate accounts",
     "use -AutoDrainFirstFreeAccountUntilFallback only for explicit quota-drain acceptance; it sends bounded low-rate real requests until audit proves 429->fallback->200 or max requests is reached",
     "this script records hashes for ~/.codex/config.toml and ~/.codex/auth.json but does not read or write their contents"
   )

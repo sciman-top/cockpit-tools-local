@@ -1,8 +1,6 @@
 param(
   [string]$Model = "gpt-5.5",
   [int]$TimeoutSeconds = 900,
-  [ValidateRange(2, 20)]
-  [int]$MaxProbeQuotaRefreshAttempts = 2,
   [switch]$AcknowledgeLiveUpstreamRisk,
   [switch]$AcknowledgeExpandedLiveUpstreamRisk,
   [switch]$DrainFirstFreeAccountUntilFallback,
@@ -19,9 +17,6 @@ param(
 $ErrorActionPreference = "Stop"
 
 $expandedLiveUpstreamRiskReasons = @()
-if ($MaxProbeQuotaRefreshAttempts -gt 2) {
-  $expandedLiveUpstreamRiskReasons += "max_probe_quota_refresh_attempts_gt_2"
-}
 if ($DrainFirstFreeAccountUntilFallback -and $DrainMaxRequests -gt 30) {
   $expandedLiveUpstreamRiskReasons += "drain_max_requests_gt_30"
 }
@@ -37,10 +32,8 @@ if (-not $AcknowledgeLiveUpstreamRisk) {
     liveActions = @(
       "RunUpstreamSmoke"
       "RunCodexExecSmoke"
-      "AutoPopulateProbeAccountPool"
       "optional AutoDrainFirstFreeAccountUntilFallback"
     )
-    maxProbeQuotaRefreshAttempts = $MaxProbeQuotaRefreshAttempts
     drainFirstFreeAccountUntilFallback = [bool]$DrainFirstFreeAccountUntilFallback
     drainMaxRequests = $DrainMaxRequests
     drainRequestIntervalSeconds = $DrainRequestIntervalSeconds
@@ -54,7 +47,6 @@ if ($expandedLiveUpstreamRiskReasons.Count -gt 0 -and -not $AcknowledgeExpandedL
     reason = "expanded_live_upstream_risk_ack_required"
     requiredSwitch = "-AcknowledgeExpandedLiveUpstreamRisk"
     expandedReasons = @($expandedLiveUpstreamRiskReasons)
-    maxProbeQuotaRefreshAttempts = $MaxProbeQuotaRefreshAttempts
     drainMaxRequests = $DrainMaxRequests
     drainRequestIntervalSeconds = $DrainRequestIntervalSeconds
   } | ConvertTo-Json -Depth 8
@@ -148,9 +140,6 @@ $smokeArgs = @(
   "-StartEphemeralGateway",
   "-TemporaryFallbackConfig",
   "-AppSafeIsolatedProbe",
-  "-AutoPopulateProbeAccountPool",
-  "-AutoPopulateProbeMaxRefreshAttempts",
-  $MaxProbeQuotaRefreshAttempts,
   "-AcknowledgeLiveUpstreamRisk",
   "-RunUpstreamSmoke",
   "-RunCodexExecSmoke",
@@ -227,17 +216,6 @@ if ($exitCode -ne 0) {
 }
 
 $report = Get-SmokeJsonFromStdout $stdoutPath
-$roles = @(
-  $report.temporaryFallbackConfig.autoPopulateProbeAccountPool.selectedAccountRoles |
-    ForEach-Object {
-      [ordered]@{
-        role = $_.role
-        planType = $_.planType
-        quotaKind = $_.quotaKind
-        weeklyRemainingPercent = $_.weeklyRemainingPercent
-      }
-    }
-)
 
 $summary = [ordered]@{
   overall = [string]$report.overall
@@ -246,13 +224,9 @@ $summary = [ordered]@{
   elapsedSeconds = [math]::Round(((Get-Date) - $startedAt).TotalSeconds, 1)
   liveUpstreamRiskAcknowledged = [bool]$AcknowledgeLiveUpstreamRisk
   expandedLiveUpstreamRiskAcknowledged = [bool]$AcknowledgeExpandedLiveUpstreamRisk
-  selectionOrder = $report.temporaryFallbackConfig.autoPopulateProbeAccountPool.selectionOrder
-  refreshAttemptCount = $report.temporaryFallbackConfig.autoPopulateProbeAccountPool.refreshAttemptCount
-  maxRefreshAttempts = $report.temporaryFallbackConfig.autoPopulateProbeAccountPool.maxRefreshAttempts
+  configuredAccountCount = [int]$report.temporaryFallbackConfig.accountCount
   drainRequested = [bool]$report.autoDrainFirstFreeAccountUntilFallback
-  drainRequired = [bool]$report.temporaryFallbackConfig.autoPopulateProbeAccountPool.drainRequired
   drainResult = Get-ResultStatus $report "quota_drain_until_fallback"
-  selectedRoles = $roles
   quotaFallback = Get-ResultStatus $report "quota_fallback_audit_contract"
   codexExec = Get-ResultStatus $report "codex_exec_task_e2e"
   cliUntouched = Get-ResultStatus $report "codex_cli_config_auth_untouched"

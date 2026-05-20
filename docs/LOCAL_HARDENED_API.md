@@ -61,11 +61,20 @@ API service 的默认安全配置等价于 `balanced_self_use`；需要更保守
 - `maxConcurrentRequests = 1`
 - `minRequestIntervalSeconds >= 30`
 - `fallbackMode = next_request_only`
-- 只在下一请求边界选择下一个 healthy 账号。
+- `maxRetryAccounts = 2`
+- 真实 quota/cooldown 429 且尚未向客户端写出 stream 时，同一次请求可以重投递到下一个 healthy 账号；后续独立请求也必须避开 exhausted/cooldown 账号。
 
 ## Preset 恢复入口
 
 API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_safety_preset`，把当前集合恢复到对应 safety config，并重置为 hardened fill-first 起点。Preset 不会改账号池成员、端口、API key 或运行模式。
+
+## 账号池成员与切换
+
+- “添加至 API 服务”保存的账号列表是 API 服务号池的配置真相；`effectiveAccountIds` 应与该列表一致。
+- 健康状态、cooldown、exhausted、manual-required 只影响运行时是否可调度，不应把账号从配置号池或 UI 有效号池里隐式移除。
+- 在账号卡片或分组内点击普通“切换”只切换当前 Codex 账号，不清空、不替换 API 服务号池；只有显式开启“跟随当前账号”时才同步号池，且同步方式是把当前账号置前并保留原成员。
+- 在账号卡片主页点击“API 服务”卡片本体进入服务面板；卡片内“添加账号”按钮进入号池成员选择。
+- 当号池成员全部不可调度时，请求方会收到本地 429/503 JSON error；卡片根据 health summary 显示“额度均已耗尽”或“暂无可调度账号”的原因摘要。
 
 ## 单号池实跑优先级
 
@@ -142,7 +151,6 @@ data root，临时 gateway 只读写该目录下的 `codex_local_access*.json/js
   -StartEphemeralGateway `
   -TemporaryFallbackConfig `
   -AppSafeIsolatedProbe `
-  -AutoPopulateProbeAccountPool `
   -AcknowledgeLiveUpstreamRisk `
   -RunUpstreamSmoke `
   -RequireQuotaFallback `
@@ -155,7 +163,7 @@ data root，临时 gateway 只读写该目录下的 `codex_local_access*.json/js
 临时 `CODEX_HOME` 的 `codex exec --ephemeral`，让它通过隔离 gateway 执行一个真实小型编码任务；
 当前 Codex App 和当前 CLI 会话仍不参与本次任务流量：
 
-推荐直接使用一键验收入口，它会自动传入 App-safe、临时 fallback、自动号池、上游 smoke、nested
+推荐直接使用一键验收入口。它会自动传入 App-safe、临时 fallback、上游 smoke、nested
 `codex exec`、CLI/App 守卫和 report 参数，并输出简短 JSON 摘要：
 
 ```powershell
@@ -168,11 +176,10 @@ data root，临时 gateway 只读写该目录下的 `codex_local_access*.json/js
 .\scripts\smoke-local-hardened-api.ps1 `
   -Stage fallback_probe `
   -Model gpt-5.5 `
-  -StartEphemeralGateway `
-  -TemporaryFallbackConfig `
-  -AppSafeIsolatedProbe `
-  -AutoPopulateProbeAccountPool `
-  -AcknowledgeLiveUpstreamRisk `
+ -StartEphemeralGateway `
+ -TemporaryFallbackConfig `
+ -AppSafeIsolatedProbe `
+ -AcknowledgeLiveUpstreamRisk `
   -RunCodexExecSmoke `
   -RequireQuotaFallback `
   -AssertCodexCliConfigUntouched `
@@ -190,29 +197,18 @@ audit 中同时出现 `429 usage_limit_reached`、`model_cooldown_applied`、`fa
 `workspace-write` probe 中把写入判为 read-only；报告会记录
 `sandboxBypassForIsolatedWorkspace = true`。不要把该 bypass 用到 live CLI/App 会话。
 
-`-AutoPopulateProbeAccountPool` 只在 `-AppSafeIsolatedProbe` 下可用。它会从现有 Cockpit
-`codex_accounts.json` 和账号详情目录中扫描账号。选择顺序是先检查当前 API service 号池中已有的
-账号；若不能凑齐验收所需的 `exhausted + available`，再利用账号详情里的 cached quota 按验收优先级
-预排序全库候选，并只对候选 OAuth 账号即时请求 `wham/usage` 刷新配额判定。普通 API key 账号、
-非 free 账号、需要重新认证或已禁用账号都不会进入测试号池。
-free 账号按当前上游语义只接受 weekly-only quota：`primary_window.limit_window_seconds = 604800`
-且 `secondary_window = null`，不把它误判成 5h quota。
+fallback continuity 验收只使用当前 API service 号池中已经手动添加的账号。脚本不会扫描
+`codex_accounts.json`、不会自动挑选账号、不会刷新 `wham/usage`，也不会把账号写入临时号池。
+运行前请在 Cockpit API 服务号池中手动放入 2 到 3 个账号；如果号池为空或少于 2 个账号，
+`fallback_probe` 会返回 `blocked`，提示先添加账号后再运行验收。
 
-为避免验收脚本为了找账号而扫大号池，任何真实上游请求、`wham/usage` 配额刷新、自动号池或 drain
+为避免验收脚本为了找账号而扫大号池，任何真实上游请求、配额刷新或 drain
 都必须显式传入 `-AcknowledgeLiveUpstreamRisk`，否则脚本返回 `blocked`，不会访问上游。
-`-AutoPopulateProbeAccountPool` 默认最多只做 2 次真实 `wham/usage` 刷新；找不到满足条件的账号就阻断，
-不继续刷新更多账号。只有在明确接受扩大扫描风险时，才手动提高
-`-AutoPopulateProbeMaxRefreshAttempts`；超过 2 次刷新、超过默认 drain 请求量，或把 drain 间隔降到
-20 秒以下，还必须同时传入 `-AcknowledgeExpandedLiveUpstreamRisk`。一键验收入口对应参数是
-`-MaxProbeQuotaRefreshAttempts`。
+超过默认 drain 请求量，或把 drain 间隔降到 20 秒以下，还必须同时传入
+`-AcknowledgeExpandedLiveUpstreamRisk`。
 
-自动号池会强制写入恰好 2 个账号到临时 `codex_local_access.json`：第一个必须是 refreshed 后
-`exhausted` 的 free OAuth weekly 账号，第二个必须是 refreshed 后仍 `available` 的 free OAuth
-weekly 账号；多余账号会被排除。报告只记录 `selectedAccountHashes`、角色和 weekly 百分比，不记录
-原始 accountId 或 token；不会写 live 号池，也不会改当前 Codex CLI/App 的 `config.toml` / `auth.json`。
-
-该命令适合验证“第一个账号真实 429 后，同一请求是否选择下一个账号并返回 200”。如果刷新后找不到
-exhausted + available 这一对 free weekly OAuth 账号，脚本会阻断，不能当作额度耗尽不中断验收通过。
+该命令适合验证“手动号池中的某个账号真实 429 后，同一请求是否选择下一个健康账号并返回 200”。
+如果手动号池无法产生 `429 -> fallback -> 200` 审计链，脚本会阻断，不能当作额度耗尽不中断验收通过。
 不要用它替代 release binary 部署验证；
 替换 release exe、重启 Cockpit/Codex App、kill `codex` 或改当前 CLI provider 仍需要单独确认。
 
@@ -228,10 +224,59 @@ exhausted + available 这一对 free weekly OAuth 账号，脚本会阻断，不
   -DrainRequestIntervalSeconds 22
 ```
 
-该模式仍只接受 OAuth free weekly 账号；第 1 个账号可以是 `available`，第 2 个账号必须是
-`available`。脚本会通过隔离 gateway 低频发送小请求消耗第 1 个账号，直到 audit 证明
+该模式使用当前手动号池。脚本会通过隔离 gateway 低频发送小请求，直到 audit 证明
 `429 usage_limit_reached -> fallback_selected -> 200`，或达到 `-DrainMaxRequests` 后阻断停止。
 该模式默认关闭，且不会用于普通验收。
+
+## Live Codex App 手动实跑旁路监测
+
+若当前 Codex CLI 会话必须保持 Direct API/OAuth，不允许本会话改 `~/.codex/config.toml` /
+`~/.codex/auth.json`，但需要人工把 Codex App 切到 Cockpit API service 后跑一段真实编码任务，可在
+CLI 会话中启动只读监测入口：
+
+```powershell
+.\scripts\monitor-live-codex-app-cockpit-acceptance.ps1 `
+  -DurationSeconds 900 `
+  -RequireQuotaFallback `
+  -RequireStreamCompletion `
+  -RequireCliConfigUntouched `
+  -RequireAppStable `
+  -WriteReport
+```
+
+`-StopWhenSatisfied` 只适合单次快速验收，观察到第一条完整链路后会提前退出。若要连续观察后续每一次请求、
+多次账号切换、以及前序 stream 是否继续完成，不要加 `-StopWhenSatisfied`，并按验收目标提高计数：
+
+```powershell
+.\scripts\monitor-live-codex-app-cockpit-acceptance.ps1 `
+  -DurationSeconds 1800 `
+  -RequireQuotaFallback `
+  -RequireStreamCompletion `
+  -RequireCliConfigUntouched `
+  -RequireAppStable `
+  -RequiredFallbackCycles 3 `
+  -RequiredDistinctHealthyAccounts 3 `
+  -RequiredCompletedStreams 3 `
+  -WriteReport
+```
+
+该脚本只读取 live `codex_local_access_audit.jsonl`、记录 Codex App 进程集合，并对
+`~/.codex/config.toml` / `~/.codex/auth.json` 取 hash 证明当前 CLI 配置是否变化；不会启动、停止、
+重启或 kill Codex App / Codex CLI / Cockpit service，也不会切 provider、刷新 quota 或消耗上游额度。
+它用于回答人工实跑期间是否观察到：
+
+- `429 usage_limit_reached -> model_cooldown_applied -> fallback_selected -> 200`
+- fallback 后由同一个 `requestId` 内的不同健康账号返回 `200`
+- 已接纳 stream 完成，且没有在 stream 已开始后被本地 cooldown 中断
+- 历史 `exceeded retry limit, last status: 429 Too Many Requests` 是否复现
+- 当前 CLI `config.toml` / `auth.json` 是否保持不变，以及 Codex App 进程集合是否稳定
+
+报告中的 `audit.fallbackTransitions`、`audit.streamSummaries` 和 `audit.accountSummaries` 用于复盘多账号切换：
+每次 fallback 的 exhausted account hash、同请求后续 `200` 的 healthy account hash、每个 request 的 stream 状态、
+以及每个 account hash 的 `200/429/cooldown/completed` 计数都会落入报告。
+
+该 monitor 不创建临时 provider 配置，因此报告中的 `temporaryConfig.restored` 为 `not_applicable`。
+如果需要由脚本创建并恢复临时配置，继续使用上面的 App-safe isolated acceptance 入口。
 
 若要验证 429 链路，优先使用真实业务请求自然返回的 429；脚本只记录状态码、`Retry-After`、health registry 和 audit phase，不记录 prompt/response。
 

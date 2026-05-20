@@ -94,17 +94,19 @@ if ($agents) {
   Assert-Contains $agents "AcknowledgeLiveUpstreamRisk" "AGENTS.md must require live upstream acknowledgement"
   Assert-Contains $agents "AcknowledgeExpandedLiveUpstreamRisk" "AGENTS.md must require expanded live upstream acknowledgement"
   Assert-Contains $agents "Cooldown recovery must be inferred from stored reset times/health registry" "AGENTS.md must forbid cooldown polling by default"
-  Assert-Contains $agents "default live quota refresh cap is 2 accounts" "AGENTS.md must preserve the default two-account refresh cap"
+  Assert-True ($agents -notmatch "AutoPopulateProbeAccountPool") "AGENTS.md must not document removed auto-populate pool mode"
 }
 
 Assert-Contains $doc "AcknowledgeLiveUpstreamRisk" "LOCAL_HARDENED_API.md must show live upstream acknowledgement"
 Assert-Contains $doc "AcknowledgeExpandedLiveUpstreamRisk" "LOCAL_HARDENED_API.md must show expanded live upstream acknowledgement"
-Assert-Matches $doc '默认最多只做\s*2\s*次真实\s*`wham/usage`\s*刷新' "LOCAL_HARDENED_API.md must document the two-refresh default cap"
+Assert-True ($doc -notmatch "AutoPopulateProbeAccountPool") "LOCAL_HARDENED_API.md must not document removed auto-populate pool mode"
+Assert-True ($doc -notmatch "自动号池") "LOCAL_HARDENED_API.md must not document automatic probe pool population"
 Assert-LiveUpstreamDocExamplesRequireAcknowledgement $repoRoot
 
 Assert-Contains $smoke "live_upstream_risk_ack_required" "smoke script must fail closed without live acknowledgement"
 Assert-Contains $smoke "expanded_live_upstream_risk_ack_required" "smoke script must fail closed for expanded live risk"
-Assert-Matches $smoke '\[int\]\$AutoPopulateProbeMaxRefreshAttempts\s*=\s*2' "smoke script must keep auto-populate refresh default at 2"
+Assert-True ($smoke -notmatch "AutoPopulateProbeAccountPool") "smoke script must not expose removed auto-populate pool switch"
+Assert-True ($smoke -notmatch "AutoPopulateProbeMaxRefreshAttempts") "smoke script must not expose removed auto-populate refresh switch"
 Assert-Matches $smoke '\[int\]\$AutoDrainRequestIntervalSeconds\s*=\s*22' "smoke script must keep drain interval default at 22 seconds"
 Assert-Matches $smoke '\$AutoDrainFirstFreeAccountUntilFallback\s+-and\s+\$AutoDrainRequestIntervalSeconds\s+-lt\s+20' "smoke script must guard drain intervals below 20 seconds"
 
@@ -123,8 +125,8 @@ Assert-True ($smokeBlocked.reason -eq "live_upstream_risk_ack_required") "smoke 
 
 $smokeExpandedBlockedOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "smoke-local-hardened-api.ps1") `
   -Stage fallback_probe `
-  -AutoPopulateProbeAccountPool `
-  -AutoPopulateProbeMaxRefreshAttempts 3 `
+  -AutoDrainFirstFreeAccountUntilFallback `
+  -AutoDrainMaxRequests 31 `
   -AcknowledgeLiveUpstreamRisk 2>$null
 Assert-True ($LASTEXITCODE -ne 0) "smoke script should block expanded refresh attempts without expanded acknowledgement"
 $smokeExpandedBlocked = Convert-JsonOutput $smokeExpandedBlockedOutput "smoke expanded-risk block"

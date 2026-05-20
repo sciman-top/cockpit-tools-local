@@ -358,7 +358,7 @@ npm install
 npm run tauri dev
 ```
 
-日常开发中，如果最新代码未运行，可直接启动 `npm run tauri dev` 便于实时查看桌面端实况。维护 Cockpit 且当前 Codex 正在使用时，先把 Codex 放到已验证可用的 Direct API 或 Direct OAuth 兜底，并用真实 `codex exec` 探针确认连通；执行开发或构建命令期间不要自动停止、重启、kill 或拉起 Codex App / `codex` 进程，构建后再复测 Codex 连通性。
+日常开发中，如果最新代码未运行且需要通过 `npm run dev`、`npm run tauri dev`、`npm run tauri build` 等长时间或影响会话的命令实时查看效果，先说明命令、实时验证原因、窗口/端口/单实例唤醒/资源占用/Codex 或 Cockpit 连续性影响，并询问当前任务是否允许执行。维护 Cockpit 且当前 Codex 正在使用时，先把 Codex 放到已验证可用的 Direct API 或 Direct OAuth 兜底，并用真实 `codex exec` 探针确认连通；未经当前任务明确授权，不要自动停止、重启、kill、拉起 Codex App / `codex` 进程，也不要自动启动开发或构建命令；授权执行后再复测 Codex 连通性。
 
 ### 构建产物
 

@@ -855,10 +855,32 @@ fn save_runtime_mode_state(state: &CodexRuntimeModeState) -> Result<(), String> 
 }
 
 fn should_sync_local_access_collection_on_account_switch(
-    mode: CodexRuntimeIntegrationMode,
+    _mode: CodexRuntimeIntegrationMode,
     collection: &CodexLocalAccessCollection,
 ) -> bool {
-    mode == CodexRuntimeIntegrationMode::CockpitApiService || collection.follow_current_account
+    collection.follow_current_account
+}
+
+fn build_follow_current_local_access_account_ids(
+    account_id: &str,
+    collection: &CodexLocalAccessCollection,
+) -> Vec<String> {
+    let mut account_ids = vec![account_id.to_string()];
+    account_ids.extend(
+        collection
+            .account_ids
+            .iter()
+            .filter(|existing_id| existing_id.as_str() != account_id)
+            .cloned(),
+    );
+    account_ids
+}
+
+fn build_projection_seed_local_access_account_ids(
+    account_id: &str,
+    collection: Option<&CodexLocalAccessCollection>,
+) -> Option<Vec<String>> {
+    collection.is_none().then(|| vec![account_id.to_string()])
 }
 
 fn repair_runtime_projection_history_visibility() -> Result<(), String> {
@@ -903,18 +925,16 @@ async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(
 }
 
 async fn materialize_cockpit_api_service_projection() -> Result<(), String> {
-    if let Some(current_account) = codex_account::get_current_account() {
-        let restrict_free_accounts = {
-            let runtime = gateway_runtime().lock().await;
-            runtime
-                .collection
-                .as_ref()
-                .map(|collection| collection.restrict_free_accounts)
-                .unwrap_or(false)
-        };
-        let _ =
-            save_local_access_accounts(vec![current_account.id.clone()], restrict_free_accounts)
-                .await?;
+    ensure_runtime_loaded_without_start().await?;
+    let seed_account_ids = {
+        let current_account = codex_account::get_current_account();
+        let runtime = gateway_runtime().lock().await;
+        current_account.and_then(|account| {
+            build_projection_seed_local_access_account_ids(&account.id, runtime.collection.as_ref())
+        })
+    };
+    if let Some(account_ids) = seed_account_ids {
+        let _ = save_local_access_accounts(account_ids, false).await?;
     }
 
     let state = snapshot_state().await?;
@@ -3208,7 +3228,7 @@ fn retry_failover_account_attempt_limit(config: &CodexLocalApiSafetyConfig) -> u
         return 1;
     }
 
-    (config.max_retry_accounts as usize)
+    (config.max_retry_accounts.max(2) as usize)
         .clamp(1, MAX_RETRY_CREDENTIALS_PER_REQUEST)
         .min(2)
 }
@@ -3216,13 +3236,7 @@ fn retry_failover_account_attempt_limit(config: &CodexLocalApiSafetyConfig) -> u
 fn build_effective_local_access_account_ids(
     collection: &CodexLocalAccessCollection,
 ) -> Vec<String> {
-    let account_limit = retry_failover_account_attempt_limit(&collection.safety_config);
-    collection
-        .account_ids
-        .iter()
-        .take(account_limit)
-        .cloned()
-        .collect()
+    collection.account_ids.clone()
 }
 
 fn build_routing_pool_account_ids(collection: &CodexLocalAccessCollection) -> Vec<String> {
@@ -3516,6 +3530,18 @@ fn status_for_pool_unavailable(summary: &PoolUnavailableSummary) -> u16 {
     }
 }
 
+fn should_use_pool_unavailable_summary(summary: &PoolUnavailableSummary) -> bool {
+    summary.total_count > 0
+        && summary.schedulable_count == 0
+        && (summary.exhausted_count
+            + summary.cooling_count
+            + summary.model_cooldown_count
+            + summary.manual_required_count
+            + summary.disabled_count
+            + summary.unknown_blocked_count)
+            > 0
+}
+
 fn build_pool_unavailable_message(model_key: &str, summary: &PoolUnavailableSummary) -> String {
     if summary.total_count == 0 {
         return "API 服务号池为空，请先加入账号".to_string();
@@ -3536,7 +3562,7 @@ fn build_pool_unavailable_message(model_key: &str, summary: &PoolUnavailableSumm
             );
         }
         return format!(
-            "{}API 服务号池账号额度均已耗尽，且未拿到上游 reset 时间；请刷新配额、切换账号或恢复账号后重试",
+            "{}API 服务号池账号额度均已耗尽，且未拿到上游 reset 时间；请刷新配额、调整号池或恢复账号后重试",
             model_prefix
         );
     }
@@ -5755,6 +5781,14 @@ fn normalize_local_api_safety_config(collection: &mut CodexLocalAccessCollection
         config.fallback_mode = defaults.fallback_mode;
         changed = true;
     }
+    if matches!(
+        config.fallback_mode,
+        CodexLocalApiFallbackMode::NextRequestOnly
+    ) && config.max_retry_accounts < 2
+    {
+        config.max_retry_accounts = 2;
+        changed = true;
+    }
 
     if !config.logging.redact_sensitive_values {
         config.logging.redact_sensitive_values = true;
@@ -5794,7 +5828,7 @@ fn local_api_safety_config_for_preset(
         }
         CodexLocalApiSafetyPresetId::QuotaDrainCareful => {
             config.min_request_interval_seconds = 30;
-            config.max_retry_accounts = 1;
+            config.max_retry_accounts = 2;
             config.fallback_mode = CodexLocalApiFallbackMode::NextRequestOnly;
         }
     }
@@ -6406,8 +6440,11 @@ pub async fn sync_local_access_to_current_account_on_switch(
     }
 
     let restrict_free_accounts = collection.restrict_free_accounts;
-    let state =
-        save_local_access_accounts(vec![account_id.to_string()], restrict_free_accounts).await?;
+    let state = save_local_access_accounts(
+        build_follow_current_local_access_account_ids(account_id, &collection),
+        restrict_free_accounts,
+    )
+    .await?;
     let member_count = state
         .collection
         .as_ref()
@@ -9342,6 +9379,14 @@ async fn proxy_request_with_account_pool(
                 let body = response.text().await.unwrap_or_default();
                 let classified =
                     classify_codex_upstream_error(status, Some(&upstream_headers), &body);
+                update_health_registry_from_classified_error(
+                    &mut health_registry,
+                    &account.id,
+                    Some(&routing_hint.model_key),
+                    health_registry_request_id_from_request(request),
+                    &classified,
+                    now_ms(),
+                );
                 persist_health_registry_with_audit(
                     &account.id,
                     Some(&routing_hint.model_key),
@@ -9447,7 +9492,7 @@ async fn proxy_request_with_account_pool(
         Some(&routing_hint.model_key),
         now_ms(),
     );
-    let use_pool_unavailable_summary = attempts == 0 && pool_summary.schedulable_count == 0;
+    let use_pool_unavailable_summary = should_use_pool_unavailable_summary(&pool_summary);
     let pool_retry_after = if use_pool_unavailable_summary {
         pool_summary.nearest_wait
     } else {
@@ -9850,17 +9895,18 @@ mod tests {
         apply_collection_routing_strategy, apply_local_api_safety_preset_to_collection,
         build_audit_context, build_audit_event, build_chat_completion_payload,
         build_chat_completion_stream_body, build_codex_api_failure_log,
-        build_effective_local_access_account_ids, build_health_summary_from_registry,
-        build_images_api_payload, build_local_models_response, build_ordered_account_ids,
-        build_pool_unavailable_message, build_request_routing_hint, build_routing_pool_account_ids,
-        build_runtime_account, build_runtime_mode_state, classify_active_stream_terminal_error,
-        classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
-        extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
-        grant_active_stream_lease, health_registry_account_cooldown_wait,
-        health_registry_account_is_schedulable, health_registry_model_key,
-        is_responses_completion_event, is_responses_websocket_upgrade_request,
-        is_websocket_upgrade_request, json_response_with_retry_after,
-        load_health_registry_from_path, load_runtime_mode_state,
+        build_effective_local_access_account_ids, build_follow_current_local_access_account_ids,
+        build_health_summary_from_registry, build_images_api_payload, build_local_models_response,
+        build_ordered_account_ids, build_pool_unavailable_message,
+        build_projection_seed_local_access_account_ids, build_request_routing_hint,
+        build_routing_pool_account_ids, build_runtime_account, build_runtime_mode_state,
+        classify_active_stream_terminal_error, classify_codex_upstream_error,
+        constrain_previous_response_affinity, empty_health_registry, extract_usage_capture,
+        filter_local_access_account_ids, first_stable_local_access_port, grant_active_stream_lease,
+        health_registry_account_cooldown_wait, health_registry_account_is_schedulable,
+        health_registry_model_key, is_responses_completion_event,
+        is_responses_websocket_upgrade_request, is_websocket_upgrade_request,
+        json_response_with_retry_after, load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
         parse_codex_retry_after, parse_responses_payload_from_upstream,
@@ -9871,7 +9917,8 @@ mod tests {
         retry_failover_max_retries, save_health_registry_to_path, set_runtime_integration_mode,
         should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
-        should_try_next_account, sort_account_ids_by_health_estimate, status_for_pool_unavailable,
+        should_try_next_account, should_use_pool_unavailable_summary,
+        sort_account_ids_by_health_estimate, status_for_pool_unavailable,
         summarize_pool_unavailability, update_health_registry_from_classified_error,
         upsert_process_sticky_binding, ActiveStreamTerminal, AuditContext, AuditTrailStatus,
         CodexLocalAccessErrorType, GatewayResponseAdapter, LocalApiBackpressureState,
@@ -10658,6 +10705,116 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn pool_unavailable_message_reports_all_exhausted_without_reset_hint() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        for account_id in ["exhausted-a", "exhausted-b"] {
+            registry.accounts.insert(
+                account_id.to_string(),
+                CodexLocalAccessAccountHealth {
+                    status: CodexLocalAccessAccountHealthStatus::Exhausted,
+                    updated_at: now,
+                    ..CodexLocalAccessAccountHealth::default()
+                },
+            );
+        }
+
+        let summary = summarize_pool_unavailability(
+            &registry,
+            &["exhausted-a".to_string(), "exhausted-b".to_string()],
+            Some("gpt-5.5"),
+            now,
+        );
+
+        assert_eq!(summary.total_count, 2);
+        assert_eq!(summary.schedulable_count, 0);
+        assert_eq!(summary.exhausted_count, 2);
+        assert_eq!(summary.nearest_wait, None);
+        assert!(should_use_pool_unavailable_summary(&summary));
+        assert_eq!(
+            status_for_pool_unavailable(&summary),
+            StatusCode::TOO_MANY_REQUESTS.as_u16()
+        );
+
+        let message = build_pool_unavailable_message("gpt-5.5", &summary);
+        assert!(message.contains("额度均已耗尽"));
+        assert!(message.contains("未拿到上游 reset 时间"));
+        assert!(message.contains("调整号池"));
+        assert!(!message.contains("切换账号"));
+    }
+
+    #[test]
+    fn pool_unavailable_message_reports_manual_required_accounts() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        for account_id in ["manual-a", "manual-b"] {
+            registry.accounts.insert(
+                account_id.to_string(),
+                CodexLocalAccessAccountHealth {
+                    status: CodexLocalAccessAccountHealthStatus::ManualRequired,
+                    manual_required: true,
+                    updated_at: now,
+                    ..CodexLocalAccessAccountHealth::default()
+                },
+            );
+        }
+
+        let summary = summarize_pool_unavailability(
+            &registry,
+            &["manual-a".to_string(), "manual-b".to_string()],
+            Some("gpt-5.5"),
+            now,
+        );
+
+        assert_eq!(summary.total_count, 2);
+        assert_eq!(summary.schedulable_count, 0);
+        assert_eq!(summary.manual_required_count, 2);
+        assert!(should_use_pool_unavailable_summary(&summary));
+        assert_eq!(
+            status_for_pool_unavailable(&summary),
+            StatusCode::SERVICE_UNAVAILABLE.as_u16()
+        );
+
+        let message = build_pool_unavailable_message("gpt-5.5", &summary);
+        assert!(message.contains("均需人工处理"));
+        assert!(message.contains("重新登录或风控验证"));
+    }
+
+    #[test]
+    fn pool_unavailable_summary_uses_in_request_failover_health_updates() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        let classified = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"type":"insufficient_quota"}}"#,
+        );
+
+        for account_id in ["failover-a", "failover-b"] {
+            update_health_registry_from_classified_error(
+                &mut registry,
+                account_id,
+                Some("gpt-5.5"),
+                Some("req-pool"),
+                &classified,
+                now,
+            );
+        }
+
+        let summary = summarize_pool_unavailability(
+            &registry,
+            &["failover-a".to_string(), "failover-b".to_string()],
+            Some("gpt-5.5"),
+            now,
+        );
+
+        assert_eq!(summary.schedulable_count, 0);
+        assert_eq!(summary.exhausted_count, 2);
+        assert!(should_use_pool_unavailable_summary(&summary));
+        assert!(build_pool_unavailable_message("gpt-5.5", &summary).contains("额度均已耗尽"));
+    }
+
+    #[test]
     fn manual_recovery_clears_account_and_model_cooldowns() {
         let now = 1_700_000_000_000;
         let mut registry = empty_health_registry(now);
@@ -11277,7 +11434,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(quota_drain.max_concurrent_requests, 1);
         assert_eq!(quota_drain.min_request_interval_seconds, 30);
         assert_eq!(quota_drain.max_queue_wait_seconds, 31);
-        assert_eq!(quota_drain.max_retry_accounts, 1);
+        assert_eq!(quota_drain.max_retry_accounts, 2);
         assert_eq!(quota_drain.fallback_mode.as_str(), "next_request_only");
     }
 
@@ -11767,7 +11924,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn effective_local_access_pool_is_single_account() {
+    fn effective_local_access_pool_matches_configured_members() {
         let collection = CodexLocalAccessCollection {
             enabled: true,
             port: 2876,
@@ -11787,7 +11944,11 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
 
         assert_eq!(
             build_effective_local_access_account_ids(&collection),
-            vec!["acc-primary".to_string()]
+            vec![
+                "acc-primary".to_string(),
+                "acc-secondary".to_string(),
+                "acc-third".to_string()
+            ]
         );
     }
 
@@ -11800,7 +11961,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn retry_failover_account_limit_requires_explicit_fallback_mode() {
+    fn effective_local_access_pool_ignores_retry_account_limit() {
         let mut collection = CodexLocalAccessCollection {
             enabled: true,
             port: 2876,
@@ -11824,15 +11985,34 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
 
         assert_eq!(
             build_effective_local_access_account_ids(&collection),
-            vec!["acc-primary".to_string()]
+            vec![
+                "acc-primary".to_string(),
+                "acc-secondary".to_string(),
+                "acc-third".to_string()
+            ]
         );
 
         collection.safety_config.fallback_mode = CodexLocalApiFallbackMode::NextRequestOnly;
 
         assert_eq!(
             build_effective_local_access_account_ids(&collection),
-            vec!["acc-primary".to_string(), "acc-secondary".to_string()]
+            vec![
+                "acc-primary".to_string(),
+                "acc-secondary".to_string(),
+                "acc-third".to_string()
+            ]
         );
+    }
+
+    #[test]
+    fn retry_failover_account_limit_lifts_legacy_enabled_fallback_to_second_account() {
+        let config = CodexLocalApiSafetyConfig {
+            max_retry_accounts: 1,
+            fallback_mode: CodexLocalApiFallbackMode::NextRequestOnly,
+            ..CodexLocalApiSafetyConfig::default()
+        };
+
+        assert_eq!(retry_failover_account_attempt_limit(&config), 2);
     }
 
     #[test]
@@ -11878,8 +12058,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn cockpit_api_service_account_switch_replaces_single_account_pool_even_without_follow_toggle()
-    {
+    fn cockpit_api_service_account_switch_preserves_pool_without_follow_toggle() {
         let collection = CodexLocalAccessCollection {
             enabled: true,
             port: 45335,
@@ -11893,10 +12072,64 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             updated_at: 2,
         };
 
-        assert!(should_sync_local_access_collection_on_account_switch(
+        assert!(!should_sync_local_access_collection_on_account_switch(
             CodexRuntimeIntegrationMode::CockpitApiService,
             &collection
         ));
+    }
+
+    #[test]
+    fn follow_current_account_switch_keeps_existing_pool_members() {
+        let collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "agt_test".to_string(),
+            safety_config: CodexLocalApiSafetyConfig::default(),
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: true,
+            account_ids: vec![
+                "acc-old".to_string(),
+                "acc-third".to_string(),
+                "acc-new".to_string(),
+            ],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        assert_eq!(
+            build_follow_current_local_access_account_ids("acc-new", &collection),
+            vec![
+                "acc-new".to_string(),
+                "acc-old".to_string(),
+                "acc-third".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn cockpit_api_service_projection_seeds_only_missing_collection() {
+        let collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "agt_test".to_string(),
+            safety_config: CodexLocalApiSafetyConfig::default(),
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec!["acc-old".to_string(), "acc-third".to_string()],
+            created_at: 1,
+            updated_at: 2,
+        };
+
+        assert_eq!(
+            build_projection_seed_local_access_account_ids("acc-current", None),
+            Some(vec!["acc-current".to_string()])
+        );
+        assert_eq!(
+            build_projection_seed_local_access_account_ids("acc-current", Some(&collection)),
+            None
+        );
     }
 
     #[test]

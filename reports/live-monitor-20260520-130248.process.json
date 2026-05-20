@@ -1,0 +1,9 @@
+{
+  "pid": 30568,
+  "start_time": "2026-05-20T13:02:48.3924200+08:00",
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File .\\scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 900 -RequireQuotaFallback -RequireStreamCompletion -RequireCliConfigUntouched -RequireAppStable -StopWhenSatisfied -WriteReport",
+  "stdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-monitor-20260520-130248.stdout.log",
+  "stderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-monitor-20260520-130248.stderr.log",
+  "exit_code_file": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-monitor-20260520-130248.exitcode.txt",
+  "metadata": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-monitor-20260520-130248.process.json"
+}

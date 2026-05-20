@@ -46,16 +46,7 @@ param(
   )
   autoDrainFirstFreeAccountUntilFallback = `$drainRequested
   temporaryFallbackConfig = [ordered]@{
-    autoPopulateProbeAccountPool = [ordered]@{
-      selectionOrder = "existing_pool_then_cached_quota_acceptance_priority"
-      refreshAttemptCount = 2
-      maxRefreshAttempts = 2
-      drainRequired = `$drainRequested
-      selectedAccountRoles = @(
-        [ordered]@{ role = "exhausted"; planType = "free"; quotaKind = "free_weekly_primary"; weeklyRemainingPercent = 0 },
-        [ordered]@{ role = "available"; planType = "free"; quotaKind = "free_weekly_primary"; weeklyRemainingPercent = 88 }
-      )
-    }
+    accountCount = 3
   }
 }
 `$report | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath "$reportPath" -Encoding UTF8
@@ -77,11 +68,12 @@ param(
   $expandedBlockedOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $acceptScript `
     -SmokeScriptPath $fakeSmoke `
     -Model "gpt-5.5" `
-    -MaxProbeQuotaRefreshAttempts 3 `
+    -DrainFirstFreeAccountUntilFallback `
+    -DrainMaxRequests 31 `
     -AcknowledgeLiveUpstreamRisk `
     -SkipEphemeralGatewayBuild 2>$null
 
-  Assert-True ($LASTEXITCODE -ne 0) "expected wrapper to block expanded refresh attempts without expanded acknowledgement"
+  Assert-True ($LASTEXITCODE -ne 0) "expected wrapper to block expanded drain attempts without expanded acknowledgement"
   $expandedBlockedSummary = ($expandedBlockedOutput | Out-String) | ConvertFrom-Json
   Assert-Equal $expandedBlockedSummary.overall "blocked" "expected expanded blocked summary"
   Assert-Equal $expandedBlockedSummary.reason "expanded_live_upstream_risk_ack_required" "expected expanded live upstream risk acknowledgement guard"
@@ -103,15 +95,11 @@ param(
   Assert-Equal $summary.codexExec "pass" "expected codex exec pass"
   Assert-Equal $summary.cliUntouched "pass" "expected CLI guard pass"
   Assert-Equal $summary.appStable "pass" "expected App guard pass"
-  Assert-Equal $summary.selectionOrder "existing_pool_then_cached_quota_acceptance_priority" "expected selection order summary"
-  Assert-Equal $summary.refreshAttemptCount 2 "expected refresh attempt count summary"
-  Assert-Equal $summary.maxRefreshAttempts 2 "expected max refresh attempts summary"
   Assert-Equal $summary.liveUpstreamRiskAcknowledged $true "expected live upstream risk acknowledgement summary"
   Assert-Equal $summary.expandedLiveUpstreamRiskAcknowledged $false "expected expanded acknowledgement off by default"
   Assert-Equal $summary.drainRequested $false "expected drain off by default"
   Assert-Equal $summary.drainResult "skipped" "expected drain result skipped by default"
-  Assert-Equal $summary.selectedRoles[0].role "exhausted" "expected exhausted first"
-  Assert-Equal $summary.selectedRoles[1].role "available" "expected available second"
+  Assert-Equal $summary.configuredAccountCount 3 "expected configured account count summary"
 
   $args = Get-Content -LiteralPath $argsPath -Raw | ConvertFrom-Json
   foreach ($requiredArg in @(
@@ -120,9 +108,6 @@ param(
       "-StartEphemeralGateway",
       "-TemporaryFallbackConfig",
       "-AppSafeIsolatedProbe",
-      "-AutoPopulateProbeAccountPool",
-      "-AutoPopulateProbeMaxRefreshAttempts",
-      "2",
       "-AcknowledgeLiveUpstreamRisk",
       "-RunUpstreamSmoke",
       "-RunCodexExecSmoke",
@@ -149,7 +134,6 @@ param(
   }
   $drainSummary = ($drainOutput | Out-String) | ConvertFrom-Json
   Assert-Equal $drainSummary.drainRequested $true "expected drain summary requested"
-  Assert-Equal $drainSummary.drainRequired $true "expected drain required summary"
   Assert-Equal $drainSummary.drainResult "pass" "expected drain result pass"
   Assert-Equal $drainSummary.expandedLiveUpstreamRiskAcknowledged $true "expected drain expanded acknowledgement summary"
   $drainArgs = Get-Content -LiteralPath $argsPath -Raw | ConvertFrom-Json

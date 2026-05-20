@@ -1,0 +1,357 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-20T00:17:36.0457124+08:00",
+  "overall": "pass_failover_live",
+  "configRestored": true,
+  "originalMode": {
+    "mode": "direct_projection",
+    "accountKind": "api",
+    "currentAccountId": "codex_apikey_8b8853f15e823dc53bd156163035bc78",
+    "updatedAt": 1779204531157
+  },
+  "probePort": 45335,
+  "baseUrl": "http://127.0.0.1:45335/v1",
+  "requestId": "live-chat-failover-20260520-001729",
+  "accountIds": [
+    "codex_227bd75cc227b04a1668567c0f0576a4",
+    "codex_4403b30265823bd3a761050646d6d2cb"
+  ],
+  "httpStatus": 200,
+  "contentType": "application/json; charset=utf-8",
+  "retryAfter": "",
+  "bodyLength": 462,
+  "bodyPreview": "{\"choices\":[{\"finish_reason\":\"stop\",\"index\":0,\"message\":{\"content\":\"OK\",\"reasoning_content\":null,\"role\":\"assistant\",\"tool_calls\":null},\"native_finish_reason\":\"stop\"}],\"created\":1779207452,\"id\":\"resp_0c0bce04d699fc6a016a0c8d1cb35481948050b6f8982c7e67\",\"model\":\"gpt-5.5\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":17,\"completion_tokens_details\":{\"reasoning_tokens\":10},\"prompt_tokens\":11,\"prompt_tokens_details\":{\"cached_tokens\":0},\"total_tokens\":28}}",
+  "bodyHasOK": true,
+  "latencyMs": 4704,
+  "fallbackSeen": true,
+  "upstream200": true,
+  "selected200": true,
+  "auditEvents": [
+    {
+      "timestamp": 1779207450511,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "listener",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "-",
+      "status": null,
+      "errorType": null,
+      "outcome": "accepted",
+      "streamState": null,
+      "detail": {
+        "method": "POST"
+      }
+    },
+    {
+      "timestamp": 1779207450581,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "auth_projection",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:b13854bc4d53",
+      "status": null,
+      "errorType": null,
+      "outcome": "prepared",
+      "streamState": null,
+      "detail": {
+        "source": "prepared_account"
+      }
+    },
+    {
+      "timestamp": 1779207450582,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "admission_attempt",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:b13854bc4d53",
+      "status": null,
+      "errorType": null,
+      "outcome": "started",
+      "streamState": null,
+      "detail": {
+        "attempt": "1",
+        "model_key": "gpt-5.5"
+      }
+    },
+    {
+      "timestamp": 1779207450590,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "upstream_forward",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:b13854bc4d53",
+      "status": null,
+      "errorType": null,
+      "outcome": "send_started",
+      "streamState": null,
+      "detail": {
+        "model_key": "gpt-5.5"
+      }
+    },
+    {
+      "timestamp": 1779207453316,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "upstream_forward",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:b13854bc4d53",
+      "status": 429,
+      "errorType": null,
+      "outcome": "response_received",
+      "streamState": null,
+      "detail": {
+        "model_key": "gpt-5.5"
+      }
+    },
+    {
+      "timestamp": 1779207453318,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "classifier",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:b13854bc4d53",
+      "status": 429,
+      "errorType": "usage_limit_reached",
+      "outcome": "failover",
+      "streamState": null,
+      "detail": {
+        "failover_safe": "true",
+        "manual_required": "false",
+        "provider_code": "usage_limit_reached",
+        "retry_after_ms": "434571000",
+        "scope": "model",
+        "source": "upstream"
+      }
+    },
+    {
+      "timestamp": 1779207453332,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "health_update",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:b13854bc4d53",
+      "status": 429,
+      "errorType": "usage_limit_reached",
+      "outcome": "recorded",
+      "streamState": null,
+      "detail": {
+        "failover_safe": "true",
+        "manual_required": "false",
+        "provider_code": "usage_limit_reached",
+        "retry_after_ms": "434571000",
+        "scope": "model",
+        "source": "upstream"
+      }
+    },
+    {
+      "timestamp": 1779207453334,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "model_cooldown_applied",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:b13854bc4d53",
+      "status": 429,
+      "errorType": "usage_limit_reached",
+      "outcome": "recorded",
+      "streamState": null,
+      "detail": {
+        "failover_safe": "true",
+        "manual_required": "false",
+        "provider_code": "usage_limit_reached",
+        "retry_after_ms": "434571000",
+        "scope": "model",
+        "source": "upstream"
+      }
+    },
+    {
+      "timestamp": 1779207453343,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "fallback_selected",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:b13854bc4d53",
+      "status": 429,
+      "errorType": "usage_limit_reached",
+      "outcome": "next_account",
+      "streamState": null,
+      "detail": {
+        "failover_safe": "true",
+        "manual_required": "false",
+        "provider_code": "usage_limit_reached",
+        "retry_after_ms": "434571000",
+        "scope": "model",
+        "source": "upstream"
+      }
+    },
+    {
+      "timestamp": 1779207453415,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "auth_projection",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": null,
+      "errorType": null,
+      "outcome": "prepared",
+      "streamState": null,
+      "detail": {
+        "source": "prepared_account"
+      }
+    },
+    {
+      "timestamp": 1779207453416,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "admission_attempt",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": null,
+      "errorType": null,
+      "outcome": "started",
+      "streamState": null,
+      "detail": {
+        "attempt": "2",
+        "model_key": "gpt-5.5"
+      }
+    },
+    {
+      "timestamp": 1779207453424,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "upstream_forward",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": null,
+      "errorType": null,
+      "outcome": "send_started",
+      "streamState": null,
+      "detail": {
+        "model_key": "gpt-5.5"
+      }
+    },
+    {
+      "timestamp": 1779207454259,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "upstream_forward",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": 200,
+      "errorType": null,
+      "outcome": "response_received",
+      "streamState": null,
+      "detail": {
+        "model_key": "gpt-5.5"
+      }
+    },
+    {
+      "timestamp": 1779207454267,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "selector",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": null,
+      "errorType": null,
+      "outcome": "sticky_bound",
+      "streamState": null,
+      "detail": {
+        "binding_key": "process"
+      }
+    },
+    {
+      "timestamp": 1779207454269,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "upstream_admitted",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": 200,
+      "errorType": null,
+      "outcome": "admitted",
+      "streamState": null,
+      "detail": {
+        "model_key": "gpt-5.5"
+      }
+    },
+    {
+      "timestamp": 1779207454276,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "selector",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": 200,
+      "errorType": null,
+      "outcome": "selected",
+      "streamState": null,
+      "detail": {
+        "model_key": "gpt-5.5"
+      }
+    },
+    {
+      "timestamp": 1779207454284,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "lease_granted",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": null,
+      "errorType": null,
+      "outcome": "active",
+      "streamState": null,
+      "detail": {
+        "active_count": "1",
+        "lease_id": "1"
+      }
+    },
+    {
+      "timestamp": 1779207455178,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "final_response",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": 200,
+      "errorType": null,
+      "outcome": "ok",
+      "streamState": null,
+      "detail": {
+        "content_type": "[redacted]"
+      }
+    },
+    {
+      "timestamp": 1779207455179,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "stream_completed",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": null,
+      "errorType": null,
+      "outcome": "completed",
+      "streamState": null,
+      "detail": {
+        "lease_id": "1"
+      }
+    },
+    {
+      "timestamp": 1779207455188,
+      "requestId": "live-chat-failover-20260520-001729",
+      "phase": "lease_released",
+      "route": "/v1/responses",
+      "model": "gpt-5.5",
+      "accountHash": "sha256:a51d474c29db",
+      "status": null,
+      "errorType": null,
+      "outcome": "completed",
+      "streamState": null,
+      "detail": {
+        "active_count": "0",
+        "lease_id": "1"
+      }
+    }
+  ],
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-cockpit-api-service-probe\\chat-20260520-001729.stdout.log",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\live-cockpit-api-service-probe\\chat-20260520-001729.stderr.log"
+}

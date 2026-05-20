@@ -1,6 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
+  ChevronsDown,
+  ChevronsUp,
   Check,
   CircleAlert,
   Copy,
@@ -17,6 +21,7 @@ import {
   Trash2,
   Wrench,
   X,
+  GripVertical,
 } from 'lucide-react';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { useTranslation } from 'react-i18next';
@@ -34,6 +39,7 @@ import type {
 } from '../types/codexLocalAccess';
 import {
   getCodexPlanFilterKey,
+  isCodexApiKeyAccount,
   isCodexExplicitFreePlanType,
 } from '../types/codex';
 import {
@@ -52,6 +58,13 @@ import {
   type MultiSelectFilterOption,
 } from './MultiSelectFilterDropdown';
 import { SingleSelectDropdown } from './SingleSelectDropdown';
+import {
+  areStringArraysEqual,
+  moveIdInOrder,
+  moveIdsBeforeTarget,
+  normalizeAccountOrder,
+  type AccountOrderMove,
+} from '../utils/accountOrder';
 import './GroupAccountPickerModal.css';
 import './CodexLocalAccessModal.css';
 
@@ -145,25 +158,27 @@ function resolveSafetyPresetId(
     config.requestTimeoutSeconds === 600 &&
     config.maxRequestBodyMb === 64 &&
     config.maxRetries === 1 &&
-    config.maxRetryAccounts === 1 &&
     config.logging?.redactSensitiveValues === true &&
     config.logging?.includePromptResponse === false &&
     config.logging?.includeRawUpstreamBody === false;
   if (!isBaseHardened) return 'custom';
   if (
     config.minRequestIntervalSeconds === 60 &&
+    config.maxRetryAccounts === 1 &&
     config.fallbackMode === 'disabled'
   ) {
     return 'maximum_safety';
   }
   if (
     config.minRequestIntervalSeconds === 20 &&
+    config.maxRetryAccounts === 1 &&
     config.fallbackMode === 'disabled'
   ) {
     return 'balanced_self_use';
   }
   if (
     config.minRequestIntervalSeconds === 30 &&
+    config.maxRetryAccounts === 2 &&
     config.fallbackMode === 'next_request_only'
   ) {
     return 'quota_drain_careful';
@@ -196,14 +211,6 @@ function formatQuotaPoolLabel(
   weeklyLabel: string,
 ): string {
   return `${baseLabel} · ${hourlyLabel} ${formatCodexQuotaPoolPercent(pool.hourly)} · ${weeklyLabel} ${formatCodexQuotaPoolPercent(pool.weekly)}`;
-}
-
-function areSetsEqual(left: Set<string>, right: Set<string>): boolean {
-  if (left.size !== right.size) return false;
-  for (const value of left) {
-    if (!right.has(value)) return false;
-  }
-  return true;
 }
 
 export function CodexLocalAccessModal({
@@ -243,7 +250,10 @@ export function CodexLocalAccessModal({
   const { t } = useTranslation();
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [selectedOrder, setSelectedOrder] = useState<string[]>([]);
   const [memberRemovalSelected, setMemberRemovalSelected] = useState<Set<string>>(new Set());
+  const [draggedMemberAccountId, setDraggedMemberAccountId] = useState<string | null>(null);
+  const [memberOrderDropTargetId, setMemberOrderDropTargetId] = useState<string | null>(null);
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
@@ -311,7 +321,7 @@ export function CodexLocalAccessModal({
         {
           id: 'quota_drain_careful',
           label: t('codex.localAccess.safetyPreset.quotaDrainCareful', '谨慎消耗'),
-          desc: t('codex.localAccess.safetyPreset.quotaDrainCarefulDesc', '1 并发 · 30s'),
+          desc: t('codex.localAccess.safetyPreset.quotaDrainCarefulDesc', '1 并发 · 30s · 2账号'),
         },
       ] satisfies Array<{
         id: CodexLocalApiSafetyPresetId;
@@ -411,7 +421,10 @@ export function CodexLocalAccessModal({
     [avgLatencyMs, selectedTotals, successRate, t],
   );
 
-  const serviceAccounts = accounts;
+  const serviceAccounts = useMemo(
+    () => accounts.filter((account) => !isCodexApiKeyAccount(account)),
+    [accounts],
+  );
   const accountById = useMemo(
     () => new Map(serviceAccounts.map((account) => [account.id, account])),
     [serviceAccounts],
@@ -432,12 +445,23 @@ export function CodexLocalAccessModal({
     () => initialSelectedIds.filter((accountId) => serviceAccountIdSet.has(accountId)),
     [initialSelectedIds, serviceAccountIdSet],
   );
+  const serviceAccountIds = useMemo(
+    () => serviceAccounts.map((account) => account.id),
+    [serviceAccounts],
+  );
+  const selectedOrderForSave = useMemo(() => {
+    const normalized = normalizeAccountOrder(selectedOrder, serviceAccountIds);
+    return normalized.filter((accountId) => selected.has(accountId));
+  }, [selected, selectedOrder, serviceAccountIds]);
 
   useEffect(() => {
     if (!isOpen) return;
     setQuery('');
     setSelected(new Set(normalizedInitialSelectedIds));
+    setSelectedOrder(normalizedInitialSelectedIds);
     setMemberRemovalSelected(new Set());
+    setDraggedMemberAccountId(null);
+    setMemberOrderDropTargetId(null);
     setFilterTypes([]);
     setTagFilter([]);
     setGroupFilter([]);
@@ -701,9 +725,9 @@ export function CodexLocalAccessModal({
 
   const selectionDirty = useMemo(
     () =>
-      !areSetsEqual(selected, new Set(normalizedInitialSelectedIds)) ||
+      !areStringArraysEqual(selectedOrderForSave, normalizedInitialSelectedIds) ||
       restrictFreeAccounts !== (collection?.restrictFreeAccounts ?? false),
-    [collection?.restrictFreeAccounts, normalizedInitialSelectedIds, restrictFreeAccounts, selected],
+    [collection?.restrictFreeAccounts, normalizedInitialSelectedIds, restrictFreeAccounts, selectedOrderForSave],
   );
 
   const allStatsByAccountId = useMemo(() => {
@@ -713,27 +737,10 @@ export function CodexLocalAccessModal({
   }, [stats?.accounts]);
 
   const selectedMemberAccounts = useMemo(() => {
-    const configuredOrder = new Map(
-      (collection?.accountIds ?? []).map((accountId, index) => [accountId, index]),
-    );
-    return Array.from(selected)
+    return selectedOrderForSave
       .map((accountId) => accountById.get(accountId))
-      .filter((account): account is CodexAccount => Boolean(account))
-      .sort((left, right) => {
-        const leftIsCurrent = currentAccountId === left.id;
-        const rightIsCurrent = currentAccountId === right.id;
-        if (leftIsCurrent !== rightIsCurrent) {
-          return leftIsCurrent ? -1 : 1;
-        }
-        const orderDiff =
-          (configuredOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-          (configuredOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER);
-        if (orderDiff !== 0) return orderDiff;
-        const leftName = buildCodexAccountPresentation(left, t).displayName.toLowerCase();
-        const rightName = buildCodexAccountPresentation(right, t).displayName.toLowerCase();
-        return leftName.localeCompare(rightName);
-      });
-  }, [accountById, collection?.accountIds, currentAccountId, selected, t]);
+      .filter((account): account is CodexAccount => Boolean(account));
+  }, [accountById, selectedOrderForSave]);
 
   const memberRemovalSelectedCount = memberRemovalSelected.size;
   const allMembersSelectedForRemoval =
@@ -870,15 +877,21 @@ export function CodexLocalAccessModal({
 
   const toggleSelectAllVisible = () => {
     if (actionBusy || visibleSelectableAccounts.length === 0) return;
+    const visibleIds = visibleSelectableAccounts.map((account) => account.id);
     setSelected((prev) => {
       const next = new Set(prev);
       if (allVisibleSelected) {
-        visibleSelectableAccounts.forEach((account) => next.delete(account.id));
+        visibleIds.forEach((accountId) => next.delete(accountId));
       } else {
-        visibleSelectableAccounts.forEach((account) => next.add(account.id));
+        visibleIds.forEach((accountId) => next.add(accountId));
       }
       return next;
     });
+    setSelectedOrder((prev) =>
+      allVisibleSelected
+        ? prev.filter((accountId) => !visibleIds.includes(accountId))
+        : normalizeAccountOrder([...prev, ...visibleIds], serviceAccountIds),
+    );
   };
 
   const toggleMemberRemovalSelectAll = () => {
@@ -903,6 +916,81 @@ export function CodexLocalAccessModal({
     });
   };
 
+  const moveSelectedMember = (accountId: string, move: AccountOrderMove) => {
+    if (actionBusy) return;
+    setSelectedOrder(moveIdInOrder(selectedOrderForSave, accountId, move));
+  };
+
+  const shouldIgnoreMemberDragStart = (target: EventTarget | null): boolean => {
+    if (!(target instanceof HTMLElement)) return false;
+    if (target.closest('[data-member-drag-handle="true"]')) return false;
+    return Boolean(
+      target.closest(
+        'button, input, select, textarea, a, [role="button"]',
+      ),
+    );
+  };
+
+  const handleMemberDragStart = (
+    event: ReactDragEvent<HTMLElement>,
+    accountId: string,
+  ) => {
+    if (actionBusy || shouldIgnoreMemberDragStart(event.target)) {
+      event.preventDefault();
+      return;
+    }
+    setDraggedMemberAccountId(accountId);
+    setMemberOrderDropTargetId(null);
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', accountId);
+  };
+
+  const handleMemberDragOver = (
+    event: ReactDragEvent<HTMLElement>,
+    accountId: string,
+  ) => {
+    if (!draggedMemberAccountId || draggedMemberAccountId === accountId) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    setMemberOrderDropTargetId(accountId);
+  };
+
+  const handleMemberDragLeave = (
+    event: ReactDragEvent<HTMLElement>,
+    accountId: string,
+  ) => {
+    const nextTarget = event.relatedTarget;
+    if (
+      nextTarget instanceof Node &&
+      event.currentTarget.contains(nextTarget)
+    ) {
+      return;
+    }
+    setMemberOrderDropTargetId((current) =>
+      current === accountId ? null : current,
+    );
+  };
+
+  const handleMemberDrop = (
+    event: ReactDragEvent<HTMLElement>,
+    accountId: string,
+  ) => {
+    const sourceAccountId =
+      draggedMemberAccountId || event.dataTransfer.getData('text/plain');
+    if (!sourceAccountId || sourceAccountId === accountId) return;
+    event.preventDefault();
+    setSelectedOrder(
+      moveIdsBeforeTarget(selectedOrderForSave, [sourceAccountId], accountId),
+    );
+    setDraggedMemberAccountId(null);
+    setMemberOrderDropTargetId(null);
+  };
+
+  const handleMemberDragEnd = () => {
+    setDraggedMemberAccountId(null);
+    setMemberOrderDropTargetId(null);
+  };
+
   const handleToggleRestrictFreeAccounts = async () => {
     if (actionBusy) return;
     setRestrictFreeAccounts((prev) => !prev);
@@ -920,17 +1008,24 @@ export function CodexLocalAccessModal({
       const next = new Set(prev);
       if (next.has(accountId)) {
         next.delete(accountId);
+        setSelectedOrder((current) => current.filter((id) => id !== accountId));
       } else {
         next.add(accountId);
+        setSelectedOrder((current) =>
+          current.includes(accountId)
+            ? current
+            : normalizeAccountOrder([...current, accountId], serviceAccountIds),
+        );
       }
       return next;
     });
   };
 
-  const buildPersistedMemberIds = (source: Set<string>) =>
-    Array.from(source).filter((accountId) => {
+  const buildPersistedMemberIds = (order: string[]) =>
+    order.filter((accountId) => {
       const account = accountById.get(accountId);
       if (!account) return false;
+      if (isCodexApiKeyAccount(account)) return false;
       if (restrictFreeAccounts && isCodexExplicitFreePlanType(account.plan_type)) {
         return false;
       }
@@ -941,7 +1036,7 @@ export function CodexLocalAccessModal({
     setError('');
     setNotice('');
     try {
-      const filtered = buildPersistedMemberIds(selected);
+      const filtered = buildPersistedMemberIds(selectedOrderForSave);
       await onSaveAccounts({
         accountIds: filtered,
         restrictFreeAccounts,
@@ -959,13 +1054,17 @@ export function CodexLocalAccessModal({
     const nextSelected = new Set(selected);
     memberRemovalSelected.forEach((accountId) => nextSelected.delete(accountId));
     const removedCount = selected.size - nextSelected.size;
+    const nextOrder = selectedOrderForSave.filter(
+      (accountId) => !memberRemovalSelected.has(accountId),
+    );
     try {
-      const filtered = buildPersistedMemberIds(nextSelected);
+      const filtered = buildPersistedMemberIds(nextOrder);
       await onSaveAccounts({
         accountIds: filtered,
         restrictFreeAccounts,
       });
       setSelected(nextSelected);
+      setSelectedOrder(nextOrder);
       setMemberRemovalSelected(new Set());
       setNotice(
         t('codex.localAccess.modal.removeMembersSuccess', {
@@ -1840,7 +1939,7 @@ export function CodexLocalAccessModal({
                       <span>
                         {t('codex.localAccess.modal.currentPoolMembers', {
                           count: selectedMemberAccounts.length,
-                          defaultValue: '当前号池 {{count}} 个',
+                          defaultValue: '当前号池 / 调度顺序 {{count}} 个',
                         })}
                       </span>
                     </label>
@@ -1875,19 +1974,43 @@ export function CodexLocalAccessModal({
                     </div>
                   </div>
                   <div className="codex-local-access-current-member-list">
-                    {selectedMemberAccounts.map((account) => {
+                    {selectedMemberAccounts.map((account, index) => {
                       const presentation = buildCodexAccountPresentation(account, t);
                       const isCurrentAccount = currentAccountId === account.id;
                       const isRemovalChecked = memberRemovalSelected.has(account.id);
                       const accountStats = allStatsByAccountId.get(account.id)?.usage;
+                      const isFirst = index === 0;
+                      const isLast = index === selectedMemberAccounts.length - 1;
 
                       return (
-                        <label
+                        <div
                           key={`pool-member-${account.id}`}
                           className={`codex-local-access-current-member${
                             isCurrentAccount ? ' is-active-account' : ''
-                          }${isRemovalChecked ? ' is-marked' : ''}`}
+                          }${isRemovalChecked ? ' is-marked' : ''}${
+                            draggedMemberAccountId === account.id ? ' is-dragging' : ''
+                          }${
+                            memberOrderDropTargetId === account.id ? ' is-drop-target' : ''
+                          }`}
+                          draggable={false}
+                          onDragEnd={handleMemberDragEnd}
+                          onDragOver={(event) => handleMemberDragOver(event, account.id)}
+                          onDragLeave={(event) => handleMemberDragLeave(event, account.id)}
+                          onDrop={(event) => handleMemberDrop(event, account.id)}
                         >
+                          <button
+                            type="button"
+                            className="codex-local-access-member-drag"
+                            data-member-drag-handle="true"
+                            title={t('codex.sort.customDragHandle', '拖拽排序')}
+                            aria-label={t('codex.sort.customDragHandle', '拖拽排序')}
+                            disabled={actionBusy}
+                            draggable={!actionBusy}
+                            onDragStart={(event) => handleMemberDragStart(event, account.id)}
+                            onDragEnd={handleMemberDragEnd}
+                          >
+                            <GripVertical size={14} />
+                          </button>
                           <input
                             type="checkbox"
                             checked={isRemovalChecked}
@@ -1915,7 +2038,49 @@ export function CodexLocalAccessModal({
                             })}
                           </span>
                           {renderQuotaPreview(presentation, 1)}
-                        </label>
+                          <span className="codex-local-access-member-order-controls">
+                            <button
+                              type="button"
+                              className="folder-icon-btn codex-local-access-order-btn"
+                              onClick={() => moveSelectedMember(account.id, 'first')}
+                              disabled={actionBusy || isFirst}
+                              title={t('codex.sort.customMoveTop', '置顶')}
+                              aria-label={t('codex.sort.customMoveTop', '置顶')}
+                            >
+                              <ChevronsUp size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="folder-icon-btn codex-local-access-order-btn"
+                              onClick={() => moveSelectedMember(account.id, 'previous')}
+                              disabled={actionBusy || isFirst}
+                              title={t('codex.sort.customMoveUp', '上移')}
+                              aria-label={t('codex.sort.customMoveUp', '上移')}
+                            >
+                              <ArrowUp size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="folder-icon-btn codex-local-access-order-btn"
+                              onClick={() => moveSelectedMember(account.id, 'next')}
+                              disabled={actionBusy || isLast}
+                              title={t('codex.sort.customMoveDown', '下移')}
+                              aria-label={t('codex.sort.customMoveDown', '下移')}
+                            >
+                              <ArrowDown size={14} />
+                            </button>
+                            <button
+                              type="button"
+                              className="folder-icon-btn codex-local-access-order-btn"
+                              onClick={() => moveSelectedMember(account.id, 'last')}
+                              disabled={actionBusy || isLast}
+                              title={t('codex.sort.customMoveBottom', '置底')}
+                              aria-label={t('codex.sort.customMoveBottom', '置底')}
+                            >
+                              <ChevronsDown size={14} />
+                            </button>
+                          </span>
+                        </div>
                       );
                     })}
                   </div>

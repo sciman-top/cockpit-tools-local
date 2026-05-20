@@ -1903,6 +1903,15 @@
         "modalTitle": "API 服务账号池统计",
         "empty": "暂无额度统计"
       },
+      "poolUnavailable": {
+        "allExhausted": "API 服务号池账号额度均已耗尽，请刷新配额、调整号池或恢复账号后重试",
+        "blocked": "API 服务号池暂无可调度账号（{{reasons}}）；请刷新配额、调整号池或恢复账号后重试",
+        "exhausted": "额度耗尽 {{count}} 个",
+        "cooling": "冷却中 {{count}} 个",
+        "manualRequired": "需人工处理 {{count}} 个",
+        "disabled": "已禁用 {{count}} 个",
+        "unknown": "状态未知"
+      },
       "memberTitle": "账号池成员",
       "routingStrategy": {
         "auto": "自动（推荐）",
@@ -1921,7 +1930,7 @@
         "balancedSelfUse": "自用均衡",
         "balancedSelfUseDesc": "1 并发 · 20s",
         "quotaDrainCareful": "谨慎消耗",
-        "quotaDrainCarefulDesc": "1 并发 · 30s"
+        "quotaDrainCarefulDesc": "1 并发 · 30s · 2账号"
       },
       "stats": {
         "requests": "总请求数",
@@ -2265,10 +2274,12 @@
       "subscriptionExpiry": "按订阅有效期",
       "custom": "自定义顺序",
       "customModalTitle": "自定义账号排序",
-      "customModalDesc": "拖动账号或使用上下按钮调整展示顺序。",
+      "customModalDesc": "拖动账号或使用置顶、上移、下移、置底按钮调整展示顺序。",
       "customDragHandle": "拖拽排序",
+      "customMoveTop": "置顶",
       "customMoveUp": "上移",
       "customMoveDown": "下移",
+      "customMoveBottom": "置底",
       "customReset": "重置自定义顺序"
     },
     "opencodeSwitch": "OpenCode切换开关",
@@ -2516,7 +2527,9 @@
       }
     },
     "groups": {
-      "addToGroup": "移入分组"
+      "addToGroup": "移入分组",
+      "reorder": "调整分组顺序",
+      "orderSaved": "分组内顺序已保存"
     },
     "speed": {
       "title": "速度",
