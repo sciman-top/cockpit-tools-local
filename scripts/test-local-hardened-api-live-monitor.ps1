@@ -287,14 +287,14 @@ try {
   $jsonFailedSummary = Convert-JsonOutput $jsonFailedOutput "non-stream JSON failed fixture"
   Assert-Equal $jsonFailedSummary.overall "pass" "expected non-stream JSON failed fixture overall pass"
   Assert-Equal $jsonFailedSummary.audit.responsesFailedPoolUnavailableCount 0 "non-stream failed JSON must not be counted as streaming response.failed"
-  Assert-Equal (($jsonFailedSummary.results | Where-Object name -eq "responses_pool_unavailable_failed_stream_absent").status) "pass" "expected non-stream JSON failed not to fail streaming guard"
+  Assert-Equal (($jsonFailedSummary.results | Where-Object name -eq "responses_pool_unavailable_terminal_failure_explicit").status) "pass" "expected non-stream JSON failed not to require streaming terminal failure"
 
   $dataRootPoolWait = Join-Path $tempRoot "data-pool-wait"
   $auditPoolWait = Join-Path $dataRootPoolWait "codex_local_access_audit.jsonl"
   Write-AuditLines $auditPoolWait @(
     [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-wait"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
-    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-wait"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 200; errorType = "pool_unavailable"; streamState = "heartbeat"; outcome = "sleeping"; detail = [ordered]@{ retry_after_ms = "2000"; message = "模型 gpt-5.5 的API 服务号池账号额度均已耗尽，请 2 秒后重试" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-wait"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 200; errorType = "pool_unavailable"; streamState = "heartbeat"; outcome = "retrying"; detail = [ordered]@{ slept_ms = "2000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-wait"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 503; errorType = "pool_unavailable"; outcome = "sleeping"; detail = [ordered]@{ retry_after_ms = "2000"; message = "模型 gpt-5.5 的API 服务号池账号额度均已耗尽，请 2 秒后重试" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-wait"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 503; errorType = "pool_unavailable"; outcome = "retrying"; detail = [ordered]@{ slept_ms = "2000" } },
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-wait"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:recovered"; status = 200; outcome = "response_received" },
     [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-wait"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:recovered"; outcome = "active" },
     [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-wait"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:recovered"; status = 200; streamState = "first_chunk_written"; outcome = "ok" },
@@ -318,13 +318,13 @@ try {
   Assert-Equal $poolWaitSummary.audit.poolWaitCount 2 "expected two pool_wait audit events"
   Assert-Equal $poolWaitSummary.audit.poolWaitSleepingCount 1 "expected one pool_wait sleeping event"
   Assert-Equal $poolWaitSummary.audit.poolWaitRetryingCount 1 "expected one pool_wait retrying event"
-  Assert-Equal $poolWaitSummary.audit.heartbeatPoolWaitCount 2 "expected heartbeat pool_wait events to be tracked"
+  Assert-Equal $poolWaitSummary.audit.heartbeatPoolWaitCount 0 "short recovered pool_wait must not use SSE heartbeat"
   Assert-Equal $poolWaitSummary.audit.openPoolWaitCount 0 "recovered pool_wait must not remain open"
   Assert-Equal $poolWaitSummary.audit.localPoolUnavailableCount 0 "pool_wait must not be counted as final pool_unavailable"
   Assert-Equal $poolWaitSummary.audit.completedStreamCount 1 "expected recovered stream completion after pool_wait"
-  Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "sse_idle_pool_wait_regression_absent").status) "pass" "expected heartbeat pool_wait not to fail SSE idle guard"
+  Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "sse_idle_pool_wait_regression_absent").status) "pass" "expected closed pool_wait not to fail SSE idle guard"
   Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "pool_wait_reaches_terminal_or_recovery").status) "pass" "expected recovered pool_wait to satisfy terminal progress guard"
-  Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "responses_pool_unavailable_synthetic_completion_absent").status) "pass" "expected heartbeat pool_wait not to fail synthetic completion guard"
+  Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "responses_pool_unavailable_synthetic_completion_absent").status) "pass" "expected recovered pool_wait not to fail synthetic completion guard"
 
   $dataRootActiveDrain = Join-Path $tempRoot "data-active-drain"
   $auditActiveDrain = Join-Path $dataRootActiveDrain "codex_local_access_audit.jsonl"
@@ -342,14 +342,16 @@ try {
     -IncludeExistingAudit `
     -Quiet 2>$null
 
-  Assert-True ($LASTEXITCODE -eq 1) "expected failed pool_unavailable stream fixture exit code 1"
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor response.failed pool_unavailable fixture failed with exit_code=$LASTEXITCODE"
+  }
   $activeDrainSummary = Convert-JsonOutput $activeDrainOutput "active-drain fixture"
-  Assert-Equal $activeDrainSummary.overall "fail" "expected failed pool_unavailable stream fixture overall fail"
+  Assert-Equal $activeDrainSummary.overall "pass" "expected explicit response.failed pool_unavailable fixture overall pass"
   Assert-Equal $activeDrainSummary.audit.activeDrainPoolWaitCount 2 "expected active drain pool_wait events"
   Assert-Equal $activeDrainSummary.audit.openPoolWaitCount 0 "active drain final response must close pool_wait"
   Assert-Equal $activeDrainSummary.audit.responsesFailedPoolUnavailableCount 1 "expected failed in-band terminal pool_unavailable to be counted"
   Assert-Equal (($activeDrainSummary.results | Where-Object name -eq "pool_wait_reaches_terminal_or_recovery").status) "pass" "expected active-drain terminal to satisfy progress guard"
-  Assert-Equal (($activeDrainSummary.results | Where-Object name -eq "responses_pool_unavailable_failed_stream_absent").status) "fail" "expected response.failed pool_unavailable to fail regression guard"
+  Assert-Equal (($activeDrainSummary.results | Where-Object name -eq "responses_pool_unavailable_terminal_failure_explicit").status) "pass" "expected response.failed pool_unavailable to satisfy explicit terminal guard"
 
   $dataRootOpenPoolWait = Join-Path $tempRoot "data-open-pool-wait"
   $auditOpenPoolWait = Join-Path $dataRootOpenPoolWait "codex_local_access_audit.jsonl"
@@ -365,13 +367,13 @@ try {
     -IncludeExistingAudit `
     -Quiet 2>$null
 
-  if ($LASTEXITCODE -ne 0) {
-    throw "live monitor open pool_wait fixture failed with exit_code=$LASTEXITCODE"
-  }
+  Assert-True ($LASTEXITCODE -eq 1) "expected open pool_wait fixture exit code 1"
   $openPoolWaitSummary = Convert-JsonOutput $openPoolWaitOutput "open pool_wait fixture"
-  Assert-Equal $openPoolWaitSummary.overall "pass" "expected open heartbeat pool_wait fixture overall pass"
+  Assert-Equal $openPoolWaitSummary.overall "fail" "expected open heartbeat pool_wait fixture overall fail"
   Assert-Equal $openPoolWaitSummary.audit.openPoolWaitCount 1 "expected open pool_wait to be counted"
-  Assert-Equal (($openPoolWaitSummary.results | Where-Object name -eq "pool_wait_reaches_terminal_or_recovery").status) "pass" "expected open heartbeat pool_wait to be observed without failing progress guard"
+  Assert-Equal (($openPoolWaitSummary.results | Where-Object name -eq "sse_idle_pool_wait_regression_absent").status) "fail" "expected heartbeat open pool_wait to fail SSE idle guard"
+  Assert-Equal (($openPoolWaitSummary.results | Where-Object name -eq "pool_wait_reaches_terminal_or_recovery").status) "fail" "expected open pool_wait to fail progress guard"
+  Assert-Equal (($openPoolWaitSummary.results | Where-Object name -eq "responses_pool_unavailable_terminal_failure_explicit").status) "fail" "expected open pool_wait without response.failed to fail terminal guard"
 
   $dataRootPoolParked = Join-Path $tempRoot "data-pool-parked"
   $auditPoolParked = Join-Path $dataRootPoolParked "codex_local_access_audit.jsonl"

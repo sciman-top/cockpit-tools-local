@@ -75,9 +75,9 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 `pool_unavailable` 不是所有客户端都应收到同一种 transport 响应。
 
 - 普通 HTTP 客户端可以收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`。
-- Codex-facing streaming `/v1/responses` 不能直接暴露 transport `503/pool_unavailable`，也不能把 upstream 429 包装成 retry-limit 终止；全池不可用时不得返回 synthetic `response.completed`、completed JSON、`response.failed` 或静默断开，应保持 `200 text/event-stream` 并持续发送 `cockpit_pool_wait` SSE comment heartbeat。
-- Stream 请求遇到全池不可用时，`pool_wait` 必须可观测：heartbeat audit 表示新请求被 admission gate 拦截等待，active stream 仍应继续完成；parked pool_wait、SSE idle、`response.failed` 和 synthetic completion 都是连续性回归。
-- Bounded backoff 只约束普通 HTTP 和短等待重试；Codex-facing streaming 的本地全池不可用要等本地 health/cooldown 恢复后再转发真实上游，不得用 failed turn 表达。
+- Codex-facing streaming `/v1/responses` 不能直接暴露 transport `503/pool_unavailable`，也不能把 upstream 429 包装成 retry-limit 终止；全池不可用时不得返回 synthetic `response.completed`、completed JSON 或静默断开。短等待只能发生在请求预算内；超预算必须返回 `200 text/event-stream` + `response.failed` + `[DONE]`。
+- Stream 请求遇到全池不可用时，`pool_wait` 必须可观测且最终闭合：短等待后恢复、或 `final_response` / `streamState=failed` / `errorType=pool_unavailable` 显式终止。parked pool_wait、SSE idle、heartbeat-only open wait 和 synthetic completion 都是连续性回归。
+- Bounded backoff 只约束普通 HTTP 和短等待重试；Codex-facing streaming 的本地全池不可用只能在请求预算内等待 health/cooldown 恢复并转发真实上游，超出预算必须用 `response.failed` 显式结束本轮。
 
 ## 路线图
 
@@ -97,7 +97,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 - [ ] 读者能从文档直接判断默认是否会随机轮换账号。
 - [ ] report 能解释“为什么没有切号”或“为什么切到下一个账号”。
-- [ ] Codex-facing 全池不可用不出现 transport `503/pool_unavailable`、`response.failed`、synthetic completion 或 parked SSE idle timeout；只允许 heartbeat `pool_wait` 等待恢复。
+- [ ] Codex-facing 全池不可用不出现 transport `503/pool_unavailable`、synthetic completion、heartbeat-only open wait 或 parked SSE idle timeout；短预算内可恢复时继续转发真实上游，超预算时必须出现 `response.failed` + `[DONE]` 显式终止。
 - [ ] `git diff --check` 通过。
 
 ### Phase S2 - Selector 可解释性增强
