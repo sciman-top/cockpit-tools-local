@@ -221,7 +221,7 @@ try {
     [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-reused"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed" },
     [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-reused"; phase = "lease_released"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed" },
     [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-reused"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
-    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-reused"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 200; errorType = "pool_unavailable"; outcome = "in_band_synthetic"; detail = [ordered]@{ message = "模型 gpt-5.5 的API 服务号池账号额度均已耗尽，请 1 小时后重试" } }
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-reused"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion"; detail = [ordered]@{ message = "模型 gpt-5.5 的API 服务号池账号额度均已耗尽，请 1 小时后重试" } }
   )
   $requestReuseOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
     -DurationSeconds 0 `
@@ -233,19 +233,25 @@ try {
     -RequiredCompletedStreams 1 `
     -Quiet 2>$null
 
-  Assert-True ($LASTEXITCODE -eq 1) "expected synthetic pool_unavailable completion fixture exit code 1"
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor local completion pool_unavailable fixture failed with exit_code=$LASTEXITCODE"
+  }
   $requestReuseSummary = Convert-JsonOutput $requestReuseOutput "request reuse fixture"
-  Assert-Equal $requestReuseSummary.overall "fail" "expected synthetic pool_unavailable completion fixture overall fail"
+  Assert-Equal $requestReuseSummary.overall "pass" "expected local completion pool_unavailable fixture overall pass"
   Assert-Equal $requestReuseSummary.audit.startedStreamCount 1 "expected one real stream instance for reused request id"
   Assert-Equal $requestReuseSummary.audit.completedStreamCount 1 "expected completed stream to remain completed"
   Assert-Equal $requestReuseSummary.audit.retryLimitErrorFound $false "local pool unavailable must not be reported as retry-limit"
   Assert-Equal $requestReuseSummary.audit.localPoolUnavailableCount 1 "expected local pool unavailable to be tracked separately"
-  Assert-Equal $requestReuseSummary.audit.inBandSyntheticPoolUnavailableCount 1 "expected Codex-facing pool unavailable to be tracked as in-band synthetic"
+  Assert-Equal $requestReuseSummary.audit.inBandSyntheticPoolUnavailableCount 0 "local pool unavailable must not use legacy in-band synthetic outcome"
+  Assert-Equal $requestReuseSummary.audit.responsesLocalCompletionPoolUnavailableCount 1 "expected Codex-facing pool unavailable to be tracked as local completion"
+  Assert-Equal $requestReuseSummary.audit.responsesFailedPoolUnavailableCount 0 "local completion must not be counted as response.failed"
   Assert-Equal $requestReuseSummary.audit.responsesTransport503PoolUnavailableCount 0 "Codex-facing pool unavailable must not be transport 503"
   Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "accepted_stream_continuity").status) "pass" "expected reused request stream continuity pass"
   Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "retry_limit_regression_absent").status) "pass" "expected local pool unavailable not to fail retry-limit regression"
   Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "responses_pool_unavailable_transport_503_absent").status) "pass" "expected in-band pool unavailable not to fail transport 503 regression"
-  Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "responses_pool_unavailable_synthetic_completion_absent").status) "fail" "expected synthetic pool_unavailable completion regression guard to fail"
+  Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "responses_pool_unavailable_local_completion_explicit").status) "pass" "expected local completion pool_unavailable to satisfy terminal guard"
+  Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "responses_pool_unavailable_failed_stream_absent").status) "pass" "expected local completion pool_unavailable not to fail response.failed guard"
+  Assert-Equal (($requestReuseSummary.results | Where-Object name -eq "responses_pool_unavailable_legacy_synthetic_completion_absent").status) "pass" "expected local completion pool_unavailable not to use legacy synthetic outcome"
 
   $dataRootResponses503 = Join-Path $tempRoot "data-responses-503"
   $auditResponses503 = Join-Path $dataRootResponses503 "codex_local_access_audit.jsonl"
@@ -267,27 +273,27 @@ try {
   Assert-Equal $responses503Summary.audit.responsesTransport503PoolUnavailableCount 1 "expected Codex-facing transport 503 to be counted"
   Assert-Equal (($responses503Summary.results | Where-Object name -eq "responses_pool_unavailable_transport_503_absent").status) "fail" "expected Codex-facing transport 503 regression guard to fail"
 
-  $dataRootJsonFailed = Join-Path $tempRoot "data-json-failed"
-  $auditJsonFailed = Join-Path $dataRootJsonFailed "codex_local_access_audit.jsonl"
-  Write-AuditLines $auditJsonFailed @(
-    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-json-failed"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
-    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-json-failed"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 200; errorType = "pool_unavailable"; streamState = "json_failed"; outcome = "in_band_json_failed"; detail = [ordered]@{ message = "模型 gpt-5.5 的API 服务号池暂无可调度账号（冷却中 1 个）" } }
+  $dataRootJsonCompleted = Join-Path $tempRoot "data-json-completed"
+  $auditJsonCompleted = Join-Path $dataRootJsonCompleted "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditJsonCompleted @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-json-completed"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-json-completed"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 200; errorType = "pool_unavailable"; streamState = "json_completed"; outcome = "in_band_json_local_completion"; detail = [ordered]@{ message = "模型 gpt-5.5 的API 服务号池暂无可调度账号（冷却中 1 个）" } }
   )
-  $jsonFailedOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+  $jsonCompletedOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
     -DurationSeconds 0 `
-    -DataRoot $dataRootJsonFailed `
+    -DataRoot $dataRootJsonCompleted `
     -CodexHome $codexHome `
     -CodexAppProcessNames "__cockpit_no_such_process__" `
     -IncludeExistingAudit `
     -Quiet 2>$null
 
   if ($LASTEXITCODE -ne 0) {
-    throw "live monitor non-stream JSON failed fixture failed with exit_code=$LASTEXITCODE"
+    throw "live monitor non-stream JSON completed fixture failed with exit_code=$LASTEXITCODE"
   }
-  $jsonFailedSummary = Convert-JsonOutput $jsonFailedOutput "non-stream JSON failed fixture"
-  Assert-Equal $jsonFailedSummary.overall "pass" "expected non-stream JSON failed fixture overall pass"
-  Assert-Equal $jsonFailedSummary.audit.responsesFailedPoolUnavailableCount 0 "non-stream failed JSON must not be counted as streaming response.failed"
-  Assert-Equal (($jsonFailedSummary.results | Where-Object name -eq "responses_pool_unavailable_terminal_failure_explicit").status) "pass" "expected non-stream JSON failed not to require streaming terminal failure"
+  $jsonCompletedSummary = Convert-JsonOutput $jsonCompletedOutput "non-stream JSON completed fixture"
+  Assert-Equal $jsonCompletedSummary.overall "pass" "expected non-stream JSON completed fixture overall pass"
+  Assert-Equal $jsonCompletedSummary.audit.responsesFailedPoolUnavailableCount 0 "non-stream completed JSON must not be counted as streaming response.failed"
+  Assert-Equal (($jsonCompletedSummary.results | Where-Object name -eq "responses_pool_unavailable_local_completion_explicit").status) "pass" "expected non-stream JSON completed not to require streaming local completion"
 
   $dataRootPoolWait = Join-Path $tempRoot "data-pool-wait"
   $auditPoolWait = Join-Path $dataRootPoolWait "codex_local_access_audit.jsonl"
@@ -324,7 +330,7 @@ try {
   Assert-Equal $poolWaitSummary.audit.completedStreamCount 1 "expected recovered stream completion after pool_wait"
   Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "sse_idle_pool_wait_regression_absent").status) "pass" "expected closed pool_wait not to fail SSE idle guard"
   Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "pool_wait_reaches_terminal_or_recovery").status) "pass" "expected recovered pool_wait to satisfy terminal progress guard"
-  Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "responses_pool_unavailable_synthetic_completion_absent").status) "pass" "expected recovered pool_wait not to fail synthetic completion guard"
+  Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "responses_pool_unavailable_legacy_synthetic_completion_absent").status) "pass" "expected recovered pool_wait not to fail legacy synthetic completion guard"
 
   $dataRootActiveDrain = Join-Path $tempRoot "data-active-drain"
   $auditActiveDrain = Join-Path $dataRootActiveDrain "codex_local_access_audit.jsonl"
@@ -342,16 +348,14 @@ try {
     -IncludeExistingAudit `
     -Quiet 2>$null
 
-  if ($LASTEXITCODE -ne 0) {
-    throw "live monitor response.failed pool_unavailable fixture failed with exit_code=$LASTEXITCODE"
-  }
+  Assert-True ($LASTEXITCODE -eq 1) "expected response.failed pool_unavailable fixture exit code 1"
   $activeDrainSummary = Convert-JsonOutput $activeDrainOutput "active-drain fixture"
-  Assert-Equal $activeDrainSummary.overall "pass" "expected explicit response.failed pool_unavailable fixture overall pass"
+  Assert-Equal $activeDrainSummary.overall "fail" "expected response.failed pool_unavailable fixture overall fail"
   Assert-Equal $activeDrainSummary.audit.activeDrainPoolWaitCount 2 "expected active drain pool_wait events"
   Assert-Equal $activeDrainSummary.audit.openPoolWaitCount 0 "active drain final response must close pool_wait"
   Assert-Equal $activeDrainSummary.audit.responsesFailedPoolUnavailableCount 1 "expected failed in-band terminal pool_unavailable to be counted"
   Assert-Equal (($activeDrainSummary.results | Where-Object name -eq "pool_wait_reaches_terminal_or_recovery").status) "pass" "expected active-drain terminal to satisfy progress guard"
-  Assert-Equal (($activeDrainSummary.results | Where-Object name -eq "responses_pool_unavailable_terminal_failure_explicit").status) "pass" "expected response.failed pool_unavailable to satisfy explicit terminal guard"
+  Assert-Equal (($activeDrainSummary.results | Where-Object name -eq "responses_pool_unavailable_failed_stream_absent").status) "fail" "expected response.failed pool_unavailable to fail fatal stream guard"
 
   $dataRootOpenPoolWait = Join-Path $tempRoot "data-open-pool-wait"
   $auditOpenPoolWait = Join-Path $dataRootOpenPoolWait "codex_local_access_audit.jsonl"
@@ -373,7 +377,7 @@ try {
   Assert-Equal $openPoolWaitSummary.audit.openPoolWaitCount 1 "expected open pool_wait to be counted"
   Assert-Equal (($openPoolWaitSummary.results | Where-Object name -eq "sse_idle_pool_wait_regression_absent").status) "fail" "expected heartbeat open pool_wait to fail SSE idle guard"
   Assert-Equal (($openPoolWaitSummary.results | Where-Object name -eq "pool_wait_reaches_terminal_or_recovery").status) "fail" "expected open pool_wait to fail progress guard"
-  Assert-Equal (($openPoolWaitSummary.results | Where-Object name -eq "responses_pool_unavailable_terminal_failure_explicit").status) "fail" "expected open pool_wait without response.failed to fail terminal guard"
+  Assert-Equal (($openPoolWaitSummary.results | Where-Object name -eq "responses_pool_unavailable_local_completion_explicit").status) "fail" "expected open pool_wait without local completion to fail terminal guard"
 
   $dataRootPoolParked = Join-Path $tempRoot "data-pool-parked"
   $auditPoolParked = Join-Path $dataRootPoolParked "codex_local_access_audit.jsonl"
@@ -405,7 +409,7 @@ try {
   New-Item -ItemType Directory -Force -Path $dataRootSseIdle | Out-Null
   @(
     '{"schemaVersion":1,"timestamp":1,"requestId":"req-idle","phase":"listener","route":"/v1/responses","model":"gpt-5.5","accountHash":"-","outcome":"accepted"}',
-    'stream disconnected before completion: idle timeout waiting for SSE'
+    'stream disconnected before completion: Cockpit API Service pool_unavailable: 模型 gpt-5.5 的API 服务号池暂无可调度账号（冷却中 1 个）；请刷新配额、恢复账号或调整号池后重试。'
   ) | Set-Content -LiteralPath $auditSseIdle -Encoding UTF8
 
   $sseIdleOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
@@ -417,10 +421,10 @@ try {
     -Quiet 2>$null
 
   Assert-True ($LASTEXITCODE -eq 1) "expected SSE idle fixture exit code 1"
-  $sseIdleSummary = Convert-JsonOutput $sseIdleOutput "SSE idle fixture"
-  Assert-Equal $sseIdleSummary.overall "fail" "expected SSE idle fixture overall fail"
-  Assert-Equal $sseIdleSummary.audit.sseIdleErrorCount 1 "expected SSE idle text to be counted"
-  Assert-Equal (($sseIdleSummary.results | Where-Object name -eq "sse_idle_pool_wait_regression_absent").status) "fail" "expected SSE idle text to fail regression guard"
+  $sseIdleSummary = Convert-JsonOutput $sseIdleOutput "SSE disconnect fixture"
+  Assert-Equal $sseIdleSummary.overall "fail" "expected SSE disconnect fixture overall fail"
+  Assert-Equal $sseIdleSummary.audit.sseIdleErrorCount 1 "expected stream disconnected pool_unavailable text to be counted"
+  Assert-Equal (($sseIdleSummary.results | Where-Object name -eq "sse_idle_pool_wait_regression_absent").status) "fail" "expected stream disconnected pool_unavailable text to fail regression guard"
 
   $dataRootFail = Join-Path $tempRoot "data-fail"
   $auditFail = Join-Path $dataRootFail "codex_local_access_audit.jsonl"

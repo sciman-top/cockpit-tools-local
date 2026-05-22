@@ -332,7 +332,7 @@ function Get-AuditAcceptanceSummary {
     $_.streamState -eq "admission_blocked" -or $_.outcome -match '^active_stream'
   })
   $sseIdleEvents = @($Events | Where-Object {
-    $_.rawLine -match 'stream disconnected before completion:\s*idle timeout waiting for SSE|idle timeout waiting for SSE'
+    $_.rawLine -match 'stream disconnected before completion:\s*idle timeout waiting for SSE|idle timeout waiting for SSE|stream disconnected before completion:\s*Cockpit API Service pool_unavailable'
   })
   $localPoolUnavailableEvents = @($parsedEvents | Where-Object { (Test-LocalPoolUnavailableEvent $_) -and $_.phase -ne "pool_wait" })
   $inBandSyntheticPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
@@ -340,6 +340,9 @@ function Get-AuditAcceptanceSummary {
   })
   $responsesFailedPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
     (Test-CodexResponsesRoute $_) -and $_.status -eq 200 -and ($_.streamState -eq "failed" -or $_.outcome -eq "pool_unavailable_after_active_stream_drain" -or $_.rawLine -match 'response\.failed')
+  })
+  $responsesLocalCompletionPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
+    (Test-CodexResponsesRoute $_) -and $_.status -eq 200 -and ($_.streamState -eq "completed" -or $_.outcome -eq "in_band_local_completion" -or $_.rawLine -match 'response\.completed')
   })
   $responsesTransport503PoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
     (Test-CodexResponsesRoute $_) -and $_.status -eq 503 -and $_.outcome -ne "in_band_synthetic"
@@ -624,6 +627,8 @@ function Get-AuditAcceptanceSummary {
     inBandSyntheticPoolUnavailableRequestIds = @($inBandSyntheticPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     responsesFailedPoolUnavailableCount = $responsesFailedPoolUnavailableEvents.Count
     responsesFailedPoolUnavailableRequestIds = @($responsesFailedPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    responsesLocalCompletionPoolUnavailableCount = $responsesLocalCompletionPoolUnavailableEvents.Count
+    responsesLocalCompletionPoolUnavailableRequestIds = @($responsesLocalCompletionPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     responsesTransport503PoolUnavailableCount = ([int]$responsesTransport503PoolUnavailableEvents.Count + [int]$responsesTransport503TextEvents.Count)
     responsesTransport503PoolUnavailableAuditCount = $responsesTransport503PoolUnavailableEvents.Count
     responsesTransport503PoolUnavailableTextCount = $responsesTransport503TextEvents.Count
@@ -794,9 +799,11 @@ function New-AcceptanceResults {
     openPoolWaitRequestIds = @($AuditSummary.openPoolWaitRequestIds)
     responsesFailedPoolUnavailableCount = [int]$AuditSummary.responsesFailedPoolUnavailableCount
     responsesFailedPoolUnavailableRequestIds = @($AuditSummary.responsesFailedPoolUnavailableRequestIds)
+    responsesLocalCompletionPoolUnavailableCount = [int]$AuditSummary.responsesLocalCompletionPoolUnavailableCount
+    responsesLocalCompletionPoolUnavailableRequestIds = @($AuditSummary.responsesLocalCompletionPoolUnavailableRequestIds)
   }
   if ($AuditSummary.openPoolWaitCount -gt 0) {
-    $results += Set-MonitorStatus $poolWaitProgress "fail" "监测窗口内存在 open pool_wait；全池不可用必须在请求预算内恢复或以 response.failed/JSON failed 显式终止，不能无 terminal event 停滞" $poolWaitProgressEvidence
+    $results += Set-MonitorStatus $poolWaitProgress "fail" "监测窗口内存在 open pool_wait；全池不可用必须在请求预算内恢复或以本地 completed Responses 响应闭合，不能无 terminal event 停滞" $poolWaitProgressEvidence
   } else {
     $results += Set-MonitorStatus $poolWaitProgress "pass" $null $poolWaitProgressEvidence
   }
@@ -811,39 +818,54 @@ function New-AcceptanceResults {
     inBandSyntheticPoolUnavailableRequestIds = @($AuditSummary.inBandSyntheticPoolUnavailableRequestIds)
     responsesFailedPoolUnavailableCount = [int]$AuditSummary.responsesFailedPoolUnavailableCount
     responsesFailedPoolUnavailableRequestIds = @($AuditSummary.responsesFailedPoolUnavailableRequestIds)
+    responsesLocalCompletionPoolUnavailableCount = [int]$AuditSummary.responsesLocalCompletionPoolUnavailableCount
+    responsesLocalCompletionPoolUnavailableRequestIds = @($AuditSummary.responsesLocalCompletionPoolUnavailableRequestIds)
   }
   if ($AuditSummary.responsesTransport503PoolUnavailableCount -gt 0) {
-    $results += Set-MonitorStatus $responses503 "fail" "监测窗口内 Codex-facing /v1/responses 暴露了 transport 503/pool_unavailable；streaming 请求应返回 200 SSE response.failed，不能让 Codex CLI/App 看到 transport 503" $responses503Evidence
+    $results += Set-MonitorStatus $responses503 "fail" "监测窗口内 Codex-facing /v1/responses 暴露了 transport 503/pool_unavailable；请求应返回 200 completed Responses 本地响应，不能让 Codex CLI/App 看到 transport 503" $responses503Evidence
   } else {
     $results += Set-MonitorStatus $responses503 "pass" $null $responses503Evidence
   }
 
-  $failedTerminal = New-MonitorResult "responses_pool_unavailable_terminal_failure_explicit"
-  $failedTerminalEvidence = @{
+  $localCompletion = New-MonitorResult "responses_pool_unavailable_local_completion_explicit"
+  $localCompletionEvidence = @{
+    responsesLocalCompletionPoolUnavailableCount = [int]$AuditSummary.responsesLocalCompletionPoolUnavailableCount
+    responsesLocalCompletionPoolUnavailableRequestIds = @($AuditSummary.responsesLocalCompletionPoolUnavailableRequestIds)
     responsesFailedPoolUnavailableCount = [int]$AuditSummary.responsesFailedPoolUnavailableCount
     responsesFailedPoolUnavailableRequestIds = @($AuditSummary.responsesFailedPoolUnavailableRequestIds)
     openPoolWaitCount = [int]$AuditSummary.openPoolWaitCount
     openPoolWaitRequestIds = @($AuditSummary.openPoolWaitRequestIds)
   }
-  if ($AuditSummary.openPoolWaitCount -gt 0 -and $AuditSummary.responsesFailedPoolUnavailableCount -eq 0) {
-    $results += Set-MonitorStatus $failedTerminal "fail" "监测窗口内存在 open pool_wait 且没有 response.failed 终止；这会让 Codex turn 表面不断线但实际停滞" $failedTerminalEvidence
-  } elseif ($AuditSummary.responsesFailedPoolUnavailableCount -gt 0) {
-    $results += Set-MonitorStatus $failedTerminal "pass" "监测窗口内 Codex-facing /v1/responses 以 response.failed 显式结束 pool_unavailable，避免静默停滞" $failedTerminalEvidence
+  if ($AuditSummary.openPoolWaitCount -gt 0 -and $AuditSummary.responsesLocalCompletionPoolUnavailableCount -eq 0) {
+    $results += Set-MonitorStatus $localCompletion "fail" "监测窗口内存在 open pool_wait 且没有本地 completed Responses 终止；这会让 Codex turn 表面不断线但实际停滞" $localCompletionEvidence
+  } elseif ($AuditSummary.responsesLocalCompletionPoolUnavailableCount -gt 0) {
+    $results += Set-MonitorStatus $localCompletion "pass" "监测窗口内 Codex-facing /v1/responses 以本地 completed Responses 明确闭合 pool_unavailable，避免 response.failed/503/SSE idle" $localCompletionEvidence
   } else {
-    $results += Set-MonitorStatus $failedTerminal "pass" $null $failedTerminalEvidence
+    $results += Set-MonitorStatus $localCompletion "pass" $null $localCompletionEvidence
   }
 
-  $syntheticTerminal = New-MonitorResult "responses_pool_unavailable_synthetic_completion_absent"
-  $syntheticTerminalEvidence = @{
+  $failedStream = New-MonitorResult "responses_pool_unavailable_failed_stream_absent"
+  $failedStreamEvidence = @{
+    responsesFailedPoolUnavailableCount = [int]$AuditSummary.responsesFailedPoolUnavailableCount
+    responsesFailedPoolUnavailableRequestIds = @($AuditSummary.responsesFailedPoolUnavailableRequestIds)
+  }
+  if ($AuditSummary.responsesFailedPoolUnavailableCount -gt 0) {
+    $results += Set-MonitorStatus $failedStream "fail" "监测窗口内 Codex-facing /v1/responses 仍以 response.failed/pool_unavailable 结束；Codex 会把它视为 fatal stream failure" $failedStreamEvidence
+  } else {
+    $results += Set-MonitorStatus $failedStream "pass" $null $failedStreamEvidence
+  }
+
+  $legacySyntheticTerminal = New-MonitorResult "responses_pool_unavailable_legacy_synthetic_completion_absent"
+  $legacySyntheticTerminalEvidence = @{
     inBandSyntheticPoolUnavailableCount = [int]$AuditSummary.inBandSyntheticPoolUnavailableCount
     inBandSyntheticPoolUnavailableRequestIds = @($AuditSummary.inBandSyntheticPoolUnavailableRequestIds)
     heartbeatPoolWaitCount = [int]$AuditSummary.heartbeatPoolWaitCount
     heartbeatPoolWaitRequestIds = @($AuditSummary.heartbeatPoolWaitRequestIds)
   }
   if ($AuditSummary.inBandSyntheticPoolUnavailableCount -gt 0) {
-    $results += Set-MonitorStatus $syntheticTerminal "fail" "监测窗口内 Codex-facing /v1/responses 仍以 in-band synthetic completion 结束 pool_unavailable；这会正常结束当前 Codex turn，属于任务连续性回归" $syntheticTerminalEvidence
+    $results += Set-MonitorStatus $legacySyntheticTerminal "fail" "监测窗口内 Codex-facing /v1/responses 仍使用旧 outcome=in_band_synthetic；应改为可观测的 in_band_local_completion，并保持完整 completed Responses 事件序列" $legacySyntheticTerminalEvidence
   } else {
-    $results += Set-MonitorStatus $syntheticTerminal "pass" $null $syntheticTerminalEvidence
+    $results += Set-MonitorStatus $legacySyntheticTerminal "pass" $null $legacySyntheticTerminalEvidence
   }
 
   $cli = New-MonitorResult "codex_cli_config_auth_untouched"
@@ -898,7 +920,7 @@ do {
     $events += @($lines | ForEach-Object { Convert-AuditLine $_ })
     if (-not $Quiet) {
       $summary = Get-AuditAcceptanceSummary $events
-      Write-Host ("events={0}; has429={1}; fallback={2}; has200After429={3}; fallbackCycles={4}; healthyAccounts={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; inBandPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}" -f $summary.eventCount, $summary.has429, $summary.hasFallbackSelected, $summary.has200After429, $summary.fallbackCycleCount, $summary.distinctHealthyAccountCountAfterFallback, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.inBandSyntheticPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount)
+      Write-Host ("events={0}; has429={1}; fallback={2}; has200After429={3}; fallbackCycles={4}; healthyAccounts={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; localCompletionPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}" -f $summary.eventCount, $summary.has429, $summary.hasFallbackSelected, $summary.has200After429, $summary.fallbackCycleCount, $summary.distinctHealthyAccountCountAfterFallback, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.responsesLocalCompletionPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount)
     }
   }
 
@@ -908,10 +930,11 @@ do {
     $streamSatisfied = (-not $RequireStreamCompletion) -or ($summaryNow.completedStreamCount -ge $RequiredCompletedStreams)
     $retrySatisfied = (-not $summaryNow.retryLimitErrorFound)
     $responses503Satisfied = (-not $summaryNow.responsesTransport503PoolUnavailableCount)
-    $failedTerminalSatisfied = (-not $summaryNow.openPoolWaitCount) -or $summaryNow.responsesFailedPoolUnavailableCount -gt 0
-    $syntheticTerminalSatisfied = (-not $summaryNow.inBandSyntheticPoolUnavailableCount)
+    $localCompletionSatisfied = (-not $summaryNow.openPoolWaitCount) -or $summaryNow.responsesLocalCompletionPoolUnavailableCount -gt 0
+    $failedStreamSatisfied = (-not $summaryNow.responsesFailedPoolUnavailableCount)
+    $legacySyntheticTerminalSatisfied = (-not $summaryNow.inBandSyntheticPoolUnavailableCount)
     $poolWaitProgressSatisfied = (-not $summaryNow.openPoolWaitCount)
-    if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $failedTerminalSatisfied -and $syntheticTerminalSatisfied -and $poolWaitProgressSatisfied) {
+    if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied) {
       break
     }
   }

@@ -338,7 +338,7 @@ Phase 1 checkpoint：
 2. sticky task/process account，若可用。
 3. healthy 且非 cooldown 账号。
 4. Hardened 默认保留用户排序作为 fill-first；非 hardened/高级模式才按 plan/quota/最近失败/最近成功排序。
-5. 无健康账号时返回明确 `503/pool_unavailable`，不扫射、不伪装成 upstream 429。
+5. 无健康账号时普通 HTTP 返回明确 `503/pool_unavailable`，Codex-facing `/v1/responses` 返回本地 completed Responses SSE/JSON；不扫射、不伪装成 upstream 429、不向 Codex 暴露 `response.failed`。
 
 验收：
 
@@ -573,4 +573,4 @@ git diff --check
 
 ## 下一步建议
 
-下一步按账号池调度专项计划先补 smoke/report 调度摘要和 selector audit 候选原因，再补 audit UI 最近脱敏事件列表。AI 推荐这样做的理由：核心 API service 请求链路、HLA-11 lease、request_id audit chain、audit degraded 可见性和 Codex CLI direct smoke 都已完成 focused tests + ephemeral gateway/CLI 实跑，剩余高收益点是把“为什么选这个账号/为什么不切号/为什么号池不可用”直接暴露给用户排障。
+下一步按账号池调度专项计划先补 smoke/report 调度摘要、selector audit 候选原因，以及账号卡片/分组/API 服务推荐排序合同，再补 audit UI 最近脱敏事件列表。AI 推荐这样做的理由：核心 API service 请求链路、HLA-11 lease、request_id audit chain、audit degraded 可见性和 Codex CLI direct smoke 都已完成 focused tests + ephemeral gateway/CLI 实跑，剩余高收益点是把“为什么选这个账号/为什么不切号/为什么老号重置后优先/为什么号池不可用”直接暴露给用户排障。

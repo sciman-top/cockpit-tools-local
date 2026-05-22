@@ -9765,32 +9765,199 @@ fn build_synthetic_pool_unavailable_responses_payload(
         .unwrap_or(routing_hint.model_key);
     let created_at = chrono::Utc::now().timestamp();
     let response_id = format!("resp_cockpit_pool_unavailable_{}", now_ms());
+    let message_id = format!("msg_cockpit_pool_unavailable_{}", now_ms());
     let text = build_synthetic_pool_unavailable_text(error);
 
     json!({
         "id": response_id,
         "object": "response",
         "created_at": created_at,
-        "status": "failed",
+        "completed_at": created_at,
+        "status": "completed",
         "model": model,
-        "output": [],
-        "error": {
-            "code": "pool_unavailable",
-            "message": text
-        },
+        "output": [{
+            "id": message_id,
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{
+                "type": "output_text",
+                "text": text,
+                "annotations": []
+            }]
+        }],
+        "error": null,
         "incomplete_details": null,
-        "usage": null
+        "parallel_tool_calls": true,
+        "previous_response_id": null,
+        "reasoning": {
+            "effort": null,
+            "summary": null
+        },
+        "store": false,
+        "text": {
+            "format": {
+                "type": "text"
+            }
+        },
+        "tool_choice": "auto",
+        "tools": [],
+        "truncation": "disabled",
+        "usage": {
+            "input_tokens": 0,
+            "input_tokens_details": {
+                "cached_tokens": 0
+            },
+            "output_tokens": 0,
+            "output_tokens_details": {
+                "reasoning_tokens": 0
+            },
+            "total_tokens": 0
+        },
+        "user": null,
+        "metadata": {}
     })
 }
 
-fn build_failed_pool_unavailable_sse(payload: &Value) -> Vec<u8> {
+fn build_in_progress_pool_unavailable_response(payload: &Value) -> Value {
+    let mut response = payload.clone();
+    if let Some(object) = response.as_object_mut() {
+        object.insert("status".to_string(), json!("in_progress"));
+        object.insert("completed_at".to_string(), Value::Null);
+        object.insert("output".to_string(), json!([]));
+        object.insert("usage".to_string(), Value::Null);
+    }
+    response
+}
+
+fn build_completed_pool_unavailable_sse(payload: &Value) -> Vec<u8> {
     let mut stream_body = String::new();
+    let response = payload.clone();
+    let in_progress_response = build_in_progress_pool_unavailable_response(payload);
+    let output_item = payload
+        .get("output")
+        .and_then(Value::as_array)
+        .and_then(|output| output.first())
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "id": format!("msg_cockpit_pool_unavailable_{}", now_ms()),
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": []
+            })
+        });
+    let item_id = output_item
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("msg_cockpit_pool_unavailable");
+    let text = output_item
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| content.first())
+        .and_then(|part| part.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let in_progress_item = json!({
+        "id": item_id,
+        "type": "message",
+        "status": "in_progress",
+        "role": "assistant",
+        "content": []
+    });
     push_named_sse_payload(
         &mut stream_body,
-        "response.failed",
+        "response.created",
         json!({
-            "type": "response.failed",
-            "response": payload
+            "type": "response.created",
+            "response": in_progress_response
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.in_progress",
+        json!({
+            "type": "response.in_progress",
+            "response": build_in_progress_pool_unavailable_response(payload)
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.output_item.added",
+        json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": in_progress_item
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.content_part.added",
+        json!({
+            "type": "response.content_part.added",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {
+                "type": "output_text",
+                "text": "",
+                "annotations": []
+            }
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.output_text.delta",
+        json!({
+            "type": "response.output_text.delta",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.output_text.done",
+        json!({
+            "type": "response.output_text.done",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "text": text
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.content_part.done",
+        json!({
+            "type": "response.content_part.done",
+            "item_id": item_id,
+            "output_index": 0,
+            "content_index": 0,
+            "part": {
+                "type": "output_text",
+                "text": text,
+                "annotations": []
+            }
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.output_item.done",
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": output_item
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.completed",
+        json!({
+            "type": "response.completed",
+            "response": response
         }),
     );
     stream_body.push_str("data: [DONE]\n\n");
@@ -9837,14 +10004,14 @@ async fn write_in_band_pool_unavailable_response(
         Some(StatusCode::OK.as_u16()),
         Some("pool_unavailable"),
         Some(if is_stream_response {
-            "failed"
+            "completed"
         } else {
-            "json_failed"
+            "json_completed"
         }),
         Some(if is_stream_response {
-            "in_band_failed"
+            "in_band_local_completion"
         } else {
-            "in_band_json_failed"
+            "in_band_json_local_completion"
         }),
         detail,
     );
@@ -9861,7 +10028,7 @@ async fn write_in_band_pool_unavailable_response(
                 &HeaderMap::new(),
             )
             .await?;
-            write_chunked_response_chunk(stream, &build_failed_pool_unavailable_sse(&payload))
+            write_chunked_response_chunk(stream, &build_completed_pool_unavailable_sse(&payload))
                 .await?;
             finish_chunked_response(stream).await?;
         }
@@ -11259,7 +11426,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn exhausted_responses_stream_returns_terminal_failed_event_when_wait_exceeds_budget() {
+    async fn exhausted_responses_stream_returns_local_completion_when_wait_exceeds_budget() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -11378,13 +11545,28 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             response_text
         );
         assert!(
-            response_text.contains("response.failed"),
-            "expected terminal response.failed event, got: {}",
+            response_text.contains("response.completed"),
+            "expected local pool_unavailable SSE to complete gracefully, got: {}",
+            response_text
+        );
+        assert!(
+            !response_text.contains("response.failed"),
+            "Codex-facing local pool_unavailable must not emit fatal response.failed: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("response.output_item.added")
+                && response_text.contains("response.content_part.added")
+                && response_text.contains("response.output_text.delta")
+                && response_text.contains("response.output_text.done")
+                && response_text.contains("response.content_part.done")
+                && response_text.contains("response.output_item.done"),
+            "expected complete Responses streaming event sequence, got: {}",
             response_text
         );
         assert!(
             response_text.contains("[DONE]"),
-            "expected failed SSE to close the stream, got: {}",
+            "expected completed SSE to close the stream, got: {}",
             response_text
         );
         assert!(
@@ -11396,8 +11578,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
             .expect("audit should be written to isolated root");
         assert!(audit.contains("\"phase\":\"final_response\""));
-        assert!(audit.contains("\"streamState\":\"failed\""));
+        assert!(audit.contains("\"streamState\":\"completed\""));
+        assert!(audit.contains("\"outcome\":\"in_band_local_completion\""));
         assert!(audit.contains("\"errorType\":\"pool_unavailable\""));
+        assert!(!audit.contains("\"streamState\":\"failed\""));
         assert!(!audit.contains("\"streamState\":\"heartbeat\""));
 
         let server_result = tokio::time::timeout(Duration::from_secs(1), server)
@@ -11419,7 +11603,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn exhausted_responses_stream_fails_fast_without_releasing_unrelated_active_stream() {
+    async fn exhausted_responses_stream_completes_locally_preserving_active_stream() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -11606,13 +11790,18 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             response_text
         );
         assert!(
-            response_text.contains("response.failed"),
-            "expected exhausted request to end with response.failed, got: {}",
+            response_text.contains("response.completed"),
+            "expected exhausted request to complete locally without fatal stream failure, got: {}",
+            response_text
+        );
+        assert!(
+            !response_text.contains("response.failed"),
+            "Codex-facing exhausted request must not emit response.failed: {}",
             response_text
         );
         assert!(
             response_text.contains("[DONE]"),
-            "expected failed SSE to close the stream, got: {}",
+            "expected completed SSE to close the stream, got: {}",
             response_text
         );
         assert!(
@@ -11628,7 +11817,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(
             active_stream_lease_count_for_account("active-a"),
             1,
-            "terminal failure for the new request must not release unrelated active streams"
+            "local completion for the new request must not release unrelated active streams"
         );
         active_lease.release(ActiveStreamTerminal::Completed);
         assert_eq!(active_stream_lease_count_for_account("active-a"), 0);
@@ -11637,7 +11826,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("audit should be written to isolated root");
         assert!(audit.contains("\"phase\":\"final_response\""));
         assert!(audit.contains("\"errorType\":\"pool_unavailable\""));
-        assert!(audit.contains("\"streamState\":\"failed\""));
+        assert!(audit.contains("\"streamState\":\"completed\""));
+        assert!(audit.contains("\"outcome\":\"in_band_local_completion\""));
+        assert!(!audit.contains("\"streamState\":\"failed\""));
         assert!(!audit.contains("\"streamState\":\"heartbeat\""));
         assert!(!audit.contains("\"outcome\":\"parked\""));
         assert!(!audit.contains("\"outcome\":\"in_band_synthetic\""));
@@ -11890,7 +12081,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn exhausted_responses_non_stream_returns_in_band_failed_payload() {
+    async fn exhausted_responses_non_stream_returns_in_band_completed_payload() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -12008,13 +12199,18 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             response_text
         );
         assert!(
-            response_text.contains("\"status\":\"failed\""),
-            "expected failed pool_unavailable response payload, got: {}",
+            response_text.contains("\"status\":\"completed\""),
+            "expected completed pool_unavailable response payload, got: {}",
             response_text
         );
         assert!(
-            response_text.contains("\"error\""),
-            "expected failed response error object, got: {}",
+            response_text.contains("\"error\":null"),
+            "expected completed local response without fatal error object, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("\"output\"") && response_text.contains("\"output_text\""),
+            "expected local assistant output text, got: {}",
             response_text
         );
         assert!(
@@ -12035,8 +12231,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(audit.contains("\"phase\":\"final_response\""));
         assert!(audit.contains("\"status\":200"));
         assert!(audit.contains("\"errorType\":\"pool_unavailable\""));
-        assert!(audit.contains("\"streamState\":\"json_failed\""));
-        assert!(audit.contains("\"outcome\":\"in_band_json_failed\""));
+        assert!(audit.contains("\"streamState\":\"json_completed\""));
+        assert!(audit.contains("\"outcome\":\"in_band_json_local_completion\""));
+        assert!(!audit.contains("\"streamState\":\"json_failed\""));
         assert!(!audit.contains("\"outcome\":\"in_band_synthetic\""));
 
         let server_result = tokio::time::timeout(Duration::from_secs(1), server)
