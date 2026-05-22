@@ -10,6 +10,8 @@
 
 本地参考源码优先使用 `D:\CODE\external\_reference_gateway_sources`，其中包含 `CLIProxyAPI`、`litellm`、`new-api`、`sub2api` 快照；参考结论汇总在 `docs/reference-gateway-best-practices.md`。
 
+账号池调度的下一阶段专项计划见 `docs/LOCAL_HARDENED_API_ACCOUNT_POOL_SCHEDULING_PLAN.md`。该文档只负责多账号 API 服务号池调度、风控降噪、可观测性和验收任务清单，不替代本路线图的总体阶段划分。
+
 ## 当前判断
 
 直接弃用 Cockpit 并转用其它网关项目，能减少本仓改造工作，但不贴合当前核心需求：
@@ -571,4 +573,4 @@ git diff --check
 
 ## 下一步建议
 
-下一步补 audit UI 最近脱敏事件列表。AI 推荐这样做的理由：核心 API service 请求链路、HLA-11 lease、request_id audit chain、audit degraded 可见性和 Codex CLI direct smoke 都已完成 focused tests + ephemeral gateway/CLI 实跑，剩余高收益点是把最近 request_id 链路摘要直接暴露给用户排障。
+下一步按账号池调度专项计划先补 smoke/report 调度摘要和 selector audit 候选原因，再补 audit UI 最近脱敏事件列表。AI 推荐这样做的理由：核心 API service 请求链路、HLA-11 lease、request_id audit chain、audit degraded 可见性和 Codex CLI direct smoke 都已完成 focused tests + ephemeral gateway/CLI 实跑，剩余高收益点是把“为什么选这个账号/为什么不切号/为什么号池不可用”直接暴露给用户排障。

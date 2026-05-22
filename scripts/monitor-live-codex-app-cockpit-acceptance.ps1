@@ -309,13 +309,44 @@ function Test-LocalPoolUnavailableEvent {
   $false
 }
 
+function Test-CodexResponsesRoute {
+  param([System.Collections.IDictionary]$Event)
+  $route = [string]$Event.route
+  $route -eq "/v1/responses" -or $route -eq "/responses" -or $route.EndsWith("/responses")
+}
+
 function Get-AuditAcceptanceSummary {
   param([object[]]$Events)
   $parsedEvents = @($Events | Where-Object { $_.parsed })
   $retryLimitEvents = @($Events | Where-Object {
     ($_.rawLine -match 'exceeded retry limit|last status:\s*429|429 Too Many Requests') -and -not (Test-LocalPoolUnavailableEvent $_)
   })
-  $localPoolUnavailableEvents = @($parsedEvents | Where-Object { Test-LocalPoolUnavailableEvent $_ })
+  $poolWaitEvents = @($parsedEvents | Where-Object { $_.phase -eq "pool_wait" })
+  $parkedPoolWaitEvents = @($poolWaitEvents | Where-Object {
+    $_.outcome -eq "parked" -or $_.rawLine -match 'pool_unavailable_stream_park'
+  })
+  $heartbeatPoolWaitEvents = @($poolWaitEvents | Where-Object {
+    $_.streamState -eq "heartbeat" -or $_.rawLine -match 'cockpit_pool_wait'
+  })
+  $activeDrainPoolWaitEvents = @($poolWaitEvents | Where-Object {
+    $_.streamState -eq "admission_blocked" -or $_.outcome -match '^active_stream'
+  })
+  $sseIdleEvents = @($Events | Where-Object {
+    $_.rawLine -match 'stream disconnected before completion:\s*idle timeout waiting for SSE|idle timeout waiting for SSE'
+  })
+  $localPoolUnavailableEvents = @($parsedEvents | Where-Object { (Test-LocalPoolUnavailableEvent $_) -and $_.phase -ne "pool_wait" })
+  $inBandSyntheticPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
+    (Test-CodexResponsesRoute $_) -and $_.status -eq 200 -and $_.outcome -eq "in_band_synthetic"
+  })
+  $responsesFailedPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
+    (Test-CodexResponsesRoute $_) -and $_.status -eq 200 -and ($_.streamState -eq "failed" -or $_.outcome -eq "pool_unavailable_after_active_stream_drain" -or $_.rawLine -match 'response\.failed')
+  })
+  $responsesTransport503PoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
+    (Test-CodexResponsesRoute $_) -and $_.status -eq 503 -and $_.outcome -ne "in_band_synthetic"
+  })
+  $responsesTransport503TextEvents = @($Events | Where-Object {
+    $_.rawLine -match 'unexpected status 503 Service Unavailable' -and ($_.rawLine -match '/v1/responses|/responses|pool_unavailable|API 服务号池')
+  })
 
   $first429Index = -1
   $firstFallbackIndex = -1
@@ -536,6 +567,19 @@ function Get-AuditAcceptanceSummary {
   $completedFallbackTransitions = @($fallbackTransitions | Where-Object { $_.completed -and $_.differentAccount })
   $distinctHealthyAccountHashesAfterFallback = @($healthyAccountHashesAfterFallback | Sort-Object -Unique)
   $retryLimitErrorCount = [int]$retryLimitEvents.Count + [int]$unrecoveredFallback429Events.Count
+  $openPoolWaitRequestIds = @()
+  foreach ($poolWaitRequestId in @($poolWaitEvents | ForEach-Object { $_.requestId } | Where-Object { $_ -and $_ -ne "-" } | Sort-Object -Unique)) {
+    $requestEvents = @($parsedEvents | Where-Object { $_.requestId -eq $poolWaitRequestId })
+    $hasPoolWaitTerminal = [bool]@($requestEvents | Where-Object {
+      $_.phase -eq "stream_completed" -or
+      ($_.phase -eq "lease_released" -and $_.outcome -eq "completed") -or
+      $_.phase -eq "final_response" -or
+      ($_.phase -eq "upstream_forward" -and $_.status -eq 200)
+    }).Count
+    if (-not $hasPoolWaitTerminal) {
+      $openPoolWaitRequestIds += $poolWaitRequestId
+    }
+  }
 
   [ordered]@{
     eventCount = $Events.Count
@@ -560,8 +604,30 @@ function Get-AuditAcceptanceSummary {
     retryLimitTextMatchCount = $retryLimitEvents.Count
     unrecoveredFallback429Count = $unrecoveredFallback429Events.Count
     unrecoveredFallback429RequestIds = @($unrecoveredFallback429Events | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    poolWaitCount = $poolWaitEvents.Count
+    poolWaitSleepingCount = @($poolWaitEvents | Where-Object { $_.outcome -eq "sleeping" }).Count
+    poolWaitRetryingCount = @($poolWaitEvents | Where-Object { $_.outcome -eq "retrying" }).Count
+    poolWaitRequestIds = @($poolWaitEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    heartbeatPoolWaitCount = $heartbeatPoolWaitEvents.Count
+    heartbeatPoolWaitRequestIds = @($heartbeatPoolWaitEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    activeDrainPoolWaitCount = $activeDrainPoolWaitEvents.Count
+    activeDrainPoolWaitRequestIds = @($activeDrainPoolWaitEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    openPoolWaitCount = $openPoolWaitRequestIds.Count
+    openPoolWaitRequestIds = @($openPoolWaitRequestIds)
+    parkedPoolWaitCount = $parkedPoolWaitEvents.Count
+    parkedPoolWaitRequestIds = @($parkedPoolWaitEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sseIdleErrorCount = $sseIdleEvents.Count
+    sseIdleRequestIds = @($sseIdleEvents | ForEach-Object { $_.requestId } | Where-Object { $_ } | Sort-Object -Unique)
     localPoolUnavailableCount = $localPoolUnavailableEvents.Count
     localPoolUnavailableRequestIds = @($localPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    inBandSyntheticPoolUnavailableCount = $inBandSyntheticPoolUnavailableEvents.Count
+    inBandSyntheticPoolUnavailableRequestIds = @($inBandSyntheticPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    responsesFailedPoolUnavailableCount = $responsesFailedPoolUnavailableEvents.Count
+    responsesFailedPoolUnavailableRequestIds = @($responsesFailedPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    responsesTransport503PoolUnavailableCount = ([int]$responsesTransport503PoolUnavailableEvents.Count + [int]$responsesTransport503TextEvents.Count)
+    responsesTransport503PoolUnavailableAuditCount = $responsesTransport503PoolUnavailableEvents.Count
+    responsesTransport503PoolUnavailableTextCount = $responsesTransport503TextEvents.Count
+    responsesTransport503PoolUnavailableRequestIds = @($responsesTransport503PoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     startedStreamCount = $startedStreams.Count
     completedStreamCount = $completedStreams.Count
     openStreamCount = $openStreams.Count
@@ -702,6 +768,84 @@ function New-AcceptanceResults {
     $results += Set-MonitorStatus $retry "pass" $null $retryEvidence
   }
 
+  $sseIdle = New-MonitorResult "sse_idle_pool_wait_regression_absent"
+  $sseIdleEvidence = @{
+    parkedPoolWaitCount = [int]$AuditSummary.parkedPoolWaitCount
+    parkedPoolWaitRequestIds = @($AuditSummary.parkedPoolWaitRequestIds)
+    heartbeatPoolWaitCount = [int]$AuditSummary.heartbeatPoolWaitCount
+    heartbeatPoolWaitRequestIds = @($AuditSummary.heartbeatPoolWaitRequestIds)
+    activeDrainPoolWaitCount = [int]$AuditSummary.activeDrainPoolWaitCount
+    activeDrainPoolWaitRequestIds = @($AuditSummary.activeDrainPoolWaitRequestIds)
+    sseIdleErrorCount = [int]$AuditSummary.sseIdleErrorCount
+    sseIdleRequestIds = @($AuditSummary.sseIdleRequestIds)
+  }
+  if ($AuditSummary.parkedPoolWaitCount -gt 0 -or $AuditSummary.sseIdleErrorCount -gt 0) {
+    $results += Set-MonitorStatus $sseIdle "fail" "监测窗口内出现 parked pool_wait 或 SSE idle timeout；streaming /v1/responses 不能静默挂起" $sseIdleEvidence
+  } else {
+    $results += Set-MonitorStatus $sseIdle "pass" $null $sseIdleEvidence
+  }
+
+  $poolWaitProgress = New-MonitorResult "pool_wait_reaches_terminal_or_recovery"
+  $poolWaitProgressEvidence = @{
+    poolWaitCount = [int]$AuditSummary.poolWaitCount
+    heartbeatPoolWaitCount = [int]$AuditSummary.heartbeatPoolWaitCount
+    activeDrainPoolWaitCount = [int]$AuditSummary.activeDrainPoolWaitCount
+    openPoolWaitCount = [int]$AuditSummary.openPoolWaitCount
+    openPoolWaitRequestIds = @($AuditSummary.openPoolWaitRequestIds)
+    responsesFailedPoolUnavailableCount = [int]$AuditSummary.responsesFailedPoolUnavailableCount
+    responsesFailedPoolUnavailableRequestIds = @($AuditSummary.responsesFailedPoolUnavailableRequestIds)
+  }
+  if ($AuditSummary.openPoolWaitCount -gt 0 -and $AuditSummary.heartbeatPoolWaitCount -eq 0 -and $AuditSummary.activeDrainPoolWaitCount -eq 0) {
+    $results += Set-MonitorStatus $poolWaitProgress "fail" "监测窗口内存在 open pool_wait，但没有 heartbeat 或 active-drain 证据；这代表无错误且无保活的停滞" $poolWaitProgressEvidence
+  } elseif ($AuditSummary.openPoolWaitCount -gt 0) {
+    $results += Set-MonitorStatus $poolWaitProgress "pass" "监测窗口内存在被拦截等待的新请求；已观察到 heartbeat/active-drain，按饱和等待状态记录，不作为中断回归" $poolWaitProgressEvidence
+  } else {
+    $results += Set-MonitorStatus $poolWaitProgress "pass" $null $poolWaitProgressEvidence
+  }
+
+  $responses503 = New-MonitorResult "responses_pool_unavailable_transport_503_absent"
+  $responses503Evidence = @{
+    responsesTransport503PoolUnavailableCount = [int]$AuditSummary.responsesTransport503PoolUnavailableCount
+    responsesTransport503PoolUnavailableAuditCount = [int]$AuditSummary.responsesTransport503PoolUnavailableAuditCount
+    responsesTransport503PoolUnavailableTextCount = [int]$AuditSummary.responsesTransport503PoolUnavailableTextCount
+    responsesTransport503PoolUnavailableRequestIds = @($AuditSummary.responsesTransport503PoolUnavailableRequestIds)
+    inBandSyntheticPoolUnavailableCount = [int]$AuditSummary.inBandSyntheticPoolUnavailableCount
+    inBandSyntheticPoolUnavailableRequestIds = @($AuditSummary.inBandSyntheticPoolUnavailableRequestIds)
+    responsesFailedPoolUnavailableCount = [int]$AuditSummary.responsesFailedPoolUnavailableCount
+    responsesFailedPoolUnavailableRequestIds = @($AuditSummary.responsesFailedPoolUnavailableRequestIds)
+  }
+  if ($AuditSummary.responsesTransport503PoolUnavailableCount -gt 0) {
+    $results += Set-MonitorStatus $responses503 "fail" "监测窗口内 Codex-facing /v1/responses 暴露了 transport 503/pool_unavailable；streaming 请求应保持 200 SSE heartbeat 等待，不应让 Codex CLI/App 看到 transport 503" $responses503Evidence
+  } else {
+    $results += Set-MonitorStatus $responses503 "pass" $null $responses503Evidence
+  }
+
+  $failedTerminal = New-MonitorResult "responses_pool_unavailable_failed_stream_absent"
+  $failedTerminalEvidence = @{
+    responsesFailedPoolUnavailableCount = [int]$AuditSummary.responsesFailedPoolUnavailableCount
+    responsesFailedPoolUnavailableRequestIds = @($AuditSummary.responsesFailedPoolUnavailableRequestIds)
+    openPoolWaitCount = [int]$AuditSummary.openPoolWaitCount
+    openPoolWaitRequestIds = @($AuditSummary.openPoolWaitRequestIds)
+  }
+  if ($AuditSummary.responsesFailedPoolUnavailableCount -gt 0) {
+    $results += Set-MonitorStatus $failedTerminal "fail" "监测窗口内 Codex-facing /v1/responses 以 response.failed 结束 pool_unavailable；Codex CLI/App 会把它提升为 turn failure" $failedTerminalEvidence
+  } else {
+    $results += Set-MonitorStatus $failedTerminal "pass" $null $failedTerminalEvidence
+  }
+
+  $syntheticTerminal = New-MonitorResult "responses_pool_unavailable_synthetic_completion_absent"
+  $syntheticTerminalEvidence = @{
+    inBandSyntheticPoolUnavailableCount = [int]$AuditSummary.inBandSyntheticPoolUnavailableCount
+    inBandSyntheticPoolUnavailableRequestIds = @($AuditSummary.inBandSyntheticPoolUnavailableRequestIds)
+    heartbeatPoolWaitCount = [int]$AuditSummary.heartbeatPoolWaitCount
+    heartbeatPoolWaitRequestIds = @($AuditSummary.heartbeatPoolWaitRequestIds)
+  }
+  if ($AuditSummary.inBandSyntheticPoolUnavailableCount -gt 0) {
+    $results += Set-MonitorStatus $syntheticTerminal "fail" "监测窗口内 Codex-facing /v1/responses 仍以 in-band synthetic completion 结束 pool_unavailable；这会正常结束当前 Codex turn，属于任务连续性回归" $syntheticTerminalEvidence
+  } else {
+    $results += Set-MonitorStatus $syntheticTerminal "pass" $null $syntheticTerminalEvidence
+  }
+
   $cli = New-MonitorResult "codex_cli_config_auth_untouched"
   $cliEvidence = @{
     unchanged = [bool]$CliComparison.unchanged
@@ -754,7 +898,7 @@ do {
     $events += @($lines | ForEach-Object { Convert-AuditLine $_ })
     if (-not $Quiet) {
       $summary = Get-AuditAcceptanceSummary $events
-      Write-Host ("events={0}; has429={1}; fallback={2}; has200After429={3}; fallbackCycles={4}; healthyAccounts={5}; streams={6}/{7}; retryLimit={8}; poolUnavailable={9}" -f $summary.eventCount, $summary.has429, $summary.hasFallbackSelected, $summary.has200After429, $summary.fallbackCycleCount, $summary.distinctHealthyAccountCountAfterFallback, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.localPoolUnavailableCount)
+      Write-Host ("events={0}; has429={1}; fallback={2}; has200After429={3}; fallbackCycles={4}; healthyAccounts={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; inBandPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}" -f $summary.eventCount, $summary.has429, $summary.hasFallbackSelected, $summary.has200After429, $summary.fallbackCycleCount, $summary.distinctHealthyAccountCountAfterFallback, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.inBandSyntheticPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount)
     }
   }
 
@@ -763,7 +907,11 @@ do {
     $quotaSatisfied = (-not $RequireQuotaFallback) -or ($summaryNow.has429 -and $summaryNow.hasUsageLimitReached -and $summaryNow.hasModelCooldownApplied -and $summaryNow.hasFallbackSelected -and $summaryNow.has200After429 -and $summaryNow.fallbackCycleCount -ge $RequiredFallbackCycles -and $summaryNow.distinctHealthyAccountCountAfterFallback -ge $RequiredDistinctHealthyAccounts)
     $streamSatisfied = (-not $RequireStreamCompletion) -or ($summaryNow.completedStreamCount -ge $RequiredCompletedStreams)
     $retrySatisfied = (-not $summaryNow.retryLimitErrorFound)
-    if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied) {
+    $responses503Satisfied = (-not $summaryNow.responsesTransport503PoolUnavailableCount)
+    $failedTerminalSatisfied = (-not $summaryNow.responsesFailedPoolUnavailableCount)
+    $syntheticTerminalSatisfied = (-not $summaryNow.inBandSyntheticPoolUnavailableCount)
+    $poolWaitProgressSatisfied = ((-not $summaryNow.openPoolWaitCount) -or $summaryNow.heartbeatPoolWaitCount -gt 0 -or $summaryNow.activeDrainPoolWaitCount -gt 0)
+    if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $failedTerminalSatisfied -and $syntheticTerminalSatisfied -and $poolWaitProgressSatisfied) {
       break
     }
   }
@@ -809,6 +957,10 @@ $report = [ordered]@{
   requiredDistinctHealthyAccounts = [int]$RequiredDistinctHealthyAccounts
   requiredCompletedStreams = [int]$RequiredCompletedStreams
   retryLimitRegressionCheck = "always_on"
+  responsesPoolUnavailableTransport503RegressionCheck = "always_on"
+  responsesPoolUnavailableFailedStreamRegressionCheck = "always_on"
+  responsesPoolUnavailableSyntheticCompletionRegressionCheck = "always_on"
+  poolWaitTerminalProgressRegressionCheck = "always_on"
   temporaryConfig = [ordered]@{
     managedByThisScript = $false
     restored = "not_applicable"

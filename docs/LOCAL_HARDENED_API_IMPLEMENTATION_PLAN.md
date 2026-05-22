@@ -8,7 +8,7 @@
 
 不做事项保持不变：不做公网/LAN 网关，不做请求级随机扫号，不把 LiteLLM/New API/Sub2API/CLIProxyAPI 变成强依赖，不把 500+ free 账号池当作高频自动刷新对象。
 
-本地参考源：`D:\CODE\external\_reference_gateway_sources` 保存 `CLIProxyAPI`、`litellm`、`new-api`、`sub2api` 的源码快照。改动 retry/fallback、health registry、audit trail、selector、stream guard 或路线图时，优先参考该目录和 `docs/reference-gateway-best-practices.md`，再决定是否需要外部资料。
+本地参考源：`D:\CODE\external\_reference_gateway_sources` 保存 `CLIProxyAPI`、`litellm`、`new-api`、`sub2api` 的源码快照。改动 retry/fallback、health registry、audit trail、selector、stream guard 或路线图时，优先参考该目录和 `docs/reference-gateway-best-practices.md`，再决定是否需要外部资料。账号池调度后续专项任务以 `docs/LOCAL_HARDENED_API_ACCOUNT_POOL_SCHEDULING_PLAN.md` 为任务清单入口。
 
 ## 审查结论固化
 
@@ -519,10 +519,10 @@ flowchart TD
 
 核心规则：
 
-- `pre-stream 429`：没有 `2xx`、没有有效 SSE 首事件、没有 `response.created`、没有 background `response_id`，视为 admission rejected；标记 cooldown/backoff，按策略在新 admission 层选择健康账号；若号池全部不可调度，返回本地 `503/pool_unavailable`。
+- `pre-stream 429`：没有 `2xx`、没有有效 SSE 首事件、没有 `response.created`、没有 background `response_id`，视为 admission rejected；标记 cooldown/backoff，按策略在新 admission 层选择健康账号；若号池全部不可调度，普通 HTTP 返回本地 `503/pool_unavailable`。Codex-facing streaming `/v1/responses` 必须由本地 admission gate 拦截为 `200 text/event-stream` + `cockpit_pool_wait` SSE comment heartbeat，直到本地 health/cooldown 恢复后再转发真实上游；不得发出 429、503、`response.failed`、synthetic completion 或静默 idle。
 - `upstream admitted`：一旦上游已返回 `2xx` 或 stream 出现可判定接纳信号，grant lease；后续本地 cooldown、账号 exhausted 标记和 selection eligibility 变化只影响新 admission，不关闭该 stream。
 - `active stream`：不切账号、不跨账号续接，只 pipe 到 terminal event、upstream terminal error、client abort、explicit cancel 或 transport fatal error。
-- `new independent request`：不需要等待其他 active stream 完成；可立即避开 cooldown/exhausted 账号，选择健康账号。
+- `new independent request`：仍有健康账号时不需要等待其他 active stream 完成；可立即避开 cooldown/exhausted 账号，选择健康账号。若全池不可调度，Codex-facing streaming 新请求必须在 admission gate heartbeat 等待恢复；这是一种可观测饱和等待，不得转成 Codex turn failure。
 - `previous_response_id continuation`：优先粘原账号；不能把原账号的 `previous_response_id` 直接发给新账号。若要 fallback 到新账号，必须走 full context replay 或 compacted replay，并把它视为新 admission，不是严格 continuation。
 
 验收：
@@ -530,7 +530,7 @@ flowchart TD
 - [x] active SSE stream 被 grant lease 后，同账号随后被标记 cooldown/exhausted，stream 仍继续到 terminal 或真实 transport error。
 - [x] pre-stream 429 会写入 health/cooldown/audit，但不会影响同账号已有 active lease。
 - [x] active stream 期间同账号另一个请求返回 429，不 retroactively cancel active stream。
-- [x] new admission 遇到 cooldown/exhausted 账号，会避开；若号池全部不可调度，返回本地 `503/pool_unavailable`，不等待无关 active stream 结束。
+- [x] new admission 遇到 cooldown/exhausted 账号，会避开；若号池全部不可调度，普通 HTTP 返回本地 `503/pool_unavailable`，Codex-facing streaming `/v1/responses` 保持 `200 text/event-stream` + `cockpit_pool_wait` heartbeat，直到本地 health/cooldown 恢复后再转发真实上游，不返回 `response.failed`、synthetic completion 或 transport 503。
 - [x] `previous_response_id` affinity 强绑定原 account hash/route；不会跨账号直接复用旧 `previous_response_id`。
 - [x] client abort、upstream terminal error、normal completed 都会 release lease，不泄漏 active count。
 - [x] health registry 状态变更只更新 `selection_eligible`，不会直接 cancel active leases。

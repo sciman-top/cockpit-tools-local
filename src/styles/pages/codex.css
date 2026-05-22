@@ -1637,11 +1637,44 @@
   min-width: 0;
 }
 
+.codex-account-card .codex-card-actions--grouped {
+  gap: 5px;
+}
+
+.codex-account-card .codex-card-action-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 2px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--bg-tertiary) 56%, transparent);
+}
+
+.codex-account-card .codex-card-action-cluster-primary {
+  background: color-mix(in srgb, var(--primary) 7%, var(--bg-tertiary));
+  border-color: color-mix(in srgb, var(--primary) 13%, transparent);
+}
+
+.codex-account-card .codex-card-action-cluster-service {
+  background: color-mix(in srgb, var(--success) 6%, var(--bg-tertiary));
+}
+
+.codex-account-card .codex-card-action-cluster-danger {
+  background: color-mix(in srgb, var(--danger) 5%, var(--bg-tertiary));
+}
+
+.codex-account-card .codex-card-action-cluster .codex-inline-order-controls {
+  gap: 3px;
+}
+
 .codex-account-card .card-action-btn {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border: none;
-  background: var(--bg-tertiary);
+  background: color-mix(in srgb, var(--bg-card) 68%, transparent);
   color: var(--text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;

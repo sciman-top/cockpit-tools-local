@@ -205,6 +205,7 @@ struct ProxyDispatchError {
     account_id: Option<String>,
     account_email: Option<String>,
     retry_after: Option<Duration>,
+    defer_until_pool_available: bool,
 }
 
 #[derive(Debug, Default)]
@@ -529,6 +530,7 @@ fn local_backpressure_error(config: &CodexLocalApiSafetyConfig) -> ProxyDispatch
         account_id: None,
         account_email: None,
         retry_after: Some(local_backpressure_retry_after(config)),
+        defer_until_pool_available: false,
     }
 }
 
@@ -548,11 +550,23 @@ fn try_acquire_local_api_backpressure(
     Ok(LocalApiBackpressurePermit { released: false })
 }
 
+#[cfg(test)]
 async fn acquire_local_api_backpressure(
     config: &CodexLocalApiSafetyConfig,
 ) -> Result<LocalApiBackpressurePermit, ProxyDispatchError> {
+    acquire_local_api_backpressure_with_wait(
+        config,
+        Duration::from_secs(config.max_queue_wait_seconds.max(1)),
+    )
+    .await
+}
+
+async fn acquire_local_api_backpressure_with_wait(
+    config: &CodexLocalApiSafetyConfig,
+    queue_wait: Duration,
+) -> Result<LocalApiBackpressurePermit, ProxyDispatchError> {
     let _admission_turn = local_api_backpressure_admission_queue().lock().await;
-    let queue_wait = Duration::from_secs(config.max_queue_wait_seconds.max(1));
+    let queue_wait = queue_wait.max(Duration::from_millis(1));
     timeout(queue_wait, async {
         loop {
             match try_acquire_local_api_backpressure(config) {
@@ -586,6 +600,13 @@ fn active_stream_lease_count_for_account(account_id: &str) -> usize {
         .values()
         .filter(|lease| lease.account_id == account_id)
         .count()
+}
+
+fn active_stream_lease_count() -> usize {
+    let Ok(registry) = active_stream_lease_registry().lock() else {
+        return 0;
+    };
+    registry.leases.len()
 }
 
 fn grant_active_stream_lease(context: &AuditContext, account_id: &str) -> ActiveStreamLease {
@@ -1045,7 +1066,8 @@ pub async fn sync_runtime_projection_after_account_switch(account_id: &str) -> R
 
 fn is_prepared_account_cache_valid(entry: &CachedPreparedAccount, now: i64) -> bool {
     now.saturating_sub(entry.cached_at_ms) <= PREPARED_ACCOUNT_CACHE_TTL_MS
-        && !codex_oauth::is_token_expired(&entry.account.tokens.access_token)
+        && (entry.account.is_api_key_auth()
+            || !codex_oauth::is_token_expired(&entry.account.tokens.access_token))
 }
 
 fn prune_prepared_account_cache(runtime: &mut GatewayRuntime, now: i64) {
@@ -3527,6 +3549,49 @@ fn should_use_pool_unavailable_summary(summary: &PoolUnavailableSummary) -> bool
             + summary.disabled_count
             + summary.unknown_blocked_count)
             > 0
+}
+
+fn should_defer_pool_unavailable(summary: &PoolUnavailableSummary) -> bool {
+    should_use_pool_unavailable_summary(summary)
+        && summary.nearest_wait.is_some()
+        && (summary.exhausted_count + summary.cooling_count + summary.model_cooldown_count) > 0
+}
+
+fn codex_pool_wait_poll_interval() -> Duration {
+    if cfg!(test) {
+        Duration::from_millis(50)
+    } else {
+        Duration::from_secs(10)
+    }
+}
+
+fn codex_pool_wait_heartbeat_interval() -> Duration {
+    if cfg!(test) {
+        Duration::from_millis(25)
+    } else {
+        Duration::from_secs(5)
+    }
+}
+
+fn pool_wait_fits_request_budget(
+    wait: Duration,
+    elapsed: Duration,
+    request_timeout: Duration,
+) -> bool {
+    let timeout_guard = Duration::from_secs(2);
+    let remaining = request_timeout.saturating_sub(elapsed);
+    wait <= MAX_REQUEST_RETRY_WAIT
+        && remaining > timeout_guard
+        && wait < remaining.saturating_sub(timeout_guard)
+}
+
+fn backpressure_wait_budget(elapsed: Duration, request_timeout: Duration) -> Option<Duration> {
+    let timeout_guard = Duration::from_secs(2);
+    let remaining = request_timeout.saturating_sub(elapsed);
+    if remaining <= timeout_guard {
+        return None;
+    }
+    Some(remaining.saturating_sub(timeout_guard))
 }
 
 fn build_pool_unavailable_message(model_key: &str, summary: &PoolUnavailableSummary) -> String {
@@ -8764,9 +8829,24 @@ async fn write_upstream_response(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/json; charset=utf-8");
+    write_chunked_response_headers(stream, status, status_text, content_type, &headers).await?;
+    write_upstream_response_body_chunks(stream, upstream, request_is_stream, audit_context).await
+}
+
+async fn write_upstream_response_body_chunks(
+    stream: &mut TcpStream,
+    upstream: reqwest::Response,
+    request_is_stream: bool,
+    audit_context: Option<&AuditContext>,
+) -> Result<ResponseCapture, String> {
+    let status = upstream.status();
+    let headers = upstream.headers().clone();
+    let content_type = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/json; charset=utf-8");
     let is_stream = should_treat_response_as_stream(content_type, request_is_stream);
     let mut write_state = StreamWriteState::default();
-    write_chunked_response_headers(stream, status, status_text, content_type, &headers).await?;
     write_state.mark_headers_written();
     debug_assert!(!write_state.can_attempt_account_fallback());
     record_stream_audit_event(audit_context, status, "headers_written", "ok", content_type);
@@ -8995,6 +9075,7 @@ async fn proxy_request_with_account_pool(
             account_id: None,
             account_email: None,
             retry_after: None,
+            defer_until_pool_available: false,
         });
     }
 
@@ -9005,6 +9086,7 @@ async fn proxy_request_with_account_pool(
             account_id: None,
             account_email: None,
             retry_after: None,
+            defer_until_pool_available: false,
         })?;
     let routing_hint = build_request_routing_hint(request);
     let mut health_registry =
@@ -9014,6 +9096,7 @@ async fn proxy_request_with_account_pool(
             account_id: None,
             account_email: None,
             retry_after: None,
+            defer_until_pool_available: false,
         })?;
     let now = now_ms();
     if prune_process_sticky_binding(
@@ -9346,6 +9429,7 @@ async fn proxy_request_with_account_pool(
                                     account_id: Some(account.id.clone()),
                                     account_email: Some(account.email.clone()),
                                     retry_after: None,
+                                    defer_until_pool_available: false,
                                 });
                             }
                         }
@@ -9374,6 +9458,7 @@ async fn proxy_request_with_account_pool(
                                 account_id: Some(account.id.clone()),
                                 account_email: Some(account.email.clone()),
                                 retry_after: None,
+                                defer_until_pool_available: false,
                             });
                         }
                     }
@@ -9515,6 +9600,7 @@ async fn proxy_request_with_account_pool(
                     account_id: Some(account.id.clone()),
                     account_email: Some(account.email.clone()),
                     retry_after: None,
+                    defer_until_pool_available: false,
                 });
             }
         }
@@ -9523,35 +9609,35 @@ async fn proxy_request_with_account_pool(
         let Some(wait) = earliest_cooldown_wait else {
             break;
         };
+        if !attempted_in_round {
+            let pool_summary = summarize_pool_unavailability(
+                &health_registry,
+                &routing_account_ids,
+                Some(&routing_hint.model_key),
+                now_ms(),
+            );
+            let use_pool_unavailable_summary = should_use_pool_unavailable_summary(&pool_summary);
+            return Err(ProxyDispatchError {
+                status: if use_pool_unavailable_summary {
+                    status_for_pool_unavailable(&pool_summary)
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE.as_u16()
+                },
+                message: if use_pool_unavailable_summary {
+                    build_pool_unavailable_message(&routing_hint.model_key, &pool_summary)
+                } else {
+                    build_cooldown_unavailable_message(&routing_hint.model_key, wait)
+                },
+                account_id: affinity_account_id.clone(),
+                account_email: None,
+                retry_after: Some(wait),
+                defer_until_pool_available: true,
+            });
+        }
         if attempts >= max_credential_attempts
             || retry_round >= max_retry_attempts
             || wait > MAX_REQUEST_RETRY_WAIT
         {
-            if !attempted_in_round {
-                let pool_summary = summarize_pool_unavailability(
-                    &health_registry,
-                    &routing_account_ids,
-                    Some(&routing_hint.model_key),
-                    now_ms(),
-                );
-                let use_pool_unavailable_summary =
-                    should_use_pool_unavailable_summary(&pool_summary);
-                return Err(ProxyDispatchError {
-                    status: if use_pool_unavailable_summary {
-                        status_for_pool_unavailable(&pool_summary)
-                    } else {
-                        StatusCode::SERVICE_UNAVAILABLE.as_u16()
-                    },
-                    message: if use_pool_unavailable_summary {
-                        build_pool_unavailable_message(&routing_hint.model_key, &pool_summary)
-                    } else {
-                        build_cooldown_unavailable_message(&routing_hint.model_key, wait)
-                    },
-                    account_id: affinity_account_id.clone(),
-                    account_email: None,
-                    retry_after: Some(wait),
-                });
-            }
             break;
         }
 
@@ -9594,7 +9680,682 @@ async fn proxy_request_with_account_pool(
         account_id: last_account_id,
         account_email: last_account_email,
         retry_after: earliest_cooldown_wait.or(pool_retry_after),
+        defer_until_pool_available: use_pool_unavailable_summary
+            && should_defer_pool_unavailable(&pool_summary),
     })
+}
+
+fn pool_unavailable_from_snapshot(
+    request: &ParsedRequest,
+    collection: &CodexLocalAccessCollection,
+) -> Option<ProxyDispatchError> {
+    let routing_account_ids = build_routing_pool_account_ids(collection);
+    if routing_account_ids.is_empty() {
+        return None;
+    }
+    let routing_hint = build_request_routing_hint(request);
+    let health_registry = load_health_registry_from_disk().ok()?;
+    let pool_summary = summarize_pool_unavailability(
+        &health_registry,
+        &routing_account_ids,
+        Some(&routing_hint.model_key),
+        now_ms(),
+    );
+    if !should_use_pool_unavailable_summary(&pool_summary) {
+        return None;
+    }
+    let defer_until_pool_available = should_defer_pool_unavailable(&pool_summary);
+
+    Some(ProxyDispatchError {
+        status: status_for_pool_unavailable(&pool_summary),
+        message: build_pool_unavailable_message(&routing_hint.model_key, &pool_summary),
+        account_id: None,
+        account_email: None,
+        retry_after: pool_summary.nearest_wait,
+        defer_until_pool_available,
+    })
+}
+
+fn deferred_pool_unavailable_from_snapshot(
+    request: &ParsedRequest,
+    collection: &CodexLocalAccessCollection,
+) -> Option<ProxyDispatchError> {
+    pool_unavailable_from_snapshot(request, collection)
+        .filter(|error| error.defer_until_pool_available && error.retry_after.is_some())
+}
+
+fn record_pool_wait_audit(
+    request: &ParsedRequest,
+    error: &ProxyDispatchError,
+    wait: Duration,
+    remaining_timeout: Duration,
+    outcome: &str,
+) {
+    let context = build_audit_context(request, error.account_id.as_deref());
+    let error_type = classify_codex_api_failure(Some(error.status), error.message.as_str());
+    record_audit_event_from_context(
+        &context,
+        "pool_wait",
+        Some(error.status),
+        Some(error_type),
+        None,
+        Some(outcome),
+        BTreeMap::from([
+            ("retry_after_ms".to_string(), wait.as_millis().to_string()),
+            (
+                "remaining_timeout_ms".to_string(),
+                remaining_timeout.as_millis().to_string(),
+            ),
+            (
+                "message".to_string(),
+                safe_log_field(Some(error.message.as_str()), 512),
+            ),
+        ]),
+    );
+}
+
+fn is_codex_responses_stream_passthrough(
+    request: &ParsedRequest,
+    response_adapter: &GatewayResponseAdapter,
+) -> bool {
+    is_responses_request(&request.target)
+        && matches!(
+            response_adapter,
+            GatewayResponseAdapter::Passthrough {
+                request_is_stream: true
+            }
+        )
+}
+
+fn should_hold_codex_responses_stream_until_pool_available(
+    request: &ParsedRequest,
+    response_adapter: &GatewayResponseAdapter,
+    error: &ProxyDispatchError,
+) -> bool {
+    is_pool_unavailable_dispatch_error(error)
+        && is_codex_responses_stream_passthrough(request, response_adapter)
+}
+
+fn pool_wait_sleep_duration(error: &ProxyDispatchError) -> Duration {
+    let poll = codex_pool_wait_poll_interval();
+    error
+        .retry_after
+        .map(|wait| wait.min(poll))
+        .unwrap_or(poll)
+        .max(Duration::from_millis(1))
+}
+
+fn build_codex_pool_wait_heartbeat_chunk(error: &ProxyDispatchError, wait: Duration) -> Vec<u8> {
+    let retry_after_ms = error
+        .retry_after
+        .map(|retry_after| retry_after.as_millis())
+        .unwrap_or(0);
+    let message = safe_log_field(Some(error.message.as_str()), 180)
+        .replace('\r', " ")
+        .replace('\n', " ");
+    format!(
+        ": cockpit_pool_wait retry_after_ms={} sleep_ms={} message=\"{}\"\n\n",
+        retry_after_ms,
+        wait.as_millis(),
+        message
+    )
+    .into_bytes()
+}
+
+fn record_active_stream_drain_audit(
+    request: &ParsedRequest,
+    error: &ProxyDispatchError,
+    active_streams: usize,
+    outcome: &str,
+) {
+    let context = build_audit_context(request, error.account_id.as_deref());
+    let error_type = classify_codex_api_failure(Some(error.status), error.message.as_str());
+    record_audit_event_from_context(
+        &context,
+        "pool_wait",
+        Some(StatusCode::OK.as_u16()),
+        Some(error_type),
+        Some("admission_blocked"),
+        Some(outcome),
+        BTreeMap::from([
+            ("active_streams".to_string(), active_streams.to_string()),
+            (
+                "message".to_string(),
+                safe_log_field(Some(error.message.as_str()), 512),
+            ),
+        ]),
+    );
+}
+
+async fn sleep_with_codex_pool_wait_heartbeats(
+    stream: &mut TcpStream,
+    request: &ParsedRequest,
+    error: &ProxyDispatchError,
+    headers_written: &mut bool,
+    sleep_for: Duration,
+) -> Result<(), String> {
+    if !*headers_written {
+        write_chunked_response_headers(
+            stream,
+            StatusCode::OK,
+            "OK",
+            "text/event-stream; charset=utf-8",
+            &HeaderMap::new(),
+        )
+        .await?;
+        *headers_written = true;
+    }
+
+    let context = build_audit_context(request, error.account_id.as_deref());
+    let error_type = classify_codex_api_failure(Some(error.status), error.message.as_str());
+    record_audit_event_from_context(
+        &context,
+        "pool_wait",
+        Some(StatusCode::OK.as_u16()),
+        Some(error_type),
+        Some("heartbeat"),
+        Some("sleeping"),
+        BTreeMap::from([
+            (
+                "retry_after_ms".to_string(),
+                error
+                    .retry_after
+                    .map(|retry_after| retry_after.as_millis().to_string())
+                    .unwrap_or_else(|| "unknown".to_string()),
+            ),
+            ("sleep_ms".to_string(), sleep_for.as_millis().to_string()),
+            (
+                "message".to_string(),
+                safe_log_field(Some(error.message.as_str()), 512),
+            ),
+        ]),
+    );
+
+    let heartbeat_interval = codex_pool_wait_heartbeat_interval();
+    let sleep_started_at = Instant::now();
+    loop {
+        let elapsed = sleep_started_at.elapsed();
+        if elapsed >= sleep_for {
+            break;
+        }
+        let remaining = sleep_for.saturating_sub(elapsed);
+        let next_sleep = remaining
+            .min(heartbeat_interval)
+            .max(Duration::from_millis(1));
+        write_chunked_response_chunk(
+            stream,
+            &build_codex_pool_wait_heartbeat_chunk(error, next_sleep),
+        )
+        .await?;
+        tokio::time::sleep(next_sleep).await;
+    }
+
+    record_audit_event_from_context(
+        &context,
+        "pool_wait",
+        Some(StatusCode::OK.as_u16()),
+        Some("pool_unavailable"),
+        Some("heartbeat"),
+        Some("retrying"),
+        BTreeMap::from([("slept_ms".to_string(), sleep_for.as_millis().to_string())]),
+    );
+    Ok(())
+}
+
+fn is_pool_unavailable_dispatch_error(error: &ProxyDispatchError) -> bool {
+    classify_codex_api_failure(Some(error.status), error.message.as_str()) == "pool_unavailable"
+}
+
+fn should_write_in_band_pool_unavailable_response(
+    request: &ParsedRequest,
+    response_adapter: &GatewayResponseAdapter,
+    error: &ProxyDispatchError,
+) -> bool {
+    is_pool_unavailable_dispatch_error(error)
+        && is_responses_request(&request.target)
+        && matches!(
+            response_adapter,
+            GatewayResponseAdapter::Passthrough {
+                request_is_stream: false
+            }
+        )
+}
+
+fn build_synthetic_pool_unavailable_text(error: &ProxyDispatchError) -> String {
+    format!(
+        "Cockpit API Service pool_unavailable: {}",
+        error.message.trim()
+    )
+}
+
+fn build_synthetic_pool_unavailable_responses_payload(
+    request: &ParsedRequest,
+    error: &ProxyDispatchError,
+) -> Value {
+    let routing_hint = build_request_routing_hint(request);
+    let model = routing_hint
+        .model_key
+        .trim()
+        .is_empty()
+        .then(|| "unknown".to_string())
+        .unwrap_or(routing_hint.model_key);
+    let created_at = chrono::Utc::now().timestamp();
+    let response_id = format!("resp_cockpit_pool_unavailable_{}", now_ms());
+    let text = build_synthetic_pool_unavailable_text(error);
+
+    json!({
+        "id": response_id,
+        "object": "response",
+        "created_at": created_at,
+        "status": "failed",
+        "model": model,
+        "output": [],
+        "error": {
+            "code": "pool_unavailable",
+            "message": text
+        },
+        "incomplete_details": null,
+        "usage": null
+    })
+}
+
+fn build_synthetic_pool_unavailable_sse(payload: &Value) -> Vec<u8> {
+    let response_id = payload
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("resp_cockpit_pool_unavailable");
+    let model = payload
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let created_at = payload
+        .get("created_at")
+        .and_then(Value::as_i64)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp());
+    let message = payload
+        .get("output")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .cloned()
+        .unwrap_or_else(|| {
+            json!({
+                "id": "msg_cockpit_pool_unavailable",
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": []
+            })
+        });
+    let message_id = message
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("msg_cockpit_pool_unavailable");
+    let text = message
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|parts| parts.first())
+        .and_then(|part| part.get("text"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    let mut response_created = payload.clone();
+    response_created["status"] = Value::String("in_progress".to_string());
+    response_created["output"] = Value::Array(Vec::new());
+
+    let mut stream_body = String::new();
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.created",
+        json!({
+            "type": "response.created",
+            "response": response_created
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.output_item.added",
+        json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "id": message_id,
+                "type": "message",
+                "status": "in_progress",
+                "role": "assistant",
+                "content": []
+            }
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.output_text.delta",
+        json!({
+            "type": "response.output_text.delta",
+            "item_id": message_id,
+            "output_index": 0,
+            "content_index": 0,
+            "delta": text
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.output_text.done",
+        json!({
+            "type": "response.output_text.done",
+            "item_id": message_id,
+            "output_index": 0,
+            "content_index": 0,
+            "text": text
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.output_item.done",
+        json!({
+            "type": "response.output_item.done",
+            "output_index": 0,
+            "item": message
+        }),
+    );
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.completed",
+        json!({
+            "type": "response.completed",
+            "response": payload,
+            "response_id": response_id,
+            "model": model,
+            "created_at": created_at
+        }),
+    );
+    stream_body.push_str("data: [DONE]\n\n");
+    stream_body.into_bytes()
+}
+
+async fn write_in_band_pool_unavailable_response(
+    stream: &mut TcpStream,
+    request: &ParsedRequest,
+    response_adapter: &GatewayResponseAdapter,
+    error: &ProxyDispatchError,
+    latency_ms: u64,
+) -> Result<(), String> {
+    let payload = build_synthetic_pool_unavailable_responses_payload(request, error);
+    let response_id = extract_response_id(&payload);
+    let context = build_audit_context(request, error.account_id.as_deref());
+    let is_stream_response = matches!(
+        response_adapter,
+        GatewayResponseAdapter::Passthrough {
+            request_is_stream: true
+        }
+    );
+    let mut detail = BTreeMap::from([
+        ("latency_ms".to_string(), latency_ms.to_string()),
+        ("transport_status".to_string(), "200".to_string()),
+        ("original_status".to_string(), error.status.to_string()),
+        (
+            "message".to_string(),
+            safe_log_field(Some(error.message.as_str()), 512),
+        ),
+    ]);
+    if let Some(retry_after) = error.retry_after {
+        detail.insert(
+            "retry_after_ms".to_string(),
+            retry_after.as_millis().to_string(),
+        );
+    }
+    if let Some(response_id) = response_id.as_deref() {
+        detail.insert("response_id".to_string(), response_id.to_string());
+    }
+    record_audit_event_from_context(
+        &context,
+        "final_response",
+        Some(StatusCode::OK.as_u16()),
+        Some("pool_unavailable"),
+        Some(if is_stream_response {
+            "failed"
+        } else {
+            "json_failed"
+        }),
+        Some(if is_stream_response {
+            "in_band_failed"
+        } else {
+            "in_band_json_failed"
+        }),
+        detail,
+    );
+
+    match response_adapter {
+        GatewayResponseAdapter::Passthrough {
+            request_is_stream: true,
+        } => {
+            write_chunked_response_headers(
+                stream,
+                StatusCode::OK,
+                "OK",
+                "text/event-stream; charset=utf-8",
+                &HeaderMap::new(),
+            )
+            .await?;
+            write_chunked_response_chunk(stream, &build_synthetic_pool_unavailable_sse(&payload))
+                .await?;
+            finish_chunked_response(stream).await?;
+        }
+        GatewayResponseAdapter::Passthrough {
+            request_is_stream: false,
+        } => {
+            let payload_bytes = serde_json::to_vec(&payload)
+                .map_err(|e| format!("序列化 synthetic pool_unavailable 响应失败: {}", e))?;
+            write_http_response(
+                stream,
+                StatusCode::OK.as_u16(),
+                "OK",
+                "application/json; charset=utf-8",
+                &payload_bytes,
+            )
+            .await?;
+        }
+        _ => {
+            return Err("in-band pool_unavailable 仅支持 responses passthrough 请求".to_string());
+        }
+    }
+
+    if let Err(err) = record_request_stats(None, None, false, latency_ms, None).await {
+        logger::log_codex_api_warn(&format!("[CodexLocalAccess] 写入失败统计失败: {}", err));
+    }
+
+    Ok(())
+}
+
+fn build_codex_pool_wait_failed_sse(
+    request: &ParsedRequest,
+    error: &ProxyDispatchError,
+) -> Vec<u8> {
+    let routing_hint = build_request_routing_hint(request);
+    let response_id = format!("resp_cockpit_pool_wait_failed_{}", now_ms());
+    let failed = json!({
+        "id": response_id,
+        "object": "response",
+        "created_at": chrono::Utc::now().timestamp(),
+        "status": "failed",
+        "model": routing_hint.model_key,
+        "output": [],
+        "error": {
+            "code": classify_codex_api_failure(Some(error.status), error.message.as_str()),
+            "message": error.message.as_str()
+        },
+        "incomplete_details": null,
+        "usage": null
+    });
+    let mut stream_body = String::new();
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.failed",
+        json!({
+            "type": "response.failed",
+            "response": failed
+        }),
+    );
+    stream_body.push_str("data: [DONE]\n\n");
+    stream_body.into_bytes()
+}
+
+async fn write_codex_responses_stream_after_pool_wait(
+    stream: &mut TcpStream,
+    request: &ParsedRequest,
+    collection: &CodexLocalAccessCollection,
+    initial_error: ProxyDispatchError,
+    started_at: Instant,
+) -> Result<(), String> {
+    let response_adapter = GatewayResponseAdapter::Passthrough {
+        request_is_stream: true,
+    };
+    let mut headers_written = false;
+    let mut current_error = initial_error;
+
+    loop {
+        let active_streams = active_stream_lease_count();
+        if active_streams > 0 {
+            record_active_stream_drain_audit(
+                request,
+                &current_error,
+                active_streams,
+                "active_streams_draining",
+            );
+        }
+        let sleep_for = pool_wait_sleep_duration(&current_error);
+        sleep_with_codex_pool_wait_heartbeats(
+            stream,
+            request,
+            &current_error,
+            &mut headers_written,
+            sleep_for,
+        )
+        .await?;
+        if active_streams > 0 && active_stream_lease_count() == 0 {
+            record_active_stream_drain_audit(request, &current_error, 0, "active_streams_drained");
+        }
+
+        if let Some(snapshot_error) = pool_unavailable_from_snapshot(request, collection) {
+            current_error = snapshot_error;
+            continue;
+        }
+
+        let queue_wait =
+            Duration::from_secs(collection.safety_config.max_queue_wait_seconds.max(1));
+        let mut backpressure_permit =
+            match acquire_local_api_backpressure_with_wait(&collection.safety_config, queue_wait)
+                .await
+            {
+                Ok(permit) => permit,
+                Err(error) => {
+                    write_chunked_response_chunk(
+                        stream,
+                        &build_codex_pool_wait_failed_sse(request, &error),
+                    )
+                    .await?;
+                    finish_chunked_response(stream).await?;
+                    return Ok(());
+                }
+            };
+
+        match proxy_request_with_account_pool(request, collection).await {
+            Ok(success) => {
+                backpressure_permit.release();
+                let response_audit_context =
+                    build_audit_context(request, Some(success.account_id.as_str()));
+                let mut active_lease =
+                    grant_active_stream_lease(&response_audit_context, &success.account_id);
+                let response_capture = if headers_written {
+                    match write_upstream_response_body_chunks(
+                        stream,
+                        success.upstream,
+                        true,
+                        Some(&response_audit_context),
+                    )
+                    .await
+                    {
+                        Ok(response_capture) => {
+                            active_lease.release(ActiveStreamTerminal::Completed);
+                            response_capture
+                        }
+                        Err(err) => {
+                            active_lease.release(classify_active_stream_terminal_error(&err));
+                            return Err(err);
+                        }
+                    }
+                } else {
+                    match write_gateway_response(
+                        stream,
+                        success.upstream,
+                        response_adapter,
+                        Some(&response_audit_context),
+                    )
+                    .await
+                    {
+                        Ok(response_capture) => {
+                            active_lease.release(ActiveStreamTerminal::Completed);
+                            response_capture
+                        }
+                        Err(err) => {
+                            active_lease.release(classify_active_stream_terminal_error(&err));
+                            return Err(err);
+                        }
+                    }
+                };
+                if let Some(response_id) = response_capture.response_id.as_deref() {
+                    bind_response_affinity(response_id, &success.account_id).await;
+                }
+                record_successful_proxy_stats(
+                    &success.account_id,
+                    &success.account_email,
+                    started_at,
+                    &response_capture,
+                )
+                .await;
+                return Ok(());
+            }
+            Err(error)
+                if should_hold_codex_responses_stream_until_pool_available(
+                    request,
+                    &response_adapter,
+                    &error,
+                ) =>
+            {
+                backpressure_permit.release();
+                current_error = error;
+            }
+            Err(error) => {
+                backpressure_permit.release();
+                write_chunked_response_chunk(
+                    stream,
+                    &build_codex_pool_wait_failed_sse(request, &error),
+                )
+                .await?;
+                finish_chunked_response(stream).await?;
+                return Ok(());
+            }
+        }
+    }
+}
+
+async fn record_successful_proxy_stats(
+    account_id: &str,
+    account_email: &str,
+    started_at: Instant,
+    response_capture: &ResponseCapture,
+) {
+    let latency_ms = started_at.elapsed().as_millis() as u64;
+    if let Err(err) = record_request_stats(
+        Some(account_id),
+        Some(account_email),
+        true,
+        latency_ms,
+        response_capture.usage.clone(),
+    )
+    .await
+    {
+        logger::log_codex_api_warn(&format!("[CodexLocalAccess] 写入请求统计失败: {}", err));
+    }
 }
 
 async fn write_proxy_dispatch_error_response(
@@ -9610,6 +10371,7 @@ async fn write_proxy_dispatch_error_response(
         account_id,
         account_email,
         retry_after,
+        defer_until_pool_available: _,
     } = error;
     log_codex_api_failure(
         Some(addr),
@@ -9871,29 +10633,83 @@ async fn handle_connection(
         return Ok(());
     }
 
-    let mut backpressure_permit =
-        match acquire_local_api_backpressure(&collection.safety_config).await {
-            Ok(permit) => permit,
-            Err(error) => {
-                let latency_ms = started_at.elapsed().as_millis() as u64;
-                write_proxy_dispatch_error_response(
-                    &mut stream,
-                    &addr,
-                    &prepared_request,
-                    error,
-                    latency_ms,
-                )
-                .await?;
-                return Ok(());
-            }
-        };
-
     let request_timeout =
         Duration::from_secs(collection.safety_config.request_timeout_seconds.max(1));
-    let dispatch_result = match timeout(
-        request_timeout,
-        proxy_request_with_account_pool(&prepared_request, &collection),
-    )
+    let dispatch_started_at = Instant::now();
+    let dispatch_result = match timeout(request_timeout, async {
+        loop {
+            if let Some(error) =
+                deferred_pool_unavailable_from_snapshot(&prepared_request, &collection)
+            {
+                let Some(wait) = error.retry_after else {
+                    return Err(error);
+                };
+                let elapsed = dispatch_started_at.elapsed();
+                if !pool_wait_fits_request_budget(wait, elapsed, request_timeout) {
+                    return Err(error);
+                }
+                record_pool_wait_audit(
+                    &prepared_request,
+                    &error,
+                    wait,
+                    request_timeout.saturating_sub(elapsed),
+                    "sleeping",
+                );
+                tokio::time::sleep(wait).await;
+                record_pool_wait_audit(
+                    &prepared_request,
+                    &error,
+                    wait,
+                    request_timeout.saturating_sub(dispatch_started_at.elapsed()),
+                    "retrying",
+                );
+                continue;
+            }
+
+            let Some(queue_wait) =
+                backpressure_wait_budget(dispatch_started_at.elapsed(), request_timeout)
+            else {
+                return Err(ProxyDispatchError {
+                    status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+                    message: "本地接入请求排队超出本次请求超时预算，请稍后重试".to_string(),
+                    account_id: None,
+                    account_email: None,
+                    retry_after: Some(Duration::from_secs(1)),
+                    defer_until_pool_available: false,
+                });
+            };
+            let mut backpressure_permit =
+                acquire_local_api_backpressure_with_wait(&collection.safety_config, queue_wait)
+                    .await?;
+            match proxy_request_with_account_pool(&prepared_request, &collection).await {
+                Ok(success) => {
+                    backpressure_permit.release();
+                    return Ok(success);
+                }
+                Err(error) if error.defer_until_pool_available => {
+                    let Some(wait) = error.retry_after else {
+                        return Err(error);
+                    };
+                    let elapsed = dispatch_started_at.elapsed();
+                    if !pool_wait_fits_request_budget(wait, elapsed, request_timeout) {
+                        return Err(error);
+                    }
+                    let remaining = request_timeout.saturating_sub(elapsed);
+                    record_pool_wait_audit(&prepared_request, &error, wait, remaining, "sleeping");
+                    backpressure_permit.release();
+                    tokio::time::sleep(wait).await;
+                    record_pool_wait_audit(
+                        &prepared_request,
+                        &error,
+                        wait,
+                        request_timeout.saturating_sub(dispatch_started_at.elapsed()),
+                        "retrying",
+                    );
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    })
     .await
     {
         Ok(result) => result,
@@ -9903,6 +10719,7 @@ async fn handle_connection(
             account_id: None,
             account_email: None,
             retry_after: Some(Duration::from_secs(1)),
+            defer_until_pool_available: false,
         }),
     };
 
@@ -9912,7 +10729,6 @@ async fn handle_connection(
                 build_audit_context(&prepared_request, Some(success.account_id.as_str()));
             let mut active_lease =
                 grant_active_stream_lease(&response_audit_context, &success.account_id);
-            backpressure_permit.release();
             let response_capture = match write_gateway_response(
                 &mut stream,
                 success.upstream,
@@ -9933,33 +10749,54 @@ async fn handle_connection(
             if let Some(response_id) = response_capture.response_id.as_deref() {
                 bind_response_affinity(response_id, &success.account_id).await;
             }
-            let latency_ms = started_at.elapsed().as_millis() as u64;
-            if let Err(err) = record_request_stats(
-                Some(success.account_id.as_str()),
-                Some(success.account_email.as_str()),
-                true,
-                latency_ms,
-                response_capture.usage,
+            record_successful_proxy_stats(
+                &success.account_id,
+                &success.account_email,
+                started_at,
+                &response_capture,
             )
-            .await
-            {
-                logger::log_codex_api_warn(&format!(
-                    "[CodexLocalAccess] 写入请求统计失败: {}",
-                    err
-                ));
-            }
+            .await;
             Ok(())
         }
         Err(error) => {
             let latency_ms = started_at.elapsed().as_millis() as u64;
-            write_proxy_dispatch_error_response(
-                &mut stream,
-                &addr,
+            if should_hold_codex_responses_stream_until_pool_available(
                 &prepared_request,
-                error,
-                latency_ms,
-            )
-            .await
+                &response_adapter,
+                &error,
+            ) {
+                return write_codex_responses_stream_after_pool_wait(
+                    &mut stream,
+                    &prepared_request,
+                    &collection,
+                    error,
+                    started_at,
+                )
+                .await;
+            }
+            if should_write_in_band_pool_unavailable_response(
+                &prepared_request,
+                &response_adapter,
+                &error,
+            ) {
+                write_in_band_pool_unavailable_response(
+                    &mut stream,
+                    &prepared_request,
+                    &response_adapter,
+                    &error,
+                    latency_ms,
+                )
+                .await
+            } else {
+                write_proxy_dispatch_error_response(
+                    &mut stream,
+                    &addr,
+                    &prepared_request,
+                    error,
+                    latency_ms,
+                )
+                .await
+            }
         }
     }
 }
@@ -9967,42 +10804,44 @@ async fn handle_connection(
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_local_api_backpressure, active_stream_lease_count_for_account,
-        append_audit_event_to_path, apply_audit_trail_status_to_health_summary,
-        apply_collection_routing_strategy, apply_local_api_safety_preset_to_collection,
-        build_audit_context, build_audit_event, build_chat_completion_payload,
-        build_chat_completion_stream_body, build_codex_api_failure_log,
-        build_effective_local_access_account_ids, build_follow_current_local_access_account_ids,
-        build_health_summary_from_registry, build_health_summary_from_registry_for_accounts,
-        build_images_api_payload, build_local_models_response, build_ordered_account_ids,
-        build_pool_unavailable_message, build_projection_seed_local_access_account_ids,
-        build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
-        build_runtime_mode_state, classify_active_stream_terminal_error,
+        acquire_local_api_backpressure, acquire_local_api_backpressure_with_wait,
+        active_stream_lease_count_for_account, append_audit_event_to_path,
+        apply_audit_trail_status_to_health_summary, apply_collection_routing_strategy,
+        apply_local_api_safety_preset_to_collection, backpressure_wait_budget, build_audit_context,
+        build_audit_event, build_chat_completion_payload, build_chat_completion_stream_body,
+        build_codex_api_failure_log, build_effective_local_access_account_ids,
+        build_follow_current_local_access_account_ids, build_health_summary_from_registry,
+        build_health_summary_from_registry_for_accounts, build_images_api_payload,
+        build_local_models_response, build_ordered_account_ids, build_pool_unavailable_message,
+        build_projection_seed_local_access_account_ids, build_request_routing_hint,
+        build_routing_pool_account_ids, build_runtime_account, build_runtime_mode_state,
+        cache_prepared_account, classify_active_stream_terminal_error, classify_codex_api_failure,
         classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
         extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
-        grant_active_stream_lease, health_registry_account_cooldown_wait,
-        health_registry_account_is_schedulable, health_registry_model_key,
-        is_responses_completion_event, is_responses_websocket_upgrade_request,
-        is_websocket_upgrade_request, json_response_with_retry_after,
-        load_health_registry_from_path, load_runtime_mode_state,
+        gateway_runtime, grant_active_stream_lease, handle_connection,
+        health_registry_account_cooldown_wait, health_registry_account_is_schedulable,
+        health_registry_model_key, is_responses_completion_event,
+        is_responses_websocket_upgrade_request, is_websocket_upgrade_request,
+        json_response_with_retry_after, load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
-        parse_codex_retry_after, parse_responses_payload_from_upstream,
-        parse_retry_after_header_value, pin_process_sticky_account, prepare_gateway_request,
-        prune_process_sticky_binding, recover_health_registry_account,
+        now_ms, parse_codex_retry_after, parse_responses_payload_from_upstream,
+        parse_retry_after_header_value, pin_process_sticky_account, pool_wait_fits_request_budget,
+        prepare_gateway_request, prune_process_sticky_binding, recover_health_registry_account,
         reset_active_stream_leases_for_tests, reset_local_api_backpressure_for_tests,
         resolve_supported_model_alias, retry_failover_account_attempt_limit,
         retry_failover_max_retries, save_health_registry_to_path, set_runtime_integration_mode,
-        should_retry_single_account_upstream_status,
+        should_defer_pool_unavailable, should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, should_use_pool_unavailable_summary,
-        sort_account_ids_by_health_estimate, status_for_pool_unavailable,
-        summarize_pool_unavailability, update_health_registry_from_classified_error,
-        upsert_process_sticky_binding, ActiveStreamTerminal, AuditContext, AuditTrailStatus,
-        CodexLocalAccessErrorType, GatewayResponseAdapter, LocalApiBackpressureState,
-        ParsedRequest, ResponseUsageCollector, StreamWriteState,
-        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME,
-        DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES, PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
+        should_write_in_band_pool_unavailable_response, sort_account_ids_by_health_estimate,
+        status_for_pool_unavailable, summarize_pool_unavailability,
+        update_health_registry_from_classified_error, upsert_process_sticky_binding,
+        ActiveStreamTerminal, AuditContext, AuditTrailStatus, CodexLocalAccessErrorType,
+        GatewayResponseAdapter, LocalApiBackpressureState, ParsedRequest, ProxyDispatchError,
+        ResponseUsageCollector, StreamWriteState, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID,
+        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME, DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES,
+        PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
     };
     use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexQuota, CodexTokens};
     use crate::models::codex_local_access::{
@@ -10018,6 +10857,8 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{LazyLock, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::{TcpListener, TcpStream};
     use tokio::time::Duration;
 
     static LOCAL_BACKPRESSURE_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -10780,6 +11621,817 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let message = build_pool_unavailable_message("gpt-5.5", &summary);
         assert!(message.contains("冷却中 1 个"));
         assert!(message.contains("需人工处理 1 个"));
+    }
+
+    #[test]
+    fn pool_unavailable_with_reset_hint_is_deferred_inside_gateway() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        for account_id in ["exhausted-a", "exhausted-b"] {
+            registry.accounts.insert(
+                account_id.to_string(),
+                CodexLocalAccessAccountHealth {
+                    status: CodexLocalAccessAccountHealthStatus::Exhausted,
+                    estimated_reset_at_ms: Some(now + 60_000),
+                    updated_at: now,
+                    ..CodexLocalAccessAccountHealth::default()
+                },
+            );
+        }
+
+        let summary = summarize_pool_unavailability(
+            &registry,
+            &["exhausted-a".to_string(), "exhausted-b".to_string()],
+            Some("gpt-5.5"),
+            now,
+        );
+
+        assert!(should_use_pool_unavailable_summary(&summary));
+        assert_eq!(summary.nearest_wait, Some(Duration::from_secs(60)));
+        assert!(should_defer_pool_unavailable(&summary));
+    }
+
+    #[test]
+    fn pool_unavailable_without_reset_hint_is_not_deferred() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "manual-a".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::ManualRequired,
+                manual_required: true,
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+
+        let summary = summarize_pool_unavailability(
+            &registry,
+            &["manual-a".to_string()],
+            Some("gpt-5.5"),
+            now,
+        );
+
+        assert!(should_use_pool_unavailable_summary(&summary));
+        assert_eq!(summary.nearest_wait, None);
+        assert!(!should_defer_pool_unavailable(&summary));
+    }
+
+    #[test]
+    fn pool_wait_must_fit_inside_request_timeout_budget() {
+        assert!(pool_wait_fits_request_budget(
+            Duration::from_secs(2),
+            Duration::from_secs(0),
+            Duration::from_secs(120),
+        ));
+        assert!(!pool_wait_fits_request_budget(
+            Duration::from_secs(30),
+            Duration::from_secs(10),
+            Duration::from_secs(120),
+        ));
+        assert!(!pool_wait_fits_request_budget(
+            Duration::from_secs(119),
+            Duration::from_secs(0),
+            Duration::from_secs(120),
+        ));
+        assert!(!pool_wait_fits_request_budget(
+            Duration::from_secs(1),
+            Duration::from_secs(119),
+            Duration::from_secs(120),
+        ));
+    }
+
+    #[test]
+    fn pool_unavailable_stream_does_not_park_when_retry_after_exceeds_request_budget() {
+        let error = ProxyDispatchError {
+            status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            message: "模型 gpt-5.5 的API 服务号池暂无可调度账号（冷却中 2 个）；请刷新配额、恢复账号或调整号池后重试"
+                .to_string(),
+            account_id: None,
+            account_email: None,
+            retry_after: Some(Duration::from_secs(7 * 24 * 60 * 60)),
+            defer_until_pool_available: true,
+        };
+
+        assert_eq!(
+            classify_codex_api_failure(Some(error.status), error.message.as_str()),
+            "pool_unavailable"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn exhausted_responses_stream_heartbeats_until_pool_recovery() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-pool-unavailable-stream-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let active_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+        let active_context = build_audit_context(&active_request, Some("active-a"));
+        let mut active_lease = grant_active_stream_lease(&active_context, "active-a");
+        assert_eq!(active_stream_lease_count_for_account("active-a"), 1);
+
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_server = tokio::spawn(async move {
+            let (mut socket, _) = upstream_listener
+                .accept()
+                .await
+                .expect("fake upstream should accept");
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let read = socket
+                    .read(&mut chunk)
+                    .await
+                    .expect("fake upstream should read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = concat!(
+                "event: response.created\n",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_recovered_after_long_wait\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                "event: response.output_text.delta\n",
+                "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"OK\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_recovered_after_long_wait\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                "data: [DONE]\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.as_bytes().len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("fake upstream should write response");
+        });
+
+        let now = now_ms();
+        let mut registry = empty_health_registry(now);
+        registry.model_cooldowns.insert(
+            health_registry_model_key("api-recovered", "gpt-5.5"),
+            CodexLocalAccessModelCooldown {
+                account_id: "api-recovered".to_string(),
+                model: "gpt-5.5".to_string(),
+                cooldown_until_ms: now + (7 * 24 * 60 * 60 * 1000),
+                last_error_type: Some("usage_limit_reached".to_string()),
+                last_request_id: Some("req-park-local".to_string()),
+                updated_at: now,
+            },
+        );
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": addr.port(),
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 1,
+                "minRequestIntervalSeconds": 1,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 3,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "disabled",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-recovered"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection);
+            runtime.running = true;
+            runtime.actual_port = Some(addr.port());
+        }
+        let account = CodexAccount::new_api_key(
+            "api-recovered".to_string(),
+            "api-recovered@example.com".to_string(),
+            "sk-local-test".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        cache_prepared_account(&account).await;
+
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("server should accept");
+            handle_connection(stream, peer).await
+        });
+        let mut client = TcpStream::connect(addr)
+            .await
+            .expect("client should connect");
+        let body = br#"{"model":"gpt-5.5","input":"hello"}"#;
+        let request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            String::from_utf8_lossy(body)
+        );
+        client
+            .write_all(request.as_bytes())
+            .await
+            .expect("request should be written");
+
+        let mut early_chunk = [0u8; 512];
+        let early_read =
+            tokio::time::timeout(Duration::from_secs(1), client.read(&mut early_chunk))
+                .await
+                .expect("blocked exhausted stream should keep the SSE connection alive")
+                .expect("early heartbeat read should succeed");
+        assert!(
+            early_read > 0,
+            "new exhausted request should emit SSE heartbeat instead of failing"
+        );
+        let mut response = early_chunk[..early_read].to_vec();
+        let early_text = String::from_utf8_lossy(&response);
+        assert!(
+            early_text.contains("HTTP/1.1 200 OK") && early_text.contains("cockpit_pool_wait"),
+            "expected heartbeat while exhausted request is blocked, got: {}",
+            early_text
+        );
+        assert!(
+            !early_text.contains("response.failed"),
+            "exhausted blocked stream must not emit response.failed while waiting: {}",
+            early_text
+        );
+
+        active_lease.release(ActiveStreamTerminal::Completed);
+        assert_eq!(active_stream_lease_count_for_account("active-a"), 0);
+        save_health_registry_to_path(
+            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
+            &empty_health_registry(now_ms()),
+        )
+        .expect("health registry should be recovered for blocked request");
+
+        for _ in 0..120 {
+            let mut chunk = [0u8; 1024];
+            let read = tokio::time::timeout(Duration::from_secs(2), client.read(&mut chunk))
+                .await
+                .expect("recovered stream should continue producing SSE")
+                .expect("response read should succeed");
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&chunk[..read]);
+            if String::from_utf8_lossy(&response).contains("[DONE]") {
+                break;
+            }
+        }
+        let response_text = String::from_utf8_lossy(&response);
+        assert!(
+            response_text.contains("HTTP/1.1 200 OK"),
+            "expected Codex protocol SSE response, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("text/event-stream"),
+            "expected event-stream response, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("response.completed"),
+            "expected blocked request to forward real upstream completion after recovery, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("OK"),
+            "expected recovered upstream body, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("[DONE]"),
+            "expected failed SSE to close the stream, got: {}",
+            response_text
+        );
+        assert!(
+            !response_text.contains("response.failed"),
+            "exhausted stream must not fail the Codex turn while waiting: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains(": cockpit_pool_wait"),
+            "long exhausted pool wait must keep the SSE connection alive with comments: {}",
+            response_text
+        );
+        assert!(
+            !response_text.contains("503 Service Unavailable"),
+            "Codex-facing exhausted stream must not expose transport 503: {}",
+            response_text
+        );
+
+        let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
+            .expect("audit should be written to isolated root");
+        assert!(audit.contains("\"phase\":\"pool_wait\""));
+        assert!(audit.contains("\"streamState\":\"admission_blocked\""));
+        assert!(audit.contains("\"outcome\":\"active_streams_draining\""));
+        assert!(audit.contains("\"outcome\":\"active_streams_drained\""));
+        assert!(audit.contains("\"errorType\":\"pool_unavailable\""));
+        assert!(audit.contains("\"streamState\":\"heartbeat\""));
+        assert!(audit.contains("\"phase\":\"stream_completed\""));
+        assert!(!audit.contains("\"streamState\":\"failed\""));
+        assert!(!audit.contains("\"outcome\":\"pool_unavailable_after_active_stream_drain\""));
+        assert!(!audit.contains("\"outcome\":\"parked\""));
+        assert!(!audit.contains("\"outcome\":\"in_band_synthetic\""));
+
+        let server_result = tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server task should finish")
+            .expect("server task should not panic");
+        assert!(server_result.is_ok(), "server error: {:?}", server_result);
+        upstream_server
+            .await
+            .expect("fake upstream task should join");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn responses_stream_forwards_real_upstream_after_pool_wait_recovery() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-pool-recovery-stream-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_server = tokio::spawn(async move {
+            let (mut socket, _) = upstream_listener
+                .accept()
+                .await
+                .expect("fake upstream should accept");
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let read = socket
+                    .read(&mut chunk)
+                    .await
+                    .expect("fake upstream should read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let body = concat!(
+                "event: response.created\n",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_recovered\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                "event: response.output_text.delta\n",
+                "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"OK\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_recovered\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                "data: [DONE]\n\n"
+            );
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.as_bytes().len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("fake upstream should write response");
+        });
+
+        let now = now_ms();
+        let mut registry = empty_health_registry(now);
+        registry.model_cooldowns.insert(
+            health_registry_model_key("api-recovered", "gpt-5.5"),
+            CodexLocalAccessModelCooldown {
+                account_id: "api-recovered".to_string(),
+                model: "gpt-5.5".to_string(),
+                cooldown_until_ms: now + 1500,
+                last_error_type: Some("usage_limit_reached".to_string()),
+                last_request_id: Some("req-recover-local".to_string()),
+                updated_at: now,
+            },
+        );
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": addr.port(),
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 2,
+                "minRequestIntervalSeconds": 0,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 3,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 1,
+                "fallbackMode": "disabled",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-recovered"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection);
+            runtime.running = true;
+            runtime.actual_port = Some(addr.port());
+        }
+        let account = CodexAccount::new_api_key(
+            "api-recovered".to_string(),
+            "api-recovered@example.com".to_string(),
+            "sk-local-test".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        cache_prepared_account(&account).await;
+
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("server should accept");
+            handle_connection(stream, peer).await
+        });
+        let mut client = TcpStream::connect(addr)
+            .await
+            .expect("client should connect");
+        let body = br#"{"model":"gpt-5.5","input":"hello"}"#;
+        let request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            String::from_utf8_lossy(body)
+        );
+        client
+            .write_all(request.as_bytes())
+            .await
+            .expect("request should be written");
+
+        let mut response = Vec::new();
+        for _ in 0..160 {
+            let mut chunk = [0u8; 1024];
+            let read = tokio::time::timeout(Duration::from_secs(5), client.read(&mut chunk))
+                .await
+                .expect("recovered stream should keep producing SSE")
+                .expect("response read should succeed");
+            if read == 0 {
+                break;
+            }
+            response.extend_from_slice(&chunk[..read]);
+            let response_text = String::from_utf8_lossy(&response);
+            if response_text.contains("[DONE]") {
+                break;
+            }
+        }
+        let response_text = String::from_utf8_lossy(&response);
+        assert!(
+            response_text.contains("HTTP/1.1 200 OK"),
+            "expected successful SSE response, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("cockpit_pool_wait"),
+            "expected heartbeat before local health recovery, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("response.completed"),
+            "expected real upstream completion after recovery, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("OK"),
+            "expected upstream response body to be forwarded, got: {}",
+            response_text
+        );
+        assert!(
+            !response_text.contains("Cockpit API Service pool_unavailable"),
+            "stream recovery must not emit terminal synthetic assistant text: {}",
+            response_text
+        );
+
+        let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
+            .expect("audit should be written to isolated root");
+        assert!(audit.contains("\"phase\":\"pool_wait\""));
+        assert!(audit.contains("\"streamState\":\"heartbeat\""));
+        assert!(audit.contains("\"phase\":\"stream_completed\""));
+        assert!(!audit.contains("\"outcome\":\"in_band_synthetic\""));
+
+        let server_result = server.await.expect("server task should join");
+        assert!(server_result.is_ok(), "server failed: {:?}", server_result);
+        upstream_server
+            .await
+            .expect("fake upstream task should join");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn exhausted_responses_non_stream_returns_in_band_failed_payload() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-pool-unavailable-non-stream-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let now = now_ms();
+        let mut registry = empty_health_registry(now);
+        for account_id in ["cooling-a", "cooling-b"] {
+            registry.model_cooldowns.insert(
+                health_registry_model_key(account_id, "gpt-5.5"),
+                CodexLocalAccessModelCooldown {
+                    account_id: account_id.to_string(),
+                    model: "gpt-5.5".to_string(),
+                    cooldown_until_ms: now + (7 * 24 * 60 * 60 * 1000),
+                    last_error_type: Some("usage_limit_reached".to_string()),
+                    last_request_id: Some("req-json-local".to_string()),
+                    updated_at: now,
+                },
+            );
+        }
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": addr.port(),
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 1,
+                "minRequestIntervalSeconds": 1,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 3,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "disabled",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["cooling-a", "cooling-b"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection);
+            runtime.running = true;
+            runtime.actual_port = Some(addr.port());
+        }
+
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("server should accept");
+            handle_connection(stream, peer).await
+        });
+        let mut client = TcpStream::connect(addr)
+            .await
+            .expect("client should connect");
+        let body = br#"{"model":"gpt-5.5","input":"hello","stream":false}"#;
+        let request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            String::from_utf8_lossy(body)
+        );
+        client
+            .write_all(request.as_bytes())
+            .await
+            .expect("request should be written");
+
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut response))
+            .await
+            .expect("pool-unavailable JSON response should finish promptly")
+            .expect("response read should succeed");
+        let response_text = String::from_utf8_lossy(&response);
+        assert!(
+            response_text.contains("HTTP/1.1 200 OK"),
+            "expected exhausted non-stream responses request to return protocol-shaped in-band JSON, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("application/json"),
+            "expected JSON response, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("\"status\":\"failed\""),
+            "expected failed pool_unavailable response payload, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("\"error\""),
+            "expected failed response error object, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("pool_unavailable")
+                || response_text.contains("API 服务号池")
+                || response_text.contains("暂无可调度账号"),
+            "expected pool_unavailable explanation, got: {}",
+            response_text
+        );
+        assert!(
+            !response_text.contains("503 Service Unavailable"),
+            "Codex-facing exhausted non-stream request must not expose transport 503: {}",
+            response_text
+        );
+
+        let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
+            .expect("audit should be written to isolated root");
+        assert!(audit.contains("\"phase\":\"final_response\""));
+        assert!(audit.contains("\"status\":200"));
+        assert!(audit.contains("\"errorType\":\"pool_unavailable\""));
+        assert!(audit.contains("\"streamState\":\"json_failed\""));
+        assert!(audit.contains("\"outcome\":\"in_band_json_failed\""));
+        assert!(!audit.contains("\"outcome\":\"in_band_synthetic\""));
+
+        let server_result = tokio::time::timeout(Duration::from_secs(1), server)
+            .await
+            .expect("server task should finish")
+            .expect("server task should not panic");
+        assert!(server_result.is_ok(), "server error: {:?}", server_result);
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pool_unavailable_non_responses_keeps_http_error_contract() {
+        let error = ProxyDispatchError {
+            status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            message: "API 服务号池暂无可调度账号".to_string(),
+            account_id: None,
+            account_email: None,
+            retry_after: None,
+            defer_until_pool_available: false,
+        };
+        assert_eq!(
+            classify_codex_api_failure(Some(error.status), error.message.as_str()),
+            "pool_unavailable"
+        );
+        let request = ParsedRequest {
+            method: "GET".to_string(),
+            target: "/v1/models".to_string(),
+            headers: HashMap::new(),
+            body: Vec::new(),
+        };
+        assert!(!should_write_in_band_pool_unavailable_response(
+            &request,
+            &GatewayResponseAdapter::Passthrough {
+                request_is_stream: false
+            },
+            &error
+        ));
     }
 
     #[test]
@@ -11679,6 +13331,47 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test]
+    async fn extended_local_backpressure_wait_can_outlive_default_queue_wait() {
+        let _guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        reset_local_api_backpressure_for_tests();
+        let mut config = CodexLocalApiSafetyConfig::default();
+        config.max_concurrent_requests = 1;
+        config.min_request_interval_seconds = 1;
+        config.max_queue_wait_seconds = 1;
+
+        let first = acquire_local_api_backpressure(&config)
+            .await
+            .expect("first request should acquire permit");
+        let waiter_config = config.clone();
+        let waiter = tokio::spawn(async move {
+            acquire_local_api_backpressure_with_wait(&waiter_config, Duration::from_secs(3)).await
+        });
+
+        tokio::time::sleep(Duration::from_millis(1200)).await;
+        drop(first);
+        let second = waiter
+            .await
+            .expect("waiter task should not panic")
+            .expect("extended request-timeout budget should allow waiting past max_queue_wait");
+        drop(second);
+        reset_local_api_backpressure_for_tests();
+    }
+
+    #[test]
+    fn backpressure_wait_budget_reserves_request_timeout_guard() {
+        assert_eq!(
+            backpressure_wait_budget(Duration::from_secs(10), Duration::from_secs(60)),
+            Some(Duration::from_secs(48))
+        );
+        assert_eq!(
+            backpressure_wait_budget(Duration::from_secs(59), Duration::from_secs(60)),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn local_backpressure_permit_drop_releases_capacity() {
         let _guard = LOCAL_BACKPRESSURE_TEST_LOCK
             .lock()
@@ -11776,6 +13469,18 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
 
     #[test]
     fn active_stream_lease_survives_cooldown_until_terminal_release() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-active-stream-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+
         reset_active_stream_leases_for_tests();
         let now = 1_700_000_000_000;
         let context = AuditContext {
@@ -11813,6 +13518,11 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         lease.release(ActiveStreamTerminal::Completed);
         assert_eq!(active_stream_lease_count_for_account("acc-active"), 0);
         reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

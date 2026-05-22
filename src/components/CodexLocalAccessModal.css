@@ -1248,6 +1248,12 @@
   opacity: 0.82;
 }
 
+.codex-local-access-current-member.is-dragging .codex-local-access-member-drag {
+  cursor: grabbing;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
 .codex-local-access-current-member.is-drop-target {
   border-color: color-mix(in srgb, var(--primary) 56%, rgba(148, 163, 184, 0.24));
   background: color-mix(in srgb, var(--primary) 8%, rgba(255, 255, 255, 0.68));
@@ -1268,6 +1274,7 @@
   cursor: grab;
   flex: 0 0 auto;
   touch-action: none;
+  -webkit-user-drag: none;
 }
 
 .codex-local-access-member-drag:hover:not(:disabled) {

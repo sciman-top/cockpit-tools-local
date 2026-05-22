@@ -2,6 +2,8 @@
 
 本页是自用版 Cockpit API service 的执行说明。它只描述本机低风险用法；代码、运行事实和 `docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md` 优先级更高。
 
+账号池调度专项见 `docs/LOCAL_HARDENED_API_ACCOUNT_POOL_SCHEDULING_PLAN.md`。该专项固定默认策略为 `sticky_process + fill_first + capped fallback`，并明确禁止随机扫号、高频 live probe 和风控规避型逻辑。
+
 ## 目标
 
 - 只监听 `127.0.0.1`，不提供 LAN/public 入口。
@@ -71,11 +73,15 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 ## 账号池成员与切换
 
 - “添加至 API 服务”保存的账号列表是 API 服务号池的配置真相；`effectiveAccountIds` 应与该列表一致。
+- 多账号池的高效调度目标是减少失败重试、避免 429 连撞并保持任务连续性，不是提高并发或把每个请求随机分配给不同账号。
 - 健康状态、cooldown、exhausted、manual-required 只影响运行时是否可调度，不应把账号从配置号池或 UI 有效号池里隐式移除。
 - API 服务面板和 smoke report 默认展示当前配置号池作用域的 health summary；历史 `codex_local_access_health.json` 仍保留旧账号记录，但只能作为 `healthRegistry` 历史证据，不能污染当前号池健康判断。
 - 在账号卡片或分组内点击普通“切换”只切换当前 Codex 账号，不清空、不替换 API 服务号池；只有显式开启“跟随当前账号”时才同步号池，且同步方式是把当前账号置前并保留原成员。
 - 在账号卡片主页点击“API 服务”卡片本体进入服务面板；卡片内“添加账号”按钮进入号池成员选择。
-- 当号池成员全部不可调度时，请求方会收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`；卡片根据 health summary 显示“额度均已耗尽”或“暂无可调度账号”的原因摘要，不能伪装成 upstream `429/rate_limited`。
+- 当号池成员全部不可调度时，普通 HTTP 客户端会收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`；卡片根据 health summary 显示“额度均已耗尽”或“暂无可调度账号”的原因摘要，不能伪装成 upstream `429/rate_limited`。
+- Codex-facing streaming `/v1/responses` 是例外：`429 retry-limit`、静默 SSE、transport `503/pool_unavailable`、synthetic `response.completed` 和 `response.failed` 都会破坏当前 Codex turn。全池不可调度时，新 streaming 请求必须被本地 admission gate 拦截为 `200 text/event-stream`，持续发送 SSE comment heartbeat（`cockpit_pool_wait`），直到本地 health/cooldown 恢复后再转发真实上游；不能发出 429、503、`response.failed`、synthetic completion 或静默 idle。
+- 非 streaming `/v1/responses` 没有可持续心跳通道；全池不可用时返回 `200` failed JSON，不返回 completed assistant text。monitor 必须把 streaming synthetic completion、transport 503、`response.failed`、parked pool_wait 和 SSE idle 标成连续性回归；有 heartbeat 的 open pool_wait 只表示新请求被拦截等待。
+- Stream 请求遇到全池不可用时不得静默 park；必须持续 heartbeat，并在 audit 中记录 `pool_wait` / `heartbeat` / `openPoolWait`，让监测能区分“新请求被拦截等待”和“旧任务被中断”。
 
 ## 单号池实跑优先级
 
@@ -103,7 +109,7 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 .\scripts\smoke-local-hardened-api.ps1 -Stage single -StartEphemeralGateway -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -Expect429 -WriteReport
 ```
 
-若上一轮已把该账号/模型写入 cooldown，后续同模型 smoke 应直接返回本地 `503/pool_unavailable` 和 `Retry-After`，不再继续打上游。
+若上一轮已把该账号/模型写入 cooldown，后续同模型 smoke 不应继续打上游。普通 HTTP 客户端应收到本地 `503/pool_unavailable` 和 `Retry-After`；Codex-facing streaming `/v1/responses` 应保持 `200 text/event-stream` 并持续 `cockpit_pool_wait` heartbeat，直到本地 health/cooldown 恢复后再进入真实上游转发。
 
 ## 额度耗尽后的请求边界
 
@@ -111,9 +117,10 @@ Hardened API Mode 的目标是接近 Direct OAuth 的稳定体验，但不伪造
 
 - 已被上游接纳的当前 stream/response 应继续 pipe 到完成、上游 terminal error、客户端断开或 transport fatal error。
 - 本地 cooldown、exhausted、health registry 或 `selection_eligible=false` 只影响新的 admission，不 retroactively cancel active stream。
-- 新的独立请求不需要等待其他 active stream 结束；调度器可以立即避开 cooldown/exhausted 账号，选择健康账号。
+- 新的独立请求在仍有健康账号时不需要等待其他 active stream 结束；调度器可以立即避开 cooldown/exhausted 账号，选择健康账号。若全池都不可调度，Codex-facing streaming 新请求必须被 admission gate 拦截并持续 heartbeat 等待恢复，不得让这个本地饱和状态变成 Codex turn failure。
 - 带 `previous_response_id` 的 continuation 优先粘原账号；不能把原账号的 `previous_response_id` 直接发给新账号。
-- 如果原账号在 continuation admission 阶段真实返回 429，只能 bounded backoff、返回本地 `503/pool_unavailable`，或在有完整上下文/压缩上下文重放时把它作为新 admission 交给健康账号。
+- 如果原账号在 continuation admission 阶段真实返回 429，只能 bounded backoff、对普通 HTTP 返回本地 `503/pool_unavailable`、对 Codex-facing streaming `/v1/responses` 执行 heartbeat wait 直到本地 health/cooldown 恢复，或在有完整上下文/压缩上下文重放时把它作为新 admission 交给健康账号。
+- Bounded backoff 只约束普通 HTTP 和短等待重试；Codex-facing streaming 的本地全池不可用不得用 retry-limit/failed-turn 表达，必须通过 SSE heartbeat 保持连接可观测。
 
 单号池通过后，再放入 2-3 个账号，保持 `maxRetryAccounts >= 2`，验证 selector/sticky/health 不乱轮换且 failover-safe 429 可在同一请求切到下一个健康账号：
 
@@ -271,6 +278,9 @@ CLI 会话中启动只读监测入口：
 - 已接纳 stream 完成，且没有在 stream 已开始后被本地 cooldown 中断
 - 历史 `exceeded retry limit, last status: 429 Too Many Requests` 是否复现
 - 本地号池耗尽是否被单独记录为 `pool_unavailable`，而不是 retry-limit regression
+- Codex-facing `/v1/responses` 全池耗尽是否没有 transport `503/pool_unavailable`
+- 是否出现 `200 + outcome=in_band_synthetic` synthetic completion 或 `response.failed`；这会结束或失败当前 Codex turn，属于 streaming 连续性回归
+- 是否出现 heartbeat `pool_wait`、有 heartbeat 的 open pool_wait、parked `pool_wait` 或 `stream disconnected before completion: idle timeout waiting for SSE`
 - 当前 CLI `config.toml` / `auth.json` 是否保持不变，以及 Codex App 进程集合是否稳定
 
 报告中的 `audit.fallbackTransitions`、`audit.streamSummaries` 和 `audit.accountSummaries` 用于复盘多账号切换：
@@ -312,7 +322,7 @@ Codex CLI -> LiteLLM -> Cockpit API service -> ChatGPT/Codex upstream
 codex exec --skip-git-repo-check --json "Reply with exactly OK"
 ```
 
-若直连 Cockpit 正常、LiteLLM 失败，应优先查 LiteLLM route/config；若 Cockpit 返回 upstream 429，先判断是否已写入 cooldown 并触发 fallback；若返回本地 `503/pool_unavailable`，先看当前号池是否还有可调度账号。
+若直连 Cockpit 正常、LiteLLM 失败，应优先查 LiteLLM route/config；若 Cockpit 返回 upstream 429，先判断是否已写入 cooldown 并触发 fallback；若普通 HTTP 返回本地 `503/pool_unavailable`，或 Codex-facing `/v1/responses` 进入 heartbeat `pool_wait`，先看当前号池是否还有可调度账号以及 health registry 最近 cooldown/reset 记录。
 
 ## 风险边界
 

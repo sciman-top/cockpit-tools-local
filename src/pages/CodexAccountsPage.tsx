@@ -6610,151 +6610,162 @@ export function CodexAccountsPage() {
             <span className="card-date">{formatDate(account.created_at)}</span>
             {renderAccountSpeedSelect(account)}
             <div className="card-footer">
-              <div className="card-actions">
-                <button
-                  className="card-action-btn"
-                  onClick={() => void handleLaunchCodexCli(account)}
-                  disabled={cliLaunchingAccountId === account.id}
-                  title={t("codex.cli.quickLaunch", "CLI 快速启动")}
-                >
-                  {cliLaunchingAccountId === account.id ? (
-                    <RefreshCw size={14} className="loading-spinner" />
-                  ) : (
-                    <Terminal size={14} />
+              <div className="card-actions codex-card-actions--grouped">
+                <span className="codex-card-action-cluster codex-card-action-cluster-primary">
+                  <button
+                    className={`card-action-btn ${!isCurrent ? "success" : ""}`}
+                    onClick={() => handleSwitch(account.id)}
+                    disabled={!!switching}
+                    title={t("codex.switch", "切换")}
+                  >
+                    {switching === account.id ? (
+                      <RefreshCw size={14} className="loading-spinner" />
+                    ) : (
+                      <Play size={14} />
+                    )}
+                  </button>
+                  {(!isApiKeyAccount || isNewApiAccount) && (
+                    <button
+                      className="card-action-btn"
+                      onClick={() => handleRefresh(account.id)}
+                      disabled={refreshing === account.id}
+                      title={t("common.shared.refreshQuota", "刷新配额")}
+                    >
+                      <RotateCw
+                        size={14}
+                        className={
+                          refreshing === account.id ? "loading-spinner" : ""
+                        }
+                      />
+                    </button>
                   )}
-                </button>
-                {isNewApiAccount && (
                   <button
                     className="card-action-btn"
-                    onClick={() => setCockpitApiPanelAccountId(account.id)}
-                    title={t("codex.cockpitApi.servicePanel", "服务面板")}
+                    onClick={() => void handleLaunchCodexCli(account)}
+                    disabled={cliLaunchingAccountId === account.id}
+                    title={t("codex.cli.quickLaunch", "CLI 快速启动")}
                   >
-                    <Database size={14} />
+                    {cliLaunchingAccountId === account.id ? (
+                      <RefreshCw size={14} className="loading-spinner" />
+                    ) : (
+                      <Terminal size={14} />
+                    )}
                   </button>
-                )}
-                {!isNewApiAccount && (
+                </span>
+
+                <span className="codex-card-action-cluster codex-card-action-cluster-service">
                   <button
-                    className="card-action-btn"
-                    onClick={() => openTagModal(account.id)}
-                    title={t("accounts.editTags", "编辑标签")}
-                  >
-                    <Tag size={14} />
-                  </button>
-                )}
-                {!isNewApiAccount && (
-                  <button
-                    className={`card-action-btn ${account.account_note?.trim() ? "active" : ""}`}
-                    onClick={() => openAccountNoteModal(account)}
+                    className={`card-action-btn ${isInLocalAccess ? "active" : ""}`}
+                    onClick={() => void handleToggleLocalAccessAccount(account.id)}
                     title={
-                      account.account_note?.trim() ||
-                      t("codex.accountNote.emptyTitle", "填写账号备注")
+                      isInLocalAccess
+                        ? t("codex.localAccess.removeMember", "移出 API 服务")
+                        : t("codex.localAccess.addMember", "加入 API 服务")
                     }
-                    aria-label={t("codex.accountNote.title", "账号备注")}
+                    disabled={localAccessBusy}
                   >
-                    <FileText size={14} />
+                    {isInLocalAccess ? <LogOut size={14} /> : <Server size={14} />}
                   </button>
-                )}
-                {isApiKeyAccount && !isNewApiAccount && (
                   <button
                     className="card-action-btn"
-                    onClick={() => openQuickSwitchProviderModal(account)}
-                    title={t("codex.quickSwitch.action", "快速切换供应商")}
+                    onClick={() => openAddAccountsToCodexGroup([account.id])}
+                    title={t("codex.groups.addToGroup", "移入分组")}
                   >
-                    <Repeat size={14} />
+                    <FolderPlus size={14} />
                   </button>
-                )}
-                {isApiKeyAccount && !isNewApiAccount && (
-                  <button
-                    className="card-action-btn"
-                    onClick={() => openApiKeyCredentialsModal(account)}
-                    title={t("instances.actions.edit", "编辑")}
-                  >
-                    <Pencil size={14} />
-                  </button>
-                )}
-                <button
-                  className={`card-action-btn ${isInLocalAccess ? "active" : ""}`}
-                  onClick={() => void handleToggleLocalAccessAccount(account.id)}
-                  title={
-                    isInLocalAccess
-                      ? t("codex.localAccess.removeMember", "移出 API 服务")
-                      : t("codex.localAccess.addMember", "加入 API 服务")
-                  }
-                  disabled={localAccessBusy}
-                >
-                  {isInLocalAccess ? <LogOut size={14} /> : <Server size={14} />}
-                </button>
-                <button
-                  className="card-action-btn"
-                  onClick={() => openAddAccountsToCodexGroup([account.id])}
-                  title={t("codex.groups.addToGroup", "移入分组")}
-                >
-                  <FolderPlus size={14} />
-                </button>
-                {renderActiveGroupOrderControls(
-                  account.id,
-                  "card-action-btn",
-                )}
-                {activeGroupId && (
-                  <button
-                    className="card-action-btn"
-                    onClick={() =>
-                      void handleRemoveSingleFromGroup(activeGroupId, account.id)
-                    }
-                    title={t("accounts.groups.removeFromGroup")}
-                    disabled={removingGroupAccountIds.has(account.id)}
-                  >
-                    <LogOut size={14} />
-                  </button>
-                )}
-                <button
-                  className={`card-action-btn ${!isCurrent ? "success" : ""}`}
-                  onClick={() => handleSwitch(account.id)}
-                  disabled={!!switching}
-                  title={t("codex.switch", "切换")}
-                >
-                  {switching === account.id ? (
-                    <RefreshCw size={14} className="loading-spinner" />
-                  ) : (
-                    <Play size={14} />
+                  {renderActiveGroupOrderControls(
+                    account.id,
+                    "card-action-btn",
                   )}
-                </button>
-                {(!isApiKeyAccount || isNewApiAccount) && (
-                  <button
-                    className="card-action-btn"
-                    onClick={() => handleRefresh(account.id)}
-                    disabled={refreshing === account.id}
-                    title={t("common.shared.refreshQuota", "刷新配额")}
-                  >
-                    <RotateCw
-                      size={14}
-                      className={
-                        refreshing === account.id ? "loading-spinner" : ""
+                  {activeGroupId && (
+                    <button
+                      className="card-action-btn"
+                      onClick={() =>
+                        void handleRemoveSingleFromGroup(activeGroupId, account.id)
                       }
-                    />
-                  </button>
-                )}
-                {!isNewApiAccount && (
+                      title={t("accounts.groups.removeFromGroup")}
+                      disabled={removingGroupAccountIds.has(account.id)}
+                    >
+                      <LogOut size={14} />
+                    </button>
+                  )}
+                </span>
+
+                <span className="codex-card-action-cluster codex-card-action-cluster-meta">
+                  {isNewApiAccount && (
+                    <button
+                      className="card-action-btn"
+                      onClick={() => setCockpitApiPanelAccountId(account.id)}
+                      title={t("codex.cockpitApi.servicePanel", "服务面板")}
+                    >
+                      <Database size={14} />
+                    </button>
+                  )}
+                  {!isNewApiAccount && (
+                    <button
+                      className="card-action-btn"
+                      onClick={() => openTagModal(account.id)}
+                      title={t("accounts.editTags", "编辑标签")}
+                    >
+                      <Tag size={14} />
+                    </button>
+                  )}
+                  {!isNewApiAccount && (
+                    <button
+                      className={`card-action-btn ${account.account_note?.trim() ? "active" : ""}`}
+                      onClick={() => openAccountNoteModal(account)}
+                      title={
+                        account.account_note?.trim() ||
+                        t("codex.accountNote.emptyTitle", "填写账号备注")
+                      }
+                      aria-label={t("codex.accountNote.title", "账号备注")}
+                    >
+                      <FileText size={14} />
+                    </button>
+                  )}
+                  {isApiKeyAccount && !isNewApiAccount && (
+                    <button
+                      className="card-action-btn"
+                      onClick={() => openQuickSwitchProviderModal(account)}
+                      title={t("codex.quickSwitch.action", "快速切换供应商")}
+                    >
+                      <Repeat size={14} />
+                    </button>
+                  )}
+                  {isApiKeyAccount && !isNewApiAccount && (
+                    <button
+                      className="card-action-btn"
+                      onClick={() => openApiKeyCredentialsModal(account)}
+                      title={t("instances.actions.edit", "编辑")}
+                    >
+                      <Pencil size={14} />
+                    </button>
+                  )}
+                </span>
+
+                <span className="codex-card-action-cluster codex-card-action-cluster-danger">
+                  {!isNewApiAccount && (
+                    <button
+                      className="card-action-btn export-btn"
+                      onClick={() =>
+                        handleExportByIds(
+                          [account.id],
+                          resolveSingleExportBaseName(account),
+                        )
+                      }
+                      title={t("common.shared.export.title", "导出")}
+                    >
+                      <Upload size={14} />
+                    </button>
+                  )}
                   <button
-                    className="card-action-btn export-btn"
-                    onClick={() =>
-                      handleExportByIds(
-                        [account.id],
-                        resolveSingleExportBaseName(account),
-                      )
-                    }
-                    title={t("common.shared.export.title", "导出")}
+                    className="card-action-btn danger"
+                    onClick={() => handleDelete(account.id)}
+                    title={t("common.delete", "删除")}
                   >
-                    <Upload size={14} />
+                    <Trash2 size={14} />
                   </button>
-                )}
-                <button
-                  className="card-action-btn danger"
-                  onClick={() => handleDelete(account.id)}
-                  title={t("common.delete", "删除")}
-                >
-                  <Trash2 size={14} />
-                </button>
+                </span>
               </div>
             </div>
           </div>
@@ -7290,77 +7301,85 @@ export function CodexAccountsPage() {
                 ariaLabel={t("codex.speed.title", "速度")}
               />
               <div className="card-footer codex-local-access-footer">
-                <div className="card-actions">
-                  <button
-                    className="card-action-btn"
-                    onClick={openLocalAccessMemberPicker}
-                    title={t("common.shared.addAccount", "添加账号")}
-                    disabled={localAccessBusy}
-                  >
-                    <FolderPlus size={14} />
-                  </button>
-                  <button
-                    className="card-action-btn"
-                    onClick={() => void handleLaunchLocalAccessCli()}
-                    title={t("codex.cli.quickLaunch", "CLI 快速启动")}
-                    disabled={
-                      localAccessBusy ||
-                      !localAccessCollection ||
-                      cliLaunchingAccountId === CODEX_API_SERVICE_BIND_ID
-                    }
-                  >
-                    {cliLaunchingAccountId === CODEX_API_SERVICE_BIND_ID ? (
-                      <RefreshCw size={14} className="loading-spinner" />
-                    ) : (
-                      <Terminal size={14} />
-                    )}
-                  </button>
-                  <button
-                    className="card-action-btn"
-                    onClick={openLocalAccessPanel}
-                    title={t("codex.localAccess.dashboardAction", "服务面板")}
-                    disabled={localAccessBusy}
-                  >
-                    <Database size={14} />
-                  </button>
-                  <button
-                    className="card-action-btn"
-                    onClick={() => void handleQuickRefreshLocalAccessQuota()}
-                    title={t("common.shared.refreshQuota", "刷新配额")}
-                    disabled={localAccessBusy || !localAccessCollection}
-                  >
-                    <RotateCw
-                      size={14}
-                      className={localAccessRefreshing ? "loading-spinner" : ""}
-                    />
-                  </button>
-                  <button
-                    className="card-action-btn success"
-                    onClick={() => void handleQuickActivateLocalAccess()}
-                    title={t(
-                      "codex.localAccess.activateAction",
-                      "启动 API 服务",
-                    )}
-                    disabled={localAccessBusy || !localAccessCollection}
-                  >
-                    {localAccessStarting ? (
-                      <RefreshCw size={14} className="loading-spinner" />
-                    ) : (
-                      <Play size={14} />
-                    )}
-                  </button>
-                  <button
-                    className={`card-action-btn ${localAccessCollection?.enabled ? "" : "success"}`}
-                    onClick={() => void handleQuickToggleLocalAccessEnabled()}
-                    title={
-                      localAccessCollection?.enabled
-                        ? t("codex.localAccess.disableService", "停用服务")
-                        : t("codex.localAccess.enableService", "启用服务")
-                    }
-                    disabled={localAccessBusy || !localAccessCollection}
-                  >
-                    <Power size={14} />
-                  </button>
+                <div className="card-actions codex-card-actions--grouped">
+                  <span className="codex-card-action-cluster codex-card-action-cluster-primary">
+                    <button
+                      className="card-action-btn success"
+                      onClick={() => void handleQuickActivateLocalAccess()}
+                      title={t(
+                        "codex.localAccess.activateAction",
+                        "启动 API 服务",
+                      )}
+                      disabled={localAccessBusy || !localAccessCollection}
+                    >
+                      {localAccessStarting ? (
+                        <RefreshCw size={14} className="loading-spinner" />
+                      ) : (
+                        <Play size={14} />
+                      )}
+                    </button>
+                    <button
+                      className={`card-action-btn ${localAccessCollection?.enabled ? "" : "success"}`}
+                      onClick={() => void handleQuickToggleLocalAccessEnabled()}
+                      title={
+                        localAccessCollection?.enabled
+                          ? t("codex.localAccess.disableService", "停用服务")
+                          : t("codex.localAccess.enableService", "启用服务")
+                      }
+                      disabled={localAccessBusy || !localAccessCollection}
+                    >
+                      <Power size={14} />
+                    </button>
+                  </span>
+
+                  <span className="codex-card-action-cluster codex-card-action-cluster-service">
+                    <button
+                      className="card-action-btn"
+                      onClick={openLocalAccessPanel}
+                      title={t("codex.localAccess.dashboardAction", "服务面板")}
+                      disabled={localAccessBusy}
+                    >
+                      <Database size={14} />
+                    </button>
+                    <button
+                      className="card-action-btn"
+                      onClick={openLocalAccessMemberPicker}
+                      title={t("common.shared.addAccount", "添加账号")}
+                      disabled={localAccessBusy}
+                    >
+                      <FolderPlus size={14} />
+                    </button>
+                  </span>
+
+                  <span className="codex-card-action-cluster codex-card-action-cluster-meta">
+                    <button
+                      className="card-action-btn"
+                      onClick={() => void handleQuickRefreshLocalAccessQuota()}
+                      title={t("common.shared.refreshQuota", "刷新配额")}
+                      disabled={localAccessBusy || !localAccessCollection}
+                    >
+                      <RotateCw
+                        size={14}
+                        className={localAccessRefreshing ? "loading-spinner" : ""}
+                      />
+                    </button>
+                    <button
+                      className="card-action-btn"
+                      onClick={() => void handleLaunchLocalAccessCli()}
+                      title={t("codex.cli.quickLaunch", "CLI 快速启动")}
+                      disabled={
+                        localAccessBusy ||
+                        !localAccessCollection ||
+                        cliLaunchingAccountId === CODEX_API_SERVICE_BIND_ID
+                      }
+                    >
+                      {cliLaunchingAccountId === CODEX_API_SERVICE_BIND_ID ? (
+                        <RefreshCw size={14} className="loading-spinner" />
+                      ) : (
+                        <Terminal size={14} />
+                      )}
+                    </button>
+                  </span>
                 </div>
               </div>
             </div>

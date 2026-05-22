@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent as ReactDragEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import {
   Activity,
   ArrowDown,
@@ -119,6 +126,31 @@ interface CodexLocalAccessModalProps {
 
 type StatsRangeKey = 'daily' | 'weekly' | 'monthly';
 type CopyableField = 'apiPortUrl' | 'baseUrl' | 'apiKey' | 'modelId';
+type MemberOrderPlacement = 'before' | 'after';
+
+interface MemberPointerDragState {
+  accountId: string;
+  pointerId: number;
+  targetId: string | null;
+  placement: MemberOrderPlacement;
+}
+
+function moveIdAroundTarget(
+  order: string[],
+  sourceAccountId: string,
+  targetAccountId: string,
+  placement: MemberOrderPlacement,
+): string[] {
+  if (sourceAccountId === targetAccountId) return order;
+
+  const remaining = order.filter((accountId) => accountId !== sourceAccountId);
+  const targetIndex = remaining.indexOf(targetAccountId);
+  if (targetIndex < 0) return order;
+
+  const next = [...remaining];
+  next.splice(placement === 'before' ? targetIndex : targetIndex + 1, 0, sourceAccountId);
+  return next;
+}
 const CODEX_LOCAL_ACCESS_STATS_RANGE_STORAGE_KEY =
   'agtools.codex.local_access.stats_range.v1';
 
@@ -268,6 +300,8 @@ export function CodexLocalAccessModal({
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const memberRemoveAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const memberPointerDragRef = useRef<MemberPointerDragState | null>(null);
+  const selectedOrderForSaveRef = useRef<string[]>([]);
 
   const collection = state?.collection ?? null;
   const apiPortUrl = state?.apiPortUrl ?? '';
@@ -455,6 +489,10 @@ export function CodexLocalAccessModal({
   }, [selected, selectedOrder, serviceAccountIds]);
 
   useEffect(() => {
+    selectedOrderForSaveRef.current = selectedOrderForSave;
+  }, [selectedOrderForSave]);
+
+  useEffect(() => {
     if (!isOpen) return;
     setQuery('');
     setSelected(new Set(normalizedInitialSelectedIds));
@@ -462,6 +500,7 @@ export function CodexLocalAccessModal({
     setMemberRemovalSelected(new Set());
     setDraggedMemberAccountId(null);
     setMemberOrderDropTargetId(null);
+    memberPointerDragRef.current = null;
     setFilterTypes([]);
     setTagFilter([]);
     setGroupFilter([]);
@@ -987,6 +1026,93 @@ export function CodexLocalAccessModal({
   };
 
   const handleMemberDragEnd = () => {
+    setDraggedMemberAccountId(null);
+    setMemberOrderDropTargetId(null);
+  };
+
+  const resolveMemberPointerTarget = (
+    clientX: number,
+    clientY: number,
+  ): Pick<MemberPointerDragState, 'targetId' | 'placement'> => {
+    const sourceAccountId = memberPointerDragRef.current?.accountId;
+    const element = document.elementFromPoint(clientX, clientY);
+    const row = element?.closest<HTMLElement>('[data-member-account-id]');
+    const targetId = row?.dataset.memberAccountId ?? null;
+    if (!row || !targetId || targetId === sourceAccountId) {
+      return { targetId: null, placement: 'before' };
+    }
+
+    const rect = row.getBoundingClientRect();
+    return {
+      targetId,
+      placement: clientY > rect.top + rect.height / 2 ? 'after' : 'before',
+    };
+  };
+
+  const handleMemberPointerDown = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    accountId: string,
+  ) => {
+    if (actionBusy || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    memberPointerDragRef.current = {
+      accountId,
+      pointerId: event.pointerId,
+      targetId: null,
+      placement: 'before',
+    };
+    setDraggedMemberAccountId(accountId);
+    setMemberOrderDropTargetId(null);
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Pointer capture can fail in older WebViews; move/up still work while over the handle.
+    }
+  };
+
+  const handleMemberPointerMove = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const dragState = memberPointerDragRef.current;
+    if (!dragState || dragState.pointerId !== event.pointerId) return;
+    event.preventDefault();
+
+    const target = resolveMemberPointerTarget(event.clientX, event.clientY);
+    dragState.targetId = target.targetId;
+    dragState.placement = target.placement;
+    setMemberOrderDropTargetId(target.targetId);
+  };
+
+  const finishMemberPointerDrag = (
+    event?: ReactPointerEvent<HTMLButtonElement>,
+  ) => {
+    const dragState = memberPointerDragRef.current;
+    if (!dragState) return;
+
+    if (event && dragState.pointerId !== event.pointerId) return;
+    if (event) {
+      event.preventDefault();
+      try {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      } catch {
+        // Ignore release failures from WebViews that already dropped capture.
+      }
+    }
+
+    if (dragState.targetId) {
+      setSelectedOrder(
+        moveIdAroundTarget(
+          selectedOrderForSaveRef.current,
+          dragState.accountId,
+          dragState.targetId,
+          dragState.placement,
+        ),
+      );
+    }
+
+    memberPointerDragRef.current = null;
     setDraggedMemberAccountId(null);
     setMemberOrderDropTargetId(null);
   };
@@ -2005,6 +2131,7 @@ export function CodexLocalAccessModal({
                       return (
                         <div
                           key={`pool-member-${account.id}`}
+                          data-member-account-id={account.id}
                           className={`codex-local-access-current-member${
                             isCurrentAccount ? ' is-active-account' : ''
                           }${isRemovalChecked ? ' is-marked' : ''}${
@@ -2025,7 +2152,11 @@ export function CodexLocalAccessModal({
                             title={t('codex.sort.customDragHandle', '拖拽排序')}
                             aria-label={t('codex.sort.customDragHandle', '拖拽排序')}
                             disabled={actionBusy}
-                            draggable={!actionBusy}
+                            draggable={false}
+                            onPointerDown={(event) => handleMemberPointerDown(event, account.id)}
+                            onPointerMove={handleMemberPointerMove}
+                            onPointerUp={finishMemberPointerDrag}
+                            onPointerCancel={finishMemberPointerDrag}
                             onDragStart={(event) => handleMemberDragStart(event, account.id)}
                             onDragEnd={handleMemberDragEnd}
                           >
