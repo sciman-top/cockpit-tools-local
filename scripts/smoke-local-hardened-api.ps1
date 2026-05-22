@@ -367,8 +367,8 @@ function Set-TemporaryFallbackProbeConfig {
 
   $config = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
   $accountCount = if ($config.accountIds) { @($config.accountIds).Count } else { 0 }
-  if ($accountCount -lt 2) {
-    throw "fallback_probe 需要手动配置 2 到 3 个 API 服务号池账号，当前 accountCount=$accountCount；请先在 Cockpit API 服务号池中添加账号后再运行验收"
+  if ($accountCount -lt 1 -or $accountCount -gt 3) {
+    throw "fallback_probe 需要手动配置 1 到 3 个 API 服务号池账号，当前 accountCount=$accountCount；请先在 Cockpit API 服务号池中调整账号后再运行验收"
   }
 
   if ($null -eq $config.safetyConfig) {
@@ -828,8 +828,8 @@ function Test-LocalAccessConfigContract {
       return $result
     }
   } elseif ($Stage -eq "fallback_probe") {
-    if ($accountCount -lt 2 -or $accountCount -gt 3) {
-      Set-SmokeBlocked $result "fallback_probe 阶段要求 accountIds 为 2 到 3 个" $evidence
+    if ($accountCount -lt 1 -or $accountCount -gt 3) {
+      Set-SmokeBlocked $result "fallback_probe 阶段要求 accountIds 为 1 到 3 个" $evidence
       return $result
     }
     if ($effectiveMaxRetryAccounts -lt 2) {

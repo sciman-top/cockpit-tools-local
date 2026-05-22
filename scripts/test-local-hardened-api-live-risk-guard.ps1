@@ -19,6 +19,15 @@ function Assert-Matches {
   Assert-True ($Text -match $Pattern) $Message
 }
 
+function Test-ExecutableDocCommandLine {
+  param([string]$Line)
+  $Line -match '(?i)(^|\s)(pwsh|powershell|powershell\.exe|pwsh\.exe)\b' -or
+    $Line -match '(^|\s)&\s*["'']?' -or
+    $Line -match '(^|\s)\.\\scripts\\' -or
+    $Line -match '(^|\s)\./scripts/' -or
+    $Line -match '(^|\s)-File\s+'
+}
+
 function Convert-JsonOutput {
   param([object[]]$Output, [string]$Context)
   $text = ($Output | Out-String).Trim()
@@ -71,10 +80,11 @@ function Assert-LiveUpstreamDocExamplesRequireAcknowledgement {
       $line = $lines[$i]
       $lineNumber = $i + 1
       $continuesOnNextLine = $line.TrimEnd().EndsWith([string][char]0x60)
-      if (-not $continuesOnNextLine -and $line -match 'smoke-local-hardened-api\.ps1' -and $line -match '-RunUpstreamSmoke' -and $line -notmatch '-AcknowledgeLiveUpstreamRisk') {
+      $looksExecutable = Test-ExecutableDocCommandLine $line
+      if ($looksExecutable -and -not $continuesOnNextLine -and $line -match 'smoke-local-hardened-api\.ps1' -and $line -match '-RunUpstreamSmoke' -and $line -notmatch '-AcknowledgeLiveUpstreamRisk') {
         $violations += ("{0}:{1} inline smoke command is missing -AcknowledgeLiveUpstreamRisk" -f $relativePath, $lineNumber)
       }
-      if (-not $continuesOnNextLine -and $line -match 'accept-local-hardened-api-continuity\.ps1' -and $line -notmatch '-AcknowledgeLiveUpstreamRisk') {
+      if ($looksExecutable -and -not $continuesOnNextLine -and $line -match 'accept-local-hardened-api-continuity\.ps1' -and $line -notmatch '-AcknowledgeLiveUpstreamRisk') {
         $violations += ("{0}:{1} inline acceptance command is missing -AcknowledgeLiveUpstreamRisk" -f $relativePath, $lineNumber)
       }
     }

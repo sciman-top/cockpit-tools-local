@@ -4,6 +4,10 @@ import { useTranslation } from 'react-i18next'
 import type { CodexAccount } from '../types/codex'
 import type { CodexAccountGroup } from '../services/codexAccountGroupService'
 import { buildCodexAccountPresentation } from '../presentation/platformAccountPresentation'
+import {
+  compareCodexAccountTieBreak,
+  compareCodexAccountsByRecommendedSort,
+} from '../utils/codexAccountSort'
 import './GroupAccountPickerModal.css'
 
 interface CodexGroupAccountPickerModalProps {
@@ -69,20 +73,18 @@ export function CodexGroupAccountPickerModal({
         : accounts.filter((account) => !existingIds.has(account.id))
 
     next = next.sort((a, b) => {
-      const aIsCurrent = currentAccountId === a.id
-      const bIsCurrent = currentAccountId === b.id
-      if (aIsCurrent !== bIsCurrent) {
-        return aIsCurrent ? -1 : 1
-      }
+      const recommendedDiff = compareCodexAccountsByRecommendedSort(a, b, {
+        currentAccountId,
+      })
+      if (recommendedDiff !== 0) return recommendedDiff
+
       if (mode === 'remove') {
         const orderDiff =
           (groupOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
           (groupOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER)
         if (orderDiff !== 0) return orderDiff
       }
-      const aName = buildCodexAccountPresentation(a, t).displayName.toLowerCase()
-      const bName = buildCodexAccountPresentation(b, t).displayName.toLowerCase()
-      return aName.localeCompare(bName)
+      return compareCodexAccountTieBreak(a, b)
     })
 
     if (!queryText) return next

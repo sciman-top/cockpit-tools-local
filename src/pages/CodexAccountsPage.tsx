@@ -91,7 +91,6 @@ import {
   hasCodexAccountStructure,
   formatCodexLoginProvider,
   getCodexAuthMetadata,
-  getCodexEffectiveQuotaPercentages,
   getCodexPlanFilterKey,
   getCodexSubscriptionPresentation,
   hasCodexAccountName,
@@ -110,6 +109,12 @@ import {
   normalizeAccountOrder,
   type AccountOrderMove,
 } from "../utils/accountOrder";
+import {
+  CODEX_RECOMMENDED_SORT_BY,
+  compareCodexAccountTieBreak,
+  compareCodexAccountsBySort,
+  type CodexGroupSortMeta,
+} from "../utils/codexAccountSort";
 
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -271,7 +276,6 @@ const EXPIRY_FILTER_FIELD = "expiry_filter";
 const GROUP_FILTER_FIELD = "group_filter";
 const ACTIVE_GROUP_ID_FIELD = "active_group_id";
 const codexSessionActivatedAccountIds = new Set<string>();
-const CODEX_RECOMMENDED_SORT_BY = "recommended";
 const CODEX_ACCOUNT_DRAG_MIME = "application/x-cockpit-codex-account-ids";
 const CODEX_API_SERVICE_DROP_TARGET = "api-service";
 
@@ -289,8 +293,6 @@ function shouldIgnoreAccountDragStart(target: EventTarget | null): boolean {
 }
 
 type CodexOverviewLayoutMode = "compact" | "list" | "grid";
-type CodexNumericSortDirection = "asc" | "desc";
-
 function normalizeLocalAccessAddressKind(
   value: string | null | undefined,
 ): CodexLocalAccessAddressKind {
@@ -315,209 +317,6 @@ function persistLocalAccessAddressKind(
   } catch {
     // ignore storage write failures
   }
-}
-
-function toNullableSortNumber(value: number | null | undefined): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function toNullablePositiveSortNumber(
-  value: number | null | undefined,
-): number | null {
-  const normalized = toNullableSortNumber(value);
-  return normalized != null && normalized > 0 ? normalized : null;
-}
-
-function compareNullableSortNumber(
-  left: number | null | undefined,
-  right: number | null | undefined,
-  direction: CodexNumericSortDirection,
-): number {
-  const leftValue = toNullableSortNumber(left);
-  const rightValue = toNullableSortNumber(right);
-  if (leftValue == null && rightValue == null) return 0;
-  if (leftValue == null) return 1;
-  if (rightValue == null) return -1;
-  const diff =
-    direction === "desc" ? rightValue - leftValue : leftValue - rightValue;
-  return diff === 0 ? 0 : diff;
-}
-
-function compareCodexAccountTieBreak(
-  left: CodexAccount,
-  right: CodexAccount,
-  direction: CodexNumericSortDirection = "desc",
-): number {
-  const createdDiff =
-    direction === "desc"
-      ? right.created_at - left.created_at
-      : left.created_at - right.created_at;
-  if (createdDiff !== 0) return createdDiff;
-  return direction === "desc"
-    ? right.id.localeCompare(left.id)
-    : left.id.localeCompare(right.id);
-}
-
-function compareCodexAccountCreatedAt(
-  left: CodexAccount,
-  right: CodexAccount,
-  direction: CodexNumericSortDirection,
-): number {
-  const diff =
-    direction === "desc"
-      ? right.created_at - left.created_at
-      : left.created_at - right.created_at;
-  return diff !== 0 ? diff : left.id.localeCompare(right.id);
-}
-
-type CodexGroupSortMeta = {
-  sortOrder: number;
-  accountIndex: number;
-};
-
-function getCodexAccountRecommendedSortBucket(
-  account: CodexAccount,
-  apiServiceSortMeta: Map<string, number>,
-  groupSortMeta: Map<string, CodexGroupSortMeta>,
-  currentAccountId: string | null,
-): number {
-  if (apiServiceSortMeta.has(account.id) || isCodexNewApiAccount(account)) {
-    return 0;
-  }
-  if (groupSortMeta.has(account.id)) return 1;
-  if (currentAccountId === account.id) return 2;
-  if (isCodexApiKeyAccount(account)) return 3;
-
-  const planKey = getCodexPlanFilterKey(account).toLowerCase();
-  const quota = getCodexEffectiveQuotaPercentages(account.quota);
-  const hasHourlyAndWeeklyQuota =
-    (quota.hourly ?? 0) > 0 && (quota.weekly ?? 0) > 0;
-  if ((planKey === "pro" || planKey === "plus") && hasHourlyAndWeeklyQuota) {
-    return 4;
-  }
-  if (planKey === "free") return 5;
-  return 6;
-}
-
-function compareCodexAccountTopSortPriority(
-  left: CodexAccount,
-  right: CodexAccount,
-  apiServiceSortMeta: Map<string, number>,
-  groupSortMeta: Map<string, CodexGroupSortMeta>,
-  currentAccountId: string | null,
-): number {
-  const leftBucket = getCodexAccountRecommendedSortBucket(
-    left,
-    apiServiceSortMeta,
-    groupSortMeta,
-    currentAccountId,
-  );
-  const rightBucket = getCodexAccountRecommendedSortBucket(
-    right,
-    apiServiceSortMeta,
-    groupSortMeta,
-    currentAccountId,
-  );
-  const leftTopBucket = leftBucket <= 2 ? leftBucket : 3;
-  const rightTopBucket = rightBucket <= 2 ? rightBucket : 3;
-  if (leftTopBucket !== rightTopBucket) {
-    return leftTopBucket - rightTopBucket;
-  }
-  if (leftTopBucket <= 2 && currentAccountId) {
-    const leftIsCurrent = left.id === currentAccountId;
-    const rightIsCurrent = right.id === currentAccountId;
-    if (leftIsCurrent !== rightIsCurrent) {
-      return leftIsCurrent ? -1 : 1;
-    }
-  }
-  if (leftTopBucket === 0) {
-    return compareCodexRecommendedApiServiceAccounts(
-      left,
-      right,
-      apiServiceSortMeta,
-    );
-  }
-  if (leftTopBucket === 1) {
-    return compareCodexRecommendedGroupedAccounts(left, right, groupSortMeta);
-  }
-  return 0;
-}
-
-function compareCodexRecommendedFreeAccounts(
-  left: CodexAccount,
-  right: CodexAccount,
-): number {
-  const weeklyDiff = compareNullableSortNumber(
-    getCodexQuotaSortValue(left, "weekly"),
-    getCodexQuotaSortValue(right, "weekly"),
-    "desc",
-  );
-  if (weeklyDiff !== 0) return weeklyDiff;
-
-  const resetDiff = compareNullableSortNumber(
-    getCodexQuotaResetSortValue(left, "weekly_reset"),
-    getCodexQuotaResetSortValue(right, "weekly_reset"),
-    "asc",
-  );
-  return resetDiff !== 0 ? resetDiff : compareCodexAccountTieBreak(left, right);
-}
-
-function compareCodexRecommendedGroupedAccounts(
-  left: CodexAccount,
-  right: CodexAccount,
-  groupSortMeta: Map<string, CodexGroupSortMeta>,
-): number {
-  const leftMeta = groupSortMeta.get(left.id);
-  const rightMeta = groupSortMeta.get(right.id);
-  const sortOrderDiff =
-    (leftMeta?.sortOrder ?? Number.MAX_SAFE_INTEGER) -
-    (rightMeta?.sortOrder ?? Number.MAX_SAFE_INTEGER);
-  if (sortOrderDiff !== 0) return sortOrderDiff;
-
-  const accountIndexDiff =
-    (leftMeta?.accountIndex ?? Number.MAX_SAFE_INTEGER) -
-    (rightMeta?.accountIndex ?? Number.MAX_SAFE_INTEGER);
-  return accountIndexDiff !== 0
-    ? accountIndexDiff
-    : compareCodexAccountTieBreak(left, right);
-}
-
-function compareCodexRecommendedApiServiceAccounts(
-  left: CodexAccount,
-  right: CodexAccount,
-  apiServiceSortMeta: Map<string, number>,
-): number {
-  const orderDiff =
-    (apiServiceSortMeta.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-    (apiServiceSortMeta.get(right.id) ?? Number.MAX_SAFE_INTEGER);
-  if (orderDiff !== 0) return orderDiff;
-
-  if (isCodexNewApiAccount(left) !== isCodexNewApiAccount(right)) {
-    return isCodexNewApiAccount(left) ? -1 : 1;
-  }
-  return compareCodexAccountTieBreak(left, right);
-}
-
-function getCodexQuotaSortValue(
-  account: CodexAccount,
-  metric: "weekly" | "hourly",
-): number | null {
-  if (isCodexApiKeyAccount(account) && !isCodexNewApiAccount(account)) {
-    return null;
-  }
-  const percentages = getCodexEffectiveQuotaPercentages(account.quota);
-  return metric === "weekly" ? percentages.weekly : percentages.hourly;
-}
-
-function getCodexQuotaResetSortValue(
-  account: CodexAccount,
-  metric: "weekly_reset" | "hourly_reset",
-): number | null {
-  return toNullablePositiveSortNumber(
-    metric === "weekly_reset"
-      ? account.quota?.weekly_reset_time
-      : account.quota?.hourly_reset_time,
-  );
 }
 
 type CodexLaunchCredentialKind = "api-key" | "api-service" | "account";
@@ -1096,13 +895,16 @@ export function CodexAccountsPage() {
     );
   }, [activeGroupId, filterPersistenceEnabled, filterPersistenceScope]);
 
-  const reloadLocalAccessState = useCallback(async () => {
+  const reloadLocalAccessState = useCallback(async (options?: { silent?: boolean }) => {
     try {
       const nextState =
         await codexLocalAccessService.getCodexLocalAccessState();
       setLocalAccessState(nextState);
     } catch (error) {
       console.error("Failed to load codex local access state:", error);
+      if (options?.silent) {
+        return;
+      }
       setMessage({
         text: t("messages.actionFailed", {
           action: t("codex.localAccess.title", "API 服务"),
@@ -4320,8 +4122,12 @@ export function CodexAccountsPage() {
   }, [accounts, reloadLocalAccessState]);
 
   const localAccessModalSelectedIds = useMemo(
-    () => [...(localAccessCollection?.accountIds ?? [])],
-    [localAccessCollection?.accountIds],
+    () => [
+      ...(localAccessEffectiveAccountIds.length > 0
+        ? localAccessEffectiveAccountIds
+        : (localAccessCollection?.accountIds ?? [])),
+    ],
+    [localAccessCollection?.accountIds, localAccessEffectiveAccountIds],
   );
 
   const handleSaveLocalAccessAccounts = useCallback(
@@ -5411,11 +5217,15 @@ export function CodexAccountsPage() {
   }, [codexGroups]);
   const apiServiceSortMeta = useMemo(() => {
     const map = new Map<string, number>();
-    (localAccessCollection?.accountIds ?? []).forEach((accountId, index) => {
+    const orderedIds =
+      localAccessEffectiveAccountIds.length > 0
+        ? localAccessEffectiveAccountIds
+        : (localAccessCollection?.accountIds ?? []);
+    orderedIds.forEach((accountId, index) => {
       map.set(accountId, index);
     });
     return map;
-  }, [localAccessCollection?.accountIds]);
+  }, [localAccessCollection?.accountIds, localAccessEffectiveAccountIds]);
   const localAccessRuntimeActive =
     localAccessLaunchCurrent ||
     codexRuntimeMode?.mode === "cockpit_api_service";
@@ -5424,51 +5234,19 @@ export function CodexAccountsPage() {
       ? localAccessEffectiveAccountIds[0]
       : (currentAccount?.id ?? null);
 
+  useEffect(() => {
+    if (!localAccessRuntimeActive && !showLocalAccessModal) {
+      return;
+    }
+
+    const intervalId = window.setInterval(() => {
+      void reloadLocalAccessState({ silent: true });
+    }, 5000);
+    return () => window.clearInterval(intervalId);
+  }, [localAccessRuntimeActive, reloadLocalAccessState, showLocalAccessModal]);
+
   const compareAccountsBySort = useCallback(
     (a: CodexAccount, b: CodexAccount) => {
-      const topPriority = compareCodexAccountTopSortPriority(
-        a,
-        b,
-        apiServiceSortMeta,
-        groupSortMeta,
-        overviewCurrentAccountId,
-      );
-      if (topPriority !== 0) {
-        return topPriority;
-      }
-
-      if (sortBy === CODEX_RECOMMENDED_SORT_BY) {
-        const aBucket = getCodexAccountRecommendedSortBucket(
-          a,
-          apiServiceSortMeta,
-          groupSortMeta,
-          overviewCurrentAccountId,
-        );
-        const bBucket = getCodexAccountRecommendedSortBucket(
-          b,
-          apiServiceSortMeta,
-          groupSortMeta,
-          overviewCurrentAccountId,
-        );
-        if (aBucket !== bBucket) {
-          return aBucket - bBucket;
-        }
-        if (aBucket === 0) {
-          return compareCodexRecommendedApiServiceAccounts(
-            a,
-            b,
-            apiServiceSortMeta,
-          );
-        }
-        if (aBucket === 1) {
-          return compareCodexRecommendedGroupedAccounts(a, b, groupSortMeta);
-        }
-        if (aBucket === 5) {
-          return compareCodexRecommendedFreeAccounts(a, b);
-        }
-        return compareCodexAccountTieBreak(a, b);
-      }
-
       if (sortBy === "custom") {
         const aIndex =
           customSortOrderIndex.get(a.id) ?? Number.MAX_SAFE_INTEGER;
@@ -5480,47 +5258,15 @@ export function CodexAccountsPage() {
         return compareCodexAccountTieBreak(a, b);
       }
 
-      if (sortBy === "created_at") {
-        return compareCodexAccountCreatedAt(a, b, sortDirection);
-      }
-      if (sortBy === "weekly_reset" || sortBy === "hourly_reset") {
-        const diff = compareNullableSortNumber(
-          getCodexQuotaResetSortValue(a, sortBy),
-          getCodexQuotaResetSortValue(b, sortBy),
-          sortDirection,
-        );
-        return diff !== 0
-          ? diff
-          : compareCodexAccountTieBreak(a, b, sortDirection);
-      }
-      if (sortBy === "subscription_expiry") {
-        const aR = isCodexApiKeyAccount(a)
-          ? null
-          : toNullablePositiveSortNumber(
-              resolveSubscriptionPresentation(a).timestampMs,
-            );
-        const bR = isCodexApiKeyAccount(b)
-          ? null
-          : toNullablePositiveSortNumber(
-              resolveSubscriptionPresentation(b).timestampMs,
-            );
-        const diff = compareNullableSortNumber(aR, bR, sortDirection);
-        return diff !== 0
-          ? diff
-          : compareCodexAccountTieBreak(a, b, sortDirection);
-      }
-      if (sortBy === "weekly" || sortBy === "hourly") {
-        const diff = compareNullableSortNumber(
-          getCodexQuotaSortValue(a, sortBy),
-          getCodexQuotaSortValue(b, sortBy),
-          sortDirection,
-        );
-        return diff !== 0
-          ? diff
-          : compareCodexAccountTieBreak(a, b, sortDirection);
-      }
-
-      return compareCodexAccountCreatedAt(a, b, sortDirection);
+      return compareCodexAccountsBySort(a, b, {
+        apiServiceSortMeta,
+        currentAccountId: overviewCurrentAccountId,
+        getSubscriptionTimestampMs: (account) =>
+          resolveSubscriptionPresentation(account).timestampMs,
+        groupSortMeta,
+        sortBy,
+        sortDirection,
+      });
     },
     [
       apiServiceSortMeta,

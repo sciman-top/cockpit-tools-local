@@ -134,9 +134,9 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 `pool_unavailable` 不是所有客户端都应收到同一种 transport 响应。
 
 - 普通 HTTP 客户端可以收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`。
-- Codex-facing `/v1/responses` 不能直接暴露 transport `503/pool_unavailable`，也不能把 upstream 429 包装成 retry-limit 终止；全池不可用时不得返回 `response.failed` 或静默断开。短等待只能发生在请求预算内；超预算必须返回 `200` completed Responses SSE/JSON，streaming 序列必须完整闭合到 `response.completed` + `[DONE]`。
+- Codex-facing `/v1/responses` 不能直接暴露 transport `503/pool_unavailable`，也不能把 upstream 429 包装成 retry-limit 终止；全池不可用时不得返回 `response.failed` 或静默断开。等待只能是短等待且必须发生在本次请求预算内；超出短等待或预算必须返回 `200` completed Responses SSE/JSON，streaming 序列必须完整闭合到 `response.completed` + `[DONE]`。
 - Stream 请求遇到全池不可用时，`pool_wait` 必须可观测且最终闭合：短等待后恢复、或 `final_response` / `streamState=completed` / `outcome=in_band_local_completion` / `errorType=pool_unavailable` 显式闭合。parked pool_wait、SSE idle、heartbeat-only open wait、`response.failed` 和旧 `outcome=in_band_synthetic` 都是连续性回归。
-- Bounded backoff 只约束普通 HTTP 和短等待重试；Codex-facing 的本地全池不可用只能在请求预算内等待 health/cooldown 恢复并转发真实上游，超出预算必须用本地 completed Responses 闭合本轮。
+- Bounded backoff 只约束普通 HTTP 和内联账号重试；Codex-facing 的本地全池不可用只能短等待 health/cooldown 恢复并转发真实上游，超出短等待或预算必须用本地 completed Responses 闭合本轮。
 
 ## 路线图
 
@@ -156,7 +156,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 - [ ] 读者能从文档直接判断默认是否会随机轮换账号。
 - [ ] report 能解释“为什么没有切号”或“为什么切到下一个账号”。
-- [ ] Codex-facing 全池不可用不出现 transport `503/pool_unavailable`、`response.failed`、旧 `outcome=in_band_synthetic`、heartbeat-only open wait 或 parked SSE idle timeout；短预算内可恢复时继续转发真实上游，超预算时必须出现本地 completed Responses SSE/JSON。
+- [ ] Codex-facing 全池不可用不出现 transport `503/pool_unavailable`、`response.failed`、旧 `outcome=in_band_synthetic`、heartbeat-only open wait 或 parked SSE idle timeout；短等待内可恢复时继续转发真实上游，超出短等待或预算时必须出现本地 completed Responses SSE/JSON。
 - [ ] `git diff --check` 通过。
 
 ### Phase S2 - Selector 可解释性增强

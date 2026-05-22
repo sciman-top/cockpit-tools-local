@@ -80,9 +80,9 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 - 在账号卡片或分组内点击普通“切换”只切换当前 Codex 账号，不清空、不替换 API 服务号池；只有显式开启“跟随当前账号”时才同步号池，且同步方式是把当前账号置前并保留原成员。
 - 在账号卡片主页点击“API 服务”卡片本体进入服务面板；卡片内“添加账号”按钮进入号池成员选择。
 - 当号池成员全部不可调度时，普通 HTTP 客户端会收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`；卡片根据 health summary 显示“额度均已耗尽”或“暂无可调度账号”的原因摘要，不能伪装成 upstream `429/rate_limited`。
-- Codex-facing `/v1/responses` 是例外：`429 retry-limit`、静默 SSE、transport `503/pool_unavailable`、`response.failed`、heartbeat-only open wait 都会破坏当前 Codex turn。全池不可调度时，只允许在请求超时预算内做短等待并重试；若不能在预算内恢复，必须返回 `200` completed Responses 形态：streaming 使用完整 `response.created -> ... -> response.completed -> [DONE]`，non-stream 使用 `status=completed` JSON，并在 assistant text 中说明 `Cockpit API Service pool_unavailable`。该本地响应不打上游、不释放无关 active stream。
+- Codex-facing `/v1/responses` 是例外：`429 retry-limit`、静默 SSE、transport `503/pool_unavailable`、`response.failed`、heartbeat-only open wait 都会破坏当前 Codex turn。全池不可调度时，只允许短等待恢复，且等待必须落在本次请求超时预算内；若不能在短等待内恢复，必须返回 `200` completed Responses 形态：streaming 使用完整 `response.created -> ... -> response.completed -> [DONE]`，non-stream 使用 `status=completed` JSON，并在 assistant text 中说明 `Cockpit API Service pool_unavailable`。该本地响应不打上游、不释放无关 active stream。
 - monitor 必须把 transport 503、`response.failed`、旧 `outcome=in_band_synthetic`、heartbeat/open/parked pool_wait、SSE idle，以及 `stream disconnected before completion: Cockpit API Service pool_unavailable` 标成连续性回归；`streamState=completed` / `outcome=in_band_local_completion` 是 Codex-facing 全池耗尽时的本地闭合证据。
-- Stream 请求遇到全池不可用时不得静默 park，也不得持续 heartbeat 等待长 cooldown；audit 应记录短等待 `pool_wait` 后恢复，或 `final_response` / `streamState=completed` / `outcome=in_band_local_completion` / `errorType=pool_unavailable`。
+- Stream 请求遇到全池不可用时不得静默 park，也不得持续 heartbeat 或静默等待长 cooldown；audit 应记录短等待 `pool_wait` 后恢复，或 `final_response` / `streamState=completed` / `outcome=in_band_local_completion` / `errorType=pool_unavailable`。
 
 ## 单号池实跑优先级
 
@@ -118,10 +118,10 @@ Hardened API Mode 的目标是接近 Direct OAuth 的稳定体验，但不伪造
 
 - 已被上游接纳的当前 stream/response 应继续 pipe 到完成、上游 terminal error、客户端断开或 transport fatal error。
 - 本地 cooldown、exhausted、health registry 或 `selection_eligible=false` 只影响新的 admission，不 retroactively cancel active stream。
-- 新的独立请求在仍有健康账号时不需要等待其他 active stream 结束；调度器可以立即避开 cooldown/exhausted 账号，选择健康账号。若全池都不可调度，Codex-facing 新请求只能短等待预算内恢复；超预算必须以本地 completed Responses 闭合，不能无限保活，也不能发 `response.failed`。
+- 新的独立请求在仍有健康账号时不需要等待其他 active stream 结束；调度器可以立即避开 cooldown/exhausted 账号，选择健康账号。若全池都不可调度，Codex-facing 新请求只能短等待恢复且必须落在本次请求预算内；超出短等待或预算必须以本地 completed Responses 闭合，不能无限保活，也不能发 `response.failed`。
 - 带 `previous_response_id` 的 continuation 优先粘原账号；不能把原账号的 `previous_response_id` 直接发给新账号。
-- 如果原账号在 continuation admission 阶段真实返回 429，只能 bounded backoff、对普通 HTTP 返回本地 `503/pool_unavailable`、对 Codex-facing `/v1/responses` 在短预算内等待恢复后重试，或用本地 completed Responses 明确闭合；只有具备完整上下文/压缩上下文重放时，才能把它作为新 admission 交给健康账号。
-- Bounded backoff 只约束普通 HTTP 和短等待重试；Codex-facing streaming 的本地全池不可用不得用 retry-limit、transport 503 或 heartbeat-only open wait 表达。
+- 如果原账号在 continuation admission 阶段真实返回 429，只能 bounded backoff、对普通 HTTP 返回本地 `503/pool_unavailable`、对 Codex-facing `/v1/responses` 短等待恢复后重试，或用本地 completed Responses 明确闭合；只有具备完整上下文/压缩上下文重放时，才能把它作为新 admission 交给健康账号。
+- Bounded backoff 只约束普通 HTTP 和内联账号重试；Codex-facing streaming 的本地全池不可用不得用 retry-limit、transport 503 或 heartbeat-only open wait 表达，且恢复等待同时受短等待上限和本次请求超时预算约束。
 
 单号池通过后，再放入 2-3 个账号，保持 `maxRetryAccounts >= 2`，验证 selector/sticky/health 不乱轮换且 failover-safe 429 可在同一请求切到下一个健康账号：
 

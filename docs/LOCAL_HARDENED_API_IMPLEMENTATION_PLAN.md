@@ -519,10 +519,10 @@ flowchart TD
 
 核心规则：
 
-- `pre-stream 429`：没有 `2xx`、没有有效 SSE 首事件、没有 `response.created`、没有 background `response_id`，视为 admission rejected；标记 cooldown/backoff，按策略在新 admission 层选择健康账号；若号池全部不可调度，普通 HTTP 返回本地 `503/pool_unavailable`。Codex-facing `/v1/responses` 只允许在请求超时预算内短等待并重试；超预算或无可调度账号时返回 `200` completed Responses SSE/JSON，其中 streaming 必须包含完整 `response.created -> ... -> response.completed -> [DONE]`，不得发出 429、503、`response.failed`、heartbeat-only open wait 或静默 idle。
+- `pre-stream 429`：没有 `2xx`、没有有效 SSE 首事件、没有 `response.created`、没有 background `response_id`，视为 admission rejected；标记 cooldown/backoff，按策略在新 admission 层选择健康账号；若号池全部不可调度，普通 HTTP 返回本地 `503/pool_unavailable`。Codex-facing `/v1/responses` 只允许短等待并重试，且等待必须落在请求超时预算内；超出短等待、超预算或无可调度账号时返回 `200` completed Responses SSE/JSON，其中 streaming 必须包含完整 `response.created -> ... -> response.completed -> [DONE]`，不得发出 429、503、`response.failed`、heartbeat-only open wait 或静默 idle。
 - `upstream admitted`：一旦上游已返回 `2xx` 或 stream 出现可判定接纳信号，grant lease；后续本地 cooldown、账号 exhausted 标记和 selection eligibility 变化只影响新 admission，不关闭该 stream。
 - `active stream`：不切账号、不跨账号续接，只 pipe 到 terminal event、upstream terminal error、client abort、explicit cancel 或 transport fatal error。
-- `new independent request`：仍有健康账号时不需要等待其他 active stream 完成；可立即避开 cooldown/exhausted 账号，选择健康账号。若全池不可调度，Codex-facing 新请求只能短等待预算内恢复；超预算必须以本地 completed Responses 闭合，不能无限 heartbeat 等待，也不能发 `response.failed`。
+- `new independent request`：仍有健康账号时不需要等待其他 active stream 完成；可立即避开 cooldown/exhausted 账号，选择健康账号。若全池不可调度，Codex-facing 新请求只能短等待恢复且必须落在本次请求预算内；超出短等待或预算必须以本地 completed Responses 闭合，不能无限 heartbeat 等待，也不能发 `response.failed`。
 - `previous_response_id continuation`：优先粘原账号；不能把原账号的 `previous_response_id` 直接发给新账号。若要 fallback 到新账号，必须走 full context replay 或 compacted replay，并把它视为新 admission，不是严格 continuation。
 
 验收：
@@ -530,7 +530,7 @@ flowchart TD
 - [x] active SSE stream 被 grant lease 后，同账号随后被标记 cooldown/exhausted，stream 仍继续到 terminal 或真实 transport error。
 - [x] pre-stream 429 会写入 health/cooldown/audit，但不会影响同账号已有 active lease。
 - [x] active stream 期间同账号另一个请求返回 429，不 retroactively cancel active stream。
-- [x] new admission 遇到 cooldown/exhausted 账号，会避开；若号池全部不可调度，普通 HTTP 返回本地 `503/pool_unavailable`，Codex-facing `/v1/responses` 在短预算内恢复时继续转发真实上游；超预算时返回本地 completed Responses SSE/JSON，不返回 transport 503、`response.failed`、旧 `outcome=in_band_synthetic` 或 heartbeat-only open wait。
+- [x] new admission 遇到 cooldown/exhausted 账号，会避开；若号池全部不可调度，普通 HTTP 返回本地 `503/pool_unavailable`，Codex-facing `/v1/responses` 在短等待内恢复时继续转发真实上游；超出短等待或预算时返回本地 completed Responses SSE/JSON，不返回 transport 503、`response.failed`、旧 `outcome=in_band_synthetic` 或 heartbeat-only open wait。
 - [x] `previous_response_id` affinity 强绑定原 account hash/route；不会跨账号直接复用旧 `previous_response_id`。
 - [x] client abort、upstream terminal error、normal completed 都会 release lease，不泄漏 active count。
 - [x] health registry 状态变更只更新 `selection_eligible`，不会直接 cancel active leases。

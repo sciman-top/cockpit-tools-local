@@ -18,8 +18,27 @@ function Assert-Equal {
   }
 }
 
+function Convert-JsonOutput {
+  param([object[]]$Output, [string]$Context)
+  $text = ($Output | Out-String).Trim()
+  if (-not $text) {
+    throw "$Context did not emit JSON"
+  }
+  $text | ConvertFrom-Json
+}
+
+function Get-ResultByName {
+  param([object]$Report, [string]$Name)
+  $result = @($Report.results | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+  if (-not $result) {
+    throw "missing result $Name"
+  }
+  $result
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $acceptScript = Join-Path $PSScriptRoot "accept-local-hardened-api-continuity.ps1"
+$smokeScript = Join-Path $PSScriptRoot "smoke-local-hardened-api.ps1"
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("cockpit-hla-accept-test-{0}-{1}" -f $PID, (Get-Date -Format "yyyyMMddHHmmssfff"))
 New-Item -ItemType Directory -Force -Path $tempRoot | Out-Null
 
@@ -144,9 +163,39 @@ param(
       "3",
       "-AutoDrainRequestIntervalSeconds",
       "0"
-    )) {
+  )) {
     Assert-True ([bool](@($drainArgs | Where-Object { $_ -eq $requiredDrainArg }).Count)) "expected drain smoke arg $requiredDrainArg"
   }
+
+  $singleAccountRoot = Join-Path $tempRoot "single-account-data"
+  New-Item -ItemType Directory -Force -Path $singleAccountRoot | Out-Null
+  [ordered]@{
+    enabled = $true
+    port = 1
+    apiKey = "test-api-key"
+    accountIds = @("codex_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+    safetyConfig = [ordered]@{
+      schemaVersion = 1
+      hardenedLocalMode = $true
+      maxConcurrentRequests = 1
+      minRequestIntervalSeconds = 20
+      maxRetryAccounts = 2
+      fallbackMode = "disabled"
+    }
+  } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $singleAccountRoot "codex_local_access.json") -Encoding UTF8
+
+  $contractOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $smokeScript `
+    -Stage fallback_probe `
+    -DataRoot $singleAccountRoot `
+    -BaseUrl "http://127.0.0.1:1/v1" `
+    -ApiKey "test-api-key" `
+    -RunUpstreamSmoke `
+    -AcknowledgeLiveUpstreamRisk 2>$null
+
+  $contractReport = Convert-JsonOutput $contractOutput "single-account fallback_probe contract"
+  $contractResult = Get-ResultByName $contractReport "config_fallback_probe_contract"
+  Assert-Equal $contractResult.status "pass" "fallback_probe config contract should allow a one-account API service pool"
+  Assert-Equal $contractResult.evidence.accountCount 1 "expected one-account fallback_probe evidence"
 
   "PASS local hardened API continuity acceptance wrapper tests"
 } finally {

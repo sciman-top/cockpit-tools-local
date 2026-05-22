@@ -46,7 +46,6 @@ import type {
 } from '../types/codexLocalAccess';
 import {
   getCodexPlanFilterKey,
-  isCodexApiKeyAccount,
   isCodexExplicitFreePlanType,
 } from '../types/codex';
 import {
@@ -72,6 +71,10 @@ import {
   normalizeAccountOrder,
   type AccountOrderMove,
 } from '../utils/accountOrder';
+import {
+  compareCodexAccountTieBreak,
+  compareCodexAccountsByRecommendedSort,
+} from '../utils/codexAccountSort';
 import './GroupAccountPickerModal.css';
 import './CodexLocalAccessModal.css';
 
@@ -307,6 +310,7 @@ export function CodexLocalAccessModal({
   const apiPortUrl = state?.apiPortUrl ?? '';
   const baseUrl = state?.baseUrl ?? '';
   const displayBaseUrl = baseUrl;
+  const effectiveAccountIds = state?.effectiveAccountIds ?? collection?.accountIds ?? [];
   const apiKeyTitle =
     collection && keyVisible
       ? collection.apiKey
@@ -456,7 +460,7 @@ export function CodexLocalAccessModal({
   );
 
   const serviceAccounts = useMemo(
-    () => accounts.filter((account) => !isCodexApiKeyAccount(account)),
+    () => accounts,
     [accounts],
   );
   const accountById = useMemo(
@@ -674,19 +678,17 @@ export function CodexLocalAccessModal({
   const visibleAccounts = useMemo(() => {
     const queryText = query.trim().toLowerCase();
     const sorted = [...serviceAccounts].sort((a, b) => {
-      const aIsCurrent = currentAccountId === a.id;
-      const bIsCurrent = currentAccountId === b.id;
-      if (aIsCurrent !== bIsCurrent) {
-        return aIsCurrent ? -1 : 1;
-      }
       const aIsSelected = selected.has(a.id);
       const bIsSelected = selected.has(b.id);
       if (aIsSelected !== bIsSelected) {
         return aIsSelected ? -1 : 1;
       }
-      const aName = buildCodexAccountPresentation(a, t).displayName.toLowerCase();
-      const bName = buildCodexAccountPresentation(b, t).displayName.toLowerCase();
-      return aName.localeCompare(bName);
+      const recommendedDiff = compareCodexAccountsByRecommendedSort(a, b, {
+        currentAccountId,
+      });
+      return recommendedDiff !== 0
+        ? recommendedDiff
+        : compareCodexAccountTieBreak(a, b);
     });
     const selectedTags = new Set(tagFilter.map(normalizeTag));
     const selectedGroups = new Set(groupFilter);
@@ -799,7 +801,10 @@ export function CodexLocalAccessModal({
   }, [selectedStatsWindow?.accounts]);
 
   const currentMemberStats = useMemo(() => {
-    const currentIds = collection?.accountIds ?? [];
+    const currentIds =
+      effectiveAccountIds.length > 0
+        ? effectiveAccountIds
+        : (collection?.accountIds ?? []);
     return currentIds
       .map((accountId) => {
         const account = accountById.get(accountId);
@@ -814,11 +819,27 @@ export function CodexLocalAccessModal({
       })
       .filter((item): item is NonNullable<typeof item> => Boolean(item))
       .sort((left, right) => {
-        const rightCount = right.stats?.requestCount ?? 0;
-        const leftCount = left.stats?.requestCount ?? 0;
-        return rightCount - leftCount;
+        const recommendedDiff = compareCodexAccountsByRecommendedSort(
+          left.account,
+          right.account,
+          { currentAccountId },
+        );
+        if (recommendedDiff !== 0) return recommendedDiff;
+
+        const requestCountDiff =
+          (right.stats?.requestCount ?? 0) - (left.stats?.requestCount ?? 0);
+        return requestCountDiff !== 0
+          ? requestCountDiff
+          : compareCodexAccountTieBreak(left.account, right.account);
       });
-  }, [accountById, collection?.accountIds, t, windowStatsByAccountId]);
+  }, [
+    accountById,
+    collection?.accountIds,
+    currentAccountId,
+    effectiveAccountIds,
+    t,
+    windowStatsByAccountId,
+  ]);
 
   const routingStrategyOptions = useMemo(
     () => [
@@ -1151,7 +1172,6 @@ export function CodexLocalAccessModal({
     order.filter((accountId) => {
       const account = accountById.get(accountId);
       if (!account) return false;
-      if (isCodexApiKeyAccount(account)) return false;
       if (restrictFreeAccounts && isCodexExplicitFreePlanType(account.plan_type)) {
         return false;
       }
@@ -1634,6 +1654,20 @@ export function CodexLocalAccessModal({
                         {t('codex.localAccess.health.auditDegraded', '审计降级')}
                       </span>
                     )}
+                    {(health.estimatedAvailableCount ?? 0) > 0 && (
+                      <span
+                        className="codex-local-access-health-badge is-warning"
+                        title={t(
+                          'codex.localAccess.health.estimatedAvailableTitle',
+                          '调度层已按 reset 时间估算恢复，真实配额需等待刷新确认',
+                        )}
+                      >
+                        {t('codex.localAccess.health.estimatedAvailable', {
+                          count: health.estimatedAvailableCount,
+                          defaultValue: '估算恢复 {{count}}',
+                        })}
+                      </span>
+                    )}
                   </div>
                   <div className="codex-local-access-health-metrics">
                     {healthMetricItems.map((item) => (
@@ -1659,6 +1693,14 @@ export function CodexLocalAccessModal({
                       {t('codex.localAccess.health.cooldownUntil', '冷却至')}:{' '}
                       {formatTimestampMs(health.nearestCooldownUntilMs)}
                     </span>
+                    {(health.estimatedAvailableCount ?? 0) > 0 && (
+                      <span>
+                        {t(
+                          'codex.localAccess.health.estimatedAvailableHint',
+                          '估算恢复，等待真实配额刷新',
+                        )}
+                      </span>
+                    )}
                     {health.auditDegraded && (
                       <span>
                         {t('codex.localAccess.health.audit', 'Audit')}:{' '}
@@ -2323,7 +2365,7 @@ export function CodexLocalAccessModal({
               <div className="group-account-list codex-local-access-member-list">
                 {serviceAccounts.length === 0 ? (
                   <div className="group-account-empty">
-                    {t('codex.localAccess.modal.empty', '暂无可加入 API 服务的账号')}
+                    {t('codex.localAccess.modal.empty', '暂无可加入 API 服务的账号/API key')}
                   </div>
                 ) : visibleAccounts.length === 0 ? (
                   <div className="group-account-empty">

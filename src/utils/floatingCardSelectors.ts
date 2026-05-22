@@ -2,6 +2,10 @@ import type { Account } from '../types/account';
 import type { CodebuddyAccount } from '../types/codebuddy';
 import { getCodebuddyExtraCreditSummary, getCodebuddyOfficialQuotaModel, getCodebuddyResourceSummary } from '../types/codebuddy';
 import type { CodexAccount } from '../types/codex';
+import {
+  compareCodexAccountsByRecommendedSort,
+  getCodexAccountQuotaAvailabilityScore,
+} from './codexAccountSort';
 import type { CursorAccount } from '../types/cursor';
 import { getCursorUsage } from '../types/cursor';
 import type { GeminiAccount } from '../types/gemini';
@@ -141,17 +145,19 @@ export function getRecommendedCodexAccount(
   currentId: string | null | undefined,
 ): CodexAccount | null {
   if (accounts.length <= 1) return null;
-  const others = accounts.filter((account) => account.id !== currentId && Boolean(account.quota));
+  const others = accounts.filter(
+    (account) =>
+      account.id !== currentId &&
+      Boolean(account.quota) &&
+      (getCodexAccountQuotaAvailabilityScore(account) ?? 0) > 0,
+  );
   if (others.length === 0) return null;
 
-  const getScore = (account: CodexAccount) => {
-    if (!account.quota) return -1;
-    return (account.quota.hourly_percentage + account.quota.weekly_percentage) / 2;
-  };
-
-  return others.reduce((best, candidate) => (
-    getScore(candidate) > getScore(best) ? candidate : best
-  ));
+  return [...others].sort((left, right) =>
+    compareCodexAccountsByRecommendedSort(left, right, {
+      currentAccountId: currentId,
+    }),
+  )[0] ?? null;
 }
 
 export function getRecommendedGitHubCopilotAccount(

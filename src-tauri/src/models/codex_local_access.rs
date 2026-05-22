@@ -273,6 +273,14 @@ pub struct CodexLocalAccessAccountHealth {
     #[serde(default)]
     pub last_request_id: Option<String>,
     #[serde(default)]
+    pub last_selected_at_ms: Option<i64>,
+    #[serde(default)]
+    pub last_success_at_ms: Option<i64>,
+    #[serde(default)]
+    pub last_quota_exhausted_at_ms: Option<i64>,
+    #[serde(default)]
+    pub api_service_success_count: u64,
+    #[serde(default)]
     pub updated_at: i64,
 }
 
@@ -330,6 +338,8 @@ pub struct CodexLocalAccessHealthRegistry {
     #[serde(default)]
     pub sticky_bindings: BTreeMap<String, CodexLocalAccessStickyBinding>,
     #[serde(default)]
+    pub request_affinity: BTreeMap<String, CodexLocalAccessStickyBinding>,
+    #[serde(default)]
     pub last_global_error: Option<CodexLocalAccessGlobalError>,
 }
 
@@ -341,6 +351,7 @@ impl Default for CodexLocalAccessHealthRegistry {
             accounts: BTreeMap::new(),
             model_cooldowns: BTreeMap::new(),
             sticky_bindings: BTreeMap::new(),
+            request_affinity: BTreeMap::new(),
             last_global_error: None,
         }
     }
