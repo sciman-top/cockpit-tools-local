@@ -1,13 +1,14 @@
 use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexQuota, CodexQuotaErrorInfo};
 use crate::models::codex_local_access::{
     CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
-    CodexLocalAccessAccountStats, CodexLocalAccessCollection, CodexLocalAccessGlobalError,
-    CodexLocalAccessHealthRegistry, CodexLocalAccessHealthSummary, CodexLocalAccessModelCooldown,
-    CodexLocalAccessPortCleanupResult, CodexLocalAccessRoutingStrategy, CodexLocalAccessState,
-    CodexLocalAccessStats, CodexLocalAccessStatsWindow, CodexLocalAccessStickyBinding,
-    CodexLocalAccessUsageEvent, CodexLocalAccessUsageStats, CodexLocalApiFallbackMode,
-    CodexLocalApiSafetyConfig, CodexLocalApiSafetyPresetId, CodexRuntimeAccountKind,
-    CodexRuntimeIntegrationMode, CodexRuntimeModeState, CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION,
+    CodexLocalAccessAccountHealthView, CodexLocalAccessAccountStats, CodexLocalAccessCollection,
+    CodexLocalAccessGlobalError, CodexLocalAccessHealthRegistry, CodexLocalAccessHealthSummary,
+    CodexLocalAccessModelCooldown, CodexLocalAccessPortCleanupResult,
+    CodexLocalAccessRoutingStrategy, CodexLocalAccessState, CodexLocalAccessStats,
+    CodexLocalAccessStatsWindow, CodexLocalAccessStickyBinding, CodexLocalAccessUsageEvent,
+    CodexLocalAccessUsageStats, CodexLocalApiFallbackMode, CodexLocalApiSafetyConfig,
+    CodexLocalApiSafetyPresetId, CodexRuntimeAccountKind, CodexRuntimeIntegrationMode,
+    CodexRuntimeModeState, CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION,
     CODEX_LOCAL_API_SAFETY_SCHEMA_VERSION,
 };
 use crate::modules::atomic_write::write_string_atomic;
@@ -82,7 +83,7 @@ const PREFERRED_CODEX_LOCAL_ACCESS_PORTS: &[u16] =
     &[45335, 45336, 45435, 45436, 45535, 45536, 46335, 47335];
 const CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID: &str = "codex_local_access";
 const CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME: &str = "Cockpit API Service";
-const CORS_ALLOW_HEADERS: &str = "Authorization, Content-Type, OpenAI-Beta, X-API-Key, X-Codex-Beta-Features, X-Client-Request-Id, Originator, Session_id, ChatGPT-Account-Id";
+const CORS_ALLOW_HEADERS: &str = "Authorization, Content-Type, OpenAI-Beta, X-API-Key, X-Codex-Beta-Features, X-Codex-Turn-State, X-Codex-Turn-Metadata, X-Client-Request-Id, Originator, Session_id, ChatGPT-Account-Id";
 const DEFAULT_CODEX_MODELS: &[&str] = &[
     "gpt-5.5",
     "gpt-5.5-mini",
@@ -110,6 +111,7 @@ static LOCAL_API_BACKPRESSURE_STATE: OnceLock<Mutex<LocalApiBackpressureState>> 
 static LOCAL_API_BACKPRESSURE_ADMISSION_QUEUE: OnceLock<TokioMutex<()>> = OnceLock::new();
 static ACTIVE_STREAM_LEASE_REGISTRY: OnceLock<Mutex<ActiveStreamLeaseRegistry>> = OnceLock::new();
 static AUDIT_TRAIL_STATUS: OnceLock<Mutex<AuditTrailStatus>> = OnceLock::new();
+static AUDIT_TRAIL_APPEND_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Default)]
 struct GatewayRuntime {
@@ -240,6 +242,7 @@ struct AuditTrailStatus {
 #[derive(Debug, Clone)]
 struct ActiveStreamLeaseRecord {
     account_id: String,
+    request_affinity_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -389,6 +392,10 @@ fn active_stream_lease_registry() -> &'static Mutex<ActiveStreamLeaseRegistry> {
 
 fn audit_trail_status() -> &'static Mutex<AuditTrailStatus> {
     AUDIT_TRAIL_STATUS.get_or_init(|| Mutex::new(AuditTrailStatus::default()))
+}
+
+fn audit_trail_append_lock() -> &'static Mutex<()> {
+    AUDIT_TRAIL_APPEND_LOCK.get_or_init(|| Mutex::new(()))
 }
 
 fn current_audit_trail_status() -> AuditTrailStatus {
@@ -607,7 +614,31 @@ fn active_stream_lease_count_for_account(account_id: &str) -> usize {
         .count()
 }
 
-fn grant_active_stream_lease(context: &AuditContext, account_id: &str) -> ActiveStreamLease {
+#[cfg(test)]
+fn active_stream_request_affinity_key_from_context(context: &AuditContext) -> Option<String> {
+    let request_id = context.request_id.trim();
+    if request_id.is_empty() || request_id == "-" {
+        return None;
+    }
+    health_registry_request_id(Some(request_id))
+}
+
+fn active_stream_affinity_account_for_request(request: &ParsedRequest) -> Option<String> {
+    let request_key = request_affinity_key(request)?;
+    let Ok(registry) = active_stream_lease_registry().lock() else {
+        return None;
+    };
+    registry.leases.iter().rev().find_map(|(_, lease)| {
+        (lease.request_affinity_key.as_deref() == Some(request_key.as_str()))
+            .then(|| lease.account_id.clone())
+    })
+}
+
+fn grant_active_stream_lease_with_affinity_key(
+    context: &AuditContext,
+    account_id: &str,
+    request_affinity_key: Option<String>,
+) -> ActiveStreamLease {
     let account_id = account_id.trim();
     let (lease_id, active_count) = match active_stream_lease_registry().lock() {
         Ok(mut registry) => {
@@ -617,6 +648,7 @@ fn grant_active_stream_lease(context: &AuditContext, account_id: &str) -> Active
                 lease_id,
                 ActiveStreamLeaseRecord {
                     account_id: account_id.to_string(),
+                    request_affinity_key,
                 },
             );
             (
@@ -647,6 +679,23 @@ fn grant_active_stream_lease(context: &AuditContext, account_id: &str) -> Active
         context: context.clone(),
         released: false,
     }
+}
+
+#[cfg(test)]
+fn grant_active_stream_lease(context: &AuditContext, account_id: &str) -> ActiveStreamLease {
+    grant_active_stream_lease_with_affinity_key(
+        context,
+        account_id,
+        active_stream_request_affinity_key_from_context(context),
+    )
+}
+
+fn grant_active_stream_lease_for_request(
+    context: &AuditContext,
+    account_id: &str,
+    request: &ParsedRequest,
+) -> ActiveStreamLease {
+    grant_active_stream_lease_with_affinity_key(context, account_id, request_affinity_key(request))
 }
 
 fn release_active_stream_lease(lease_id: u64) -> usize {
@@ -1858,6 +1907,12 @@ async fn local_backpressure_bypass_reason(request: &ParsedRequest) -> Option<&'s
         return Some("previous_response_id");
     }
     if resolve_request_affinity_account(request).await.is_some() {
+        if request_header_value(request, "x-codex-turn-state").is_some() {
+            return Some("codex_turn_state");
+        }
+        if request_header_value(request, "x-codex-turn-metadata").is_some() {
+            return Some("codex_turn_metadata");
+        }
         return Some("client_request_id");
     }
     None
@@ -3233,6 +3288,24 @@ fn resolve_remaining_quota(account: &CodexAccount) -> Option<i32> {
     percentages.into_iter().min()
 }
 
+fn normalize_unix_timestamp_millis(value: i64) -> i64 {
+    if value > 0 && value < 1_000_000_000_000 {
+        value.saturating_mul(1000)
+    } else {
+        value
+    }
+}
+
+fn resolve_earliest_quota_reset_ms(account: &CodexAccount) -> Option<i64> {
+    let quota = account.quota.as_ref()?;
+    [quota.hourly_reset_time, quota.weekly_reset_time]
+        .into_iter()
+        .flatten()
+        .filter(|value| *value > 0)
+        .map(normalize_unix_timestamp_millis)
+        .min()
+}
+
 fn resolve_subscription_expiry_ms(account: &CodexAccount) -> Option<i64> {
     let raw = account.subscription_active_until.as_deref()?.trim();
     if raw.is_empty() {
@@ -3447,6 +3520,145 @@ fn constrain_previous_response_affinity(
     } else {
         Vec::new()
     }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct SelectorAuditSummary {
+    candidate_count: usize,
+    eligible_count: usize,
+    skipped_counts_by_reason: BTreeMap<String, usize>,
+    cap_applied: bool,
+    cap_limit: usize,
+    sticky_cleared: bool,
+}
+
+fn account_id_matches(account_id: Option<&str>, expected: &str) -> bool {
+    let expected = expected.trim();
+    if expected.is_empty() {
+        return false;
+    }
+    account_id
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value == expected)
+        .unwrap_or(false)
+}
+
+fn increment_selector_skip_count(counts: &mut BTreeMap<String, usize>, reason: &str) {
+    let count = counts.entry(reason.to_string()).or_insert(0);
+    *count = count.saturating_add(1);
+}
+
+fn selector_selected_reason(
+    selected_account_id: &str,
+    active_stream_affinity_account_id: Option<&str>,
+    previous_response_affinity_account_id: Option<&str>,
+    request_affinity_account_id: Option<&str>,
+    process_sticky_account_id: Option<&str>,
+) -> &'static str {
+    if account_id_matches(active_stream_affinity_account_id, selected_account_id) {
+        return "active_stream_affinity_selected";
+    }
+    if account_id_matches(previous_response_affinity_account_id, selected_account_id) {
+        return "previous_response_affinity_selected";
+    }
+    if account_id_matches(request_affinity_account_id, selected_account_id) {
+        return "request_affinity_selected";
+    }
+    if account_id_matches(process_sticky_account_id, selected_account_id) {
+        return "sticky_selected";
+    }
+    "fill_first_selected"
+}
+
+fn build_selector_audit_summary(
+    candidate_ids: &[String],
+    registry: &CodexLocalAccessHealthRegistry,
+    model: Option<&str>,
+    now: i64,
+    max_credential_attempts: usize,
+    affinity_account_id: Option<&str>,
+    sticky_cleared: bool,
+) -> SelectorAuditSummary {
+    let cap_limit = max_credential_attempts.max(1);
+    let mut summary = SelectorAuditSummary {
+        candidate_count: candidate_ids.len(),
+        cap_applied: candidate_ids.len() > cap_limit,
+        cap_limit,
+        sticky_cleared,
+        ..SelectorAuditSummary::default()
+    };
+
+    for account_id in candidate_ids.iter().take(cap_limit) {
+        let account_id = account_id.trim();
+        if account_id.is_empty() {
+            increment_selector_skip_count(
+                &mut summary.skipped_counts_by_reason,
+                "invalid_candidate",
+            );
+            continue;
+        }
+
+        let is_affinity_continuation = account_id_matches(affinity_account_id, account_id);
+        let has_hard_block = health_registry_account_has_hard_block(registry, account_id);
+        if health_registry_account_cooldown_wait(registry, account_id, model, now).is_some()
+            && (!is_affinity_continuation || has_hard_block)
+        {
+            increment_selector_skip_count(&mut summary.skipped_counts_by_reason, "health_skipped");
+            continue;
+        }
+
+        if (!is_affinity_continuation || has_hard_block)
+            && !health_registry_account_is_schedulable(registry, account_id, model, now)
+        {
+            increment_selector_skip_count(&mut summary.skipped_counts_by_reason, "health_skipped");
+            continue;
+        }
+
+        summary.eligible_count = summary.eligible_count.saturating_add(1);
+    }
+
+    if summary.cap_applied {
+        let truncated = candidate_ids.len().saturating_sub(cap_limit);
+        if truncated > 0 {
+            summary
+                .skipped_counts_by_reason
+                .insert("cap_truncated".to_string(), truncated);
+        }
+    }
+    if sticky_cleared {
+        increment_selector_skip_count(&mut summary.skipped_counts_by_reason, "sticky_cleared");
+    }
+
+    summary
+}
+
+fn selector_audit_detail(
+    summary: &SelectorAuditSummary,
+    selected_reason: &str,
+    model_key: &str,
+) -> BTreeMap<String, String> {
+    let skipped_counts = serde_json::to_string(&summary.skipped_counts_by_reason)
+        .unwrap_or_else(|_| "{}".to_string());
+    BTreeMap::from([
+        ("model_key".to_string(), model_key.to_string()),
+        (
+            "candidate_count".to_string(),
+            summary.candidate_count.to_string(),
+        ),
+        (
+            "eligible_count".to_string(),
+            summary.eligible_count.to_string(),
+        ),
+        ("skipped_counts_by_reason".to_string(), skipped_counts),
+        ("selected_reason".to_string(), selected_reason.to_string()),
+        ("cap_applied".to_string(), summary.cap_applied.to_string()),
+        ("cap_limit".to_string(), summary.cap_limit.to_string()),
+        (
+            "sticky_cleared".to_string(),
+            summary.sticky_cleared.to_string(),
+        ),
+    ])
 }
 
 fn infer_single_account_continuation_affinity(
@@ -3893,25 +4105,25 @@ fn parse_usage_limit_body_retry_after(error_body: &str) -> Option<Duration> {
     }
 
     let payload = serde_json::from_str::<Value>(error_body).ok()?;
-    let error = payload.get("error")?;
     let provider_code = extract_provider_error_code(&payload)?;
     if provider_code.to_ascii_lowercase() != "usage_limit_reached" {
         return None;
     }
 
     let now_seconds = chrono::Utc::now().timestamp();
-    if let Some(resets_at) = error.get("resets_at").and_then(Value::as_i64) {
-        if resets_at > now_seconds {
-            let delta = resets_at.saturating_sub(now_seconds) as u64;
-            if delta > 0 {
-                return Some(Duration::from_secs(delta));
-            }
+    let reset_hint = extract_account_quota_reset_hint_from_body(error_body, now_seconds);
+    if let Some(reset_at) = reset_hint
+        .reset_at_seconds
+        .filter(|reset_at| *reset_at > now_seconds)
+    {
+        let delta = reset_at.saturating_sub(now_seconds) as u64;
+        if delta > 0 {
+            return Some(Duration::from_secs(delta));
         }
     }
 
-    error
-        .get("resets_in_seconds")
-        .and_then(Value::as_i64)
+    reset_hint
+        .reset_after_seconds
         .filter(|seconds| *seconds > 0)
         .map(|seconds| Duration::from_secs(seconds as u64))
 }
@@ -4087,6 +4299,10 @@ fn first_i64_json_field<'a>(
         value.get(key).and_then(|item| {
             item.as_i64()
                 .or_else(|| item.as_u64().and_then(|v| i64::try_from(v).ok()))
+                .or_else(|| {
+                    item.as_str()
+                        .and_then(|value| value.trim().parse::<i64>().ok())
+                })
         })
     })
 }
@@ -4106,14 +4322,26 @@ fn extract_account_quota_reset_hint_from_body(
     ];
 
     for candidate in candidates.into_iter().flatten() {
-        let reset_at = first_i64_json_field(candidate, ["reset_at", "resets_at"])
-            .map(normalize_unix_timestamp_seconds);
+        let reset_at = first_i64_json_field(
+            candidate,
+            [
+                "reset_at",
+                "resets_at",
+                "resetAt",
+                "reset_at_seconds",
+                "reset_timestamp",
+                "reset_time",
+            ],
+        )
+        .map(normalize_unix_timestamp_seconds);
         let reset_after_seconds = first_i64_json_field(
             candidate,
             [
                 "reset_after_seconds",
                 "resets_in_seconds",
                 "resetAfterSeconds",
+                "retry_after_seconds",
+                "retry_after",
             ],
         )
         .filter(|seconds| *seconds >= 0);
@@ -4663,6 +4891,7 @@ fn recover_health_registry_account(
                         | CodexLocalAccessAccountHealthStatus::Exhausted
                         | CodexLocalAccessAccountHealthStatus::AuthSuspect
                         | CodexLocalAccessAccountHealthStatus::ManualRequired
+                        | CodexLocalAccessAccountHealthStatus::Disabled
                 );
 
             if should_recover {
@@ -4683,6 +4912,63 @@ fn recover_health_registry_account(
             }
         }
     }
+
+    if changed {
+        registry.schema_version = CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION;
+        registry.updated_at = now;
+    }
+
+    changed
+}
+
+fn pause_health_registry_account(
+    registry: &mut CodexLocalAccessHealthRegistry,
+    account_id: &str,
+    now: i64,
+) -> bool {
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return false;
+    }
+
+    let mut next = registry
+        .accounts
+        .get(account_id)
+        .cloned()
+        .unwrap_or_default();
+    next.status = CodexLocalAccessAccountHealthStatus::Disabled;
+    next.cooldown_until_ms = None;
+    next.exhausted_at_ms = None;
+    next.estimated_reset_at_ms = None;
+    next.reset_source = Some("manual_pause".to_string());
+    next.confidence = Some("manual".to_string());
+    next.manual_required = false;
+    next.last_status = None;
+    next.last_error_type = Some("manual_paused".to_string());
+    next.last_provider_code = None;
+    next.last_request_id = Some("manual_pause".to_string());
+    next.updated_at = now;
+
+    let mut changed = registry.accounts.get(account_id) != Some(&next);
+    registry.accounts.insert(account_id.to_string(), next);
+
+    let before_sticky_len = registry.sticky_bindings.len();
+    registry
+        .sticky_bindings
+        .retain(|_, binding| binding.account_id.trim() != account_id);
+    changed |= registry.sticky_bindings.len() != before_sticky_len;
+
+    let before_affinity_len = registry.request_affinity.len();
+    registry
+        .request_affinity
+        .retain(|_, binding| binding.account_id.trim() != account_id);
+    changed |= registry.request_affinity.len() != before_affinity_len;
+
+    let before_model_cooldown_len = registry.model_cooldowns.len();
+    registry
+        .model_cooldowns
+        .retain(|_, cooldown| cooldown.account_id.trim() != account_id);
+    changed |= registry.model_cooldowns.len() != before_model_cooldown_len;
 
     if changed {
         registry.schema_version = CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION;
@@ -4823,64 +5109,160 @@ fn health_registry_account_cooldown_wait(
     wait
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct HealthRegistryAccountSortKey {
+    bucket: u8,
+    remaining_percentage: i32,
+    asc_time_ms: i64,
+    continuity_time_ms: i64,
+    updated_at_ms: i64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct AccountQuotaSortHint {
+    remaining_percentage: Option<i32>,
+    earliest_reset_at_ms: Option<i64>,
+}
+
+fn account_quota_sort_hint(account: &CodexAccount) -> AccountQuotaSortHint {
+    AccountQuotaSortHint {
+        remaining_percentage: resolve_remaining_quota(account),
+        earliest_reset_at_ms: resolve_earliest_quota_reset_ms(account),
+    }
+}
+
+fn load_account_quota_sort_hints(account_ids: &[String]) -> HashMap<String, AccountQuotaSortHint> {
+    account_ids
+        .iter()
+        .filter_map(|account_id| {
+            let account_id = account_id.trim();
+            if account_id.is_empty() {
+                return None;
+            }
+            let account = try_get_cached_account_for_routing(account_id)
+                .or_else(|| codex_account::load_account(account_id))?;
+            Some((account_id.to_string(), account_quota_sort_hint(&account)))
+        })
+        .collect()
+}
+
+fn account_continuity_time_ms(account: &CodexLocalAccessAccountHealth) -> i64 {
+    account
+        .last_success_at_ms
+        .or(account.last_selected_at_ms)
+        .unwrap_or(account.updated_at)
+}
+
 fn health_registry_account_sort_key(
     registry: &CodexLocalAccessHealthRegistry,
     account_id: &str,
     now: i64,
-) -> (u8, i32, i64) {
+    quota_hint: AccountQuotaSortHint,
+) -> HealthRegistryAccountSortKey {
+    let quota_remaining = quota_hint.remaining_percentage;
+    let quota_reset_at_ms = quota_hint.earliest_reset_at_ms.unwrap_or(i64::MAX);
     let Some(account) = registry.accounts.get(account_id.trim()) else {
-        return (2, 0, 0);
+        let has_quota_hint =
+            quota_hint.remaining_percentage.is_some() || quota_hint.earliest_reset_at_ms.is_some();
+        return HealthRegistryAccountSortKey {
+            bucket: if has_quota_hint { 0 } else { 2 },
+            remaining_percentage: quota_remaining.unwrap_or(0),
+            asc_time_ms: quota_reset_at_ms,
+            continuity_time_ms: 0,
+            updated_at_ms: 0,
+        };
     };
 
+    let continuity_time_ms = account_continuity_time_ms(account);
     match account.status {
-        CodexLocalAccessAccountHealthStatus::Healthy => (
-            0,
-            account
-                .estimated_remaining_percentage
+        CodexLocalAccessAccountHealthStatus::Healthy => HealthRegistryAccountSortKey {
+            bucket: 0,
+            remaining_percentage: quota_remaining
+                .or(account.estimated_remaining_percentage)
                 .or(account.last_observed_remaining_percentage)
                 .unwrap_or(100),
-            account.updated_at,
-        ),
-        CodexLocalAccessAccountHealthStatus::EstimatedAvailable => (
-            1,
-            account.estimated_remaining_percentage.unwrap_or(100),
-            account.estimated_reset_at_ms.unwrap_or(account.updated_at),
-        ),
+            asc_time_ms: quota_reset_at_ms,
+            continuity_time_ms,
+            updated_at_ms: account.updated_at,
+        },
+        CodexLocalAccessAccountHealthStatus::EstimatedAvailable => HealthRegistryAccountSortKey {
+            bucket: 1,
+            remaining_percentage: quota_remaining
+                .or(account.estimated_remaining_percentage)
+                .unwrap_or(100),
+            asc_time_ms: quota_hint
+                .earliest_reset_at_ms
+                .or(account.last_quota_exhausted_at_ms)
+                .or(account.estimated_reset_at_ms)
+                .unwrap_or(account.updated_at),
+            continuity_time_ms,
+            updated_at_ms: account.updated_at,
+        },
         CodexLocalAccessAccountHealthStatus::CoolingDown => {
             let reset_at = account.cooldown_until_ms.unwrap_or(i64::MAX);
             if reset_at <= now {
-                (
-                    1,
-                    account.estimated_remaining_percentage.unwrap_or(100),
-                    reset_at,
-                )
+                HealthRegistryAccountSortKey {
+                    bucket: 1,
+                    remaining_percentage: quota_remaining
+                        .or(account.estimated_remaining_percentage)
+                        .unwrap_or(100),
+                    asc_time_ms: quota_hint
+                        .earliest_reset_at_ms
+                        .or(account.last_quota_exhausted_at_ms)
+                        .unwrap_or(reset_at),
+                    continuity_time_ms,
+                    updated_at_ms: account.updated_at,
+                }
             } else {
-                (
-                    5,
-                    account.last_observed_remaining_percentage.unwrap_or(0),
-                    reset_at,
-                )
+                HealthRegistryAccountSortKey {
+                    bucket: 5,
+                    remaining_percentage: account.last_observed_remaining_percentage.unwrap_or(0),
+                    asc_time_ms: reset_at,
+                    continuity_time_ms,
+                    updated_at_ms: account.updated_at,
+                }
             }
         }
         CodexLocalAccessAccountHealthStatus::Exhausted => {
             let reset_at = account.estimated_reset_at_ms.unwrap_or(i64::MAX);
             if reset_at <= now {
-                (
-                    1,
-                    account.estimated_remaining_percentage.unwrap_or(100),
-                    reset_at,
-                )
+                HealthRegistryAccountSortKey {
+                    bucket: 1,
+                    remaining_percentage: quota_remaining
+                        .or(account.estimated_remaining_percentage)
+                        .unwrap_or(100),
+                    asc_time_ms: quota_hint
+                        .earliest_reset_at_ms
+                        .or(account.last_quota_exhausted_at_ms)
+                        .unwrap_or(reset_at),
+                    continuity_time_ms,
+                    updated_at_ms: account.updated_at,
+                }
             } else {
-                (
-                    6,
-                    account.last_observed_remaining_percentage.unwrap_or(0),
-                    reset_at,
-                )
+                HealthRegistryAccountSortKey {
+                    bucket: 6,
+                    remaining_percentage: account.last_observed_remaining_percentage.unwrap_or(0),
+                    asc_time_ms: reset_at,
+                    continuity_time_ms,
+                    updated_at_ms: account.updated_at,
+                }
             }
         }
         CodexLocalAccessAccountHealthStatus::AuthSuspect
-        | CodexLocalAccessAccountHealthStatus::ManualRequired => (7, 0, account.updated_at),
-        CodexLocalAccessAccountHealthStatus::Disabled => (8, 0, account.updated_at),
+        | CodexLocalAccessAccountHealthStatus::ManualRequired => HealthRegistryAccountSortKey {
+            bucket: 7,
+            remaining_percentage: 0,
+            asc_time_ms: account.updated_at,
+            continuity_time_ms,
+            updated_at_ms: account.updated_at,
+        },
+        CodexLocalAccessAccountHealthStatus::Disabled => HealthRegistryAccountSortKey {
+            bucket: 8,
+            remaining_percentage: 0,
+            asc_time_ms: account.updated_at,
+            continuity_time_ms,
+            updated_at_ms: account.updated_at,
+        },
     }
 }
 
@@ -4889,14 +5271,44 @@ fn sort_account_ids_by_health_estimate(
     registry: &CodexLocalAccessHealthRegistry,
     now: i64,
 ) {
+    let quota_hints = load_account_quota_sort_hints(account_ids);
+    sort_account_ids_by_health_estimate_with_quota_hints(account_ids, registry, now, &quota_hints);
+}
+
+fn sort_account_ids_by_health_estimate_with_quota_hints(
+    account_ids: &mut [String],
+    registry: &CodexLocalAccessHealthRegistry,
+    now: i64,
+    quota_hints: &HashMap<String, AccountQuotaSortHint>,
+) {
     account_ids.sort_by(|left, right| {
-        let left_key = health_registry_account_sort_key(registry, left, now);
-        let right_key = health_registry_account_sort_key(registry, right, now);
+        let left_key = health_registry_account_sort_key(
+            registry,
+            left,
+            now,
+            quota_hints.get(left.trim()).copied().unwrap_or_default(),
+        );
+        let right_key = health_registry_account_sort_key(
+            registry,
+            right,
+            now,
+            quota_hints.get(right.trim()).copied().unwrap_or_default(),
+        );
         left_key
-            .0
-            .cmp(&right_key.0)
-            .then_with(|| right_key.1.cmp(&left_key.1))
-            .then_with(|| left_key.2.cmp(&right_key.2))
+            .bucket
+            .cmp(&right_key.bucket)
+            .then_with(|| {
+                right_key
+                    .remaining_percentage
+                    .cmp(&left_key.remaining_percentage)
+            })
+            .then_with(|| left_key.asc_time_ms.cmp(&right_key.asc_time_ms))
+            .then_with(|| {
+                right_key
+                    .continuity_time_ms
+                    .cmp(&left_key.continuity_time_ms)
+            })
+            .then_with(|| right_key.updated_at_ms.cmp(&left_key.updated_at_ms))
             .then_with(|| left.cmp(right))
     });
 }
@@ -4952,6 +5364,8 @@ fn build_health_summary_from_registry_with_scope(
 
     let mut last_error_updated_at = i64::MIN;
     let mut observed_scoped_accounts: HashSet<&str> = HashSet::new();
+    let mut active_model_cooldowns_by_account: BTreeMap<String, (usize, Option<i64>)> =
+        BTreeMap::new();
     let account_is_in_scope = |account_id: &str| {
         account_scope
             .map(|scope| scope.contains(account_id.trim()))
@@ -4998,7 +5412,7 @@ fn build_health_summary_from_registry_with_scope(
     if let Some(scope) = account_scope {
         for account_id in scope {
             if !observed_scoped_accounts.contains(account_id) {
-                summary.estimated_available_count += 1;
+                summary.healthy_count += 1;
             }
         }
     }
@@ -5014,6 +5428,14 @@ fn build_health_summary_from_registry_with_scope(
                 now,
                 Some(cooldown.cooldown_until_ms),
             );
+            let entry = active_model_cooldowns_by_account
+                .entry(cooldown.account_id.trim().to_string())
+                .or_insert((0, None));
+            entry.0 += 1;
+            entry.1 = Some(match entry.1 {
+                Some(current) if current <= cooldown.cooldown_until_ms => current,
+                _ => cooldown.cooldown_until_ms,
+            });
         }
         if cooldown.last_error_type.is_some() && cooldown.updated_at >= last_error_updated_at {
             last_error_updated_at = cooldown.updated_at;
@@ -5040,6 +5462,47 @@ fn build_health_summary_from_registry_with_scope(
             summary.sticky_reason = sanitize_provider_code(binding.reason.as_str());
             summary.sticky_expires_at_ms = Some(binding.expires_at_ms);
         }
+    }
+
+    if let Some(scope) = account_scope {
+        let mut account_ids_for_views: Vec<String> = scope
+            .iter()
+            .map(|account_id| (*account_id).to_string())
+            .collect();
+        account_ids_for_views.sort();
+
+        let default_account = CodexLocalAccessAccountHealth::default();
+        summary.accounts = account_ids_for_views
+            .into_iter()
+            .map(|account_id| {
+                let account = registry
+                    .accounts
+                    .get(account_id.as_str())
+                    .unwrap_or(&default_account);
+                let (active_model_cooldown_count, nearest_model_cooldown_until_ms) =
+                    active_model_cooldowns_by_account
+                        .get(account_id.as_str())
+                        .cloned()
+                        .unwrap_or((0, None));
+                CodexLocalAccessAccountHealthView {
+                    account_id,
+                    status: account.status,
+                    manual_required: account.manual_required,
+                    cooldown_until_ms: account.cooldown_until_ms,
+                    exhausted_at_ms: account.exhausted_at_ms,
+                    estimated_reset_at_ms: account.estimated_reset_at_ms,
+                    last_status: account.last_status,
+                    last_error_type: account.last_error_type.clone(),
+                    last_provider_code: account
+                        .last_provider_code
+                        .as_deref()
+                        .and_then(sanitize_provider_code),
+                    updated_at: account.updated_at,
+                    active_model_cooldown_count,
+                    nearest_model_cooldown_until_ms,
+                }
+            })
+            .collect();
     }
 
     summary
@@ -5346,7 +5809,50 @@ fn persist_successful_routing_state(
     );
 }
 
-fn health_registry_request_id_from_request(request: &ParsedRequest) -> Option<&str> {
+fn hashed_request_correlation_id(prefix: &str, value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    let digest = Sha256::digest(value.as_bytes());
+    let hex = format!("{:x}", digest);
+    Some(format!("{}:sha256:{}", prefix, &hex[..12]))
+}
+
+fn codex_turn_state_request_id(request: &ParsedRequest) -> Option<String> {
+    request_header_value(request, "x-codex-turn-state")
+        .and_then(|value| hashed_request_correlation_id("x-codex-turn-state", value))
+}
+
+fn codex_turn_metadata_request_id(request: &ParsedRequest) -> Option<String> {
+    let value = request_header_value(request, "x-codex-turn-metadata")?;
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(metadata) = serde_json::from_str::<Value>(trimmed) {
+        if let Some(turn_id) = metadata
+            .get("turn_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|turn_id| !turn_id.is_empty())
+        {
+            return hashed_request_correlation_id("x-codex-turn-metadata.turn_id", turn_id);
+        }
+    }
+
+    hashed_request_correlation_id("x-codex-turn-metadata", trimmed)
+}
+
+fn health_registry_request_id_from_request(request: &ParsedRequest) -> Option<String> {
+    if let Some(value) = codex_turn_state_request_id(request) {
+        return Some(value);
+    }
+    if let Some(value) = codex_turn_metadata_request_id(request) {
+        return Some(value);
+    }
     for header_name in [
         "x-client-request-id",
         "x-request-id",
@@ -5354,7 +5860,7 @@ fn health_registry_request_id_from_request(request: &ParsedRequest) -> Option<&s
         "openai-request-id",
     ] {
         if let Some(value) = request_header_value(request, header_name) {
-            return Some(value);
+            return health_registry_request_id(Some(value));
         }
     }
     None
@@ -5367,11 +5873,12 @@ fn persist_health_registry_from_classified_error(
     classified: &ClassifiedCodexUpstreamError,
 ) -> Result<(), String> {
     let mut registry = load_health_registry_from_disk()?;
+    let request_id = health_registry_request_id_from_request(request);
     update_health_registry_from_classified_error(
         &mut registry,
         account_id,
         model,
-        health_registry_request_id_from_request(request),
+        request_id.as_deref(),
         classified,
         now_ms(),
     );
@@ -5918,7 +6425,9 @@ async fn resolve_affinity_account(previous_response_id: &str) -> Option<String> 
 }
 
 fn request_affinity_key(request: &ParsedRequest) -> Option<String> {
-    health_registry_request_id(health_registry_request_id_from_request(request))
+    codex_turn_state_request_id(request)
+        .or_else(|| codex_turn_metadata_request_id(request))
+        .or_else(|| health_registry_request_id_from_request(request))
 }
 
 async fn resolve_request_affinity_account_from_runtime(request: &ParsedRequest) -> Option<String> {
@@ -6015,6 +6524,30 @@ async fn clear_account_model_cooldowns(account_id: &str) -> bool {
         .model_cooldowns
         .retain(|cooldown_key, _| !cooldown_key.starts_with(&prefix));
     runtime.model_cooldowns.len() != before_len
+}
+
+async fn clear_runtime_account_affinity(account_id: &str) -> bool {
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return false;
+    }
+
+    let mut runtime = gateway_runtime().lock().await;
+    let now = now_ms();
+    prune_runtime_routing_state(&mut runtime, now);
+
+    let before_response_len = runtime.response_affinity.len();
+    runtime
+        .response_affinity
+        .retain(|_, binding| binding.account_id.trim() != account_id);
+
+    let before_request_len = runtime.request_affinity.len();
+    runtime
+        .request_affinity
+        .retain(|_, binding| binding.account_id.trim() != account_id);
+
+    runtime.response_affinity.len() != before_response_len
+        || runtime.request_affinity.len() != before_request_len
 }
 
 async fn set_model_cooldown(account_id: &str, model_key: &str, retry_after: Duration) {
@@ -7012,6 +7545,41 @@ pub async fn recover_local_access_health(
     snapshot_state().await
 }
 
+pub async fn pause_local_access_health(account_id: &str) -> Result<CodexLocalAccessState, String> {
+    ensure_runtime_loaded_without_start().await?;
+
+    let account_id = account_id.trim();
+    if account_id.is_empty() {
+        return Err("账号 ID 不能为空".to_string());
+    }
+
+    let collection = {
+        let runtime = gateway_runtime().lock().await;
+        runtime.collection.clone()
+    }
+    .ok_or_else(|| "API 服务集合尚未创建".to_string())?;
+
+    if !collection
+        .account_ids
+        .iter()
+        .any(|collection_account_id| collection_account_id == account_id)
+    {
+        return Err("账号不在 API 服务集合中".to_string());
+    }
+
+    let now = now_ms();
+    let mut registry = load_health_registry_from_disk()?;
+    let registry_changed = pause_health_registry_account(&mut registry, account_id, now);
+    if registry_changed {
+        save_health_registry_to_disk(&registry)?;
+    }
+
+    let runtime_changed = clear_runtime_account_affinity(account_id).await;
+    record_manual_pause_audit_event(account_id, registry_changed || runtime_changed);
+
+    snapshot_state().await
+}
+
 pub async fn prepare_local_access_gateway_for_restart() -> Result<CodexLocalAccessState, String> {
     ensure_runtime_loaded_without_start().await?;
     stop_gateway().await;
@@ -7723,6 +8291,13 @@ fn failure_log_request_id(request: Option<&ParsedRequest>) -> String {
         return "-".to_string();
     };
 
+    if let Some(value) = codex_turn_state_request_id(request) {
+        return value;
+    }
+    if let Some(value) = codex_turn_metadata_request_id(request) {
+        return value;
+    }
+
     for header_name in [
         "x-client-request-id",
         "x-request-id",
@@ -7872,8 +8447,12 @@ fn first_audit_timestamp_from_path(path: &Path) -> Result<Option<i64>, String> {
     let Some(line) = content.lines().find(|line| !line.trim().is_empty()) else {
         return Ok(None);
     };
-    let value: Value =
-        serde_json::from_str(line).map_err(|e| format!("解析审计日志轮转状态失败: {}", e))?;
+    let mut values = serde_json::Deserializer::from_str(line).into_iter::<Value>();
+    let value = match values.next() {
+        Some(Ok(value)) => value,
+        Some(Err(err)) => return Err(format!("解析审计日志轮转状态失败: {}", err)),
+        None => return Ok(None),
+    };
     Ok(value.get("timestamp").and_then(Value::as_i64))
 }
 
@@ -7892,6 +8471,9 @@ fn append_audit_event_to_path(
     event: &CodexLocalAccessAuditEvent,
     max_bytes: usize,
 ) -> Result<(), String> {
+    let _append_guard = audit_trail_append_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let parent = path.parent().ok_or("无法定位审计日志目录")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("创建审计日志目录失败: {}", e))?;
 
@@ -7910,16 +8492,16 @@ fn append_audit_event_to_path(
         std::fs::rename(path, &rotated_path).map_err(|e| format!("轮转审计日志失败: {}", e))?;
     }
 
-    let line = serde_json::to_string(event).map_err(|e| format!("序列化审计事件失败: {}", e))?;
+    let mut line =
+        serde_json::to_string(event).map_err(|e| format!("序列化审计事件失败: {}", e))?;
+    line.push('\n');
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .map_err(|e| format!("打开审计日志失败: {}", e))?;
     file.write_all(line.as_bytes())
-        .map_err(|e| format!("写入审计事件失败: {}", e))?;
-    file.write_all(b"\n")
-        .map_err(|e| format!("写入审计事件换行失败: {}", e))
+        .map_err(|e| format!("写入审计事件失败: {}", e))
 }
 
 fn append_audit_event_to_disk(event: &CodexLocalAccessAuditEvent) -> Result<(), String> {
@@ -7981,6 +8563,27 @@ fn record_manual_recovery_audit_event(account_id: &str, model: Option<&str>, cha
                 "scope".to_string(),
                 if model.is_some() { "model" } else { "account" }.to_string(),
             ),
+            ("changed".to_string(), changed.to_string()),
+        ]),
+    );
+}
+
+fn record_manual_pause_audit_event(account_id: &str, changed: bool) {
+    let context = AuditContext {
+        request_id: "manual_pause".to_string(),
+        route: "manual_pause".to_string(),
+        model: "-".to_string(),
+        account_hash: failure_log_account_hash(Some(account_id)),
+    };
+    record_audit_event_from_context(
+        &context,
+        "manual_pause",
+        None,
+        Some("manual_paused"),
+        None,
+        Some("paused"),
+        BTreeMap::from([
+            ("scope".to_string(), "account".to_string()),
             ("changed".to_string(), changed.to_string()),
         ]),
     );
@@ -9390,6 +9993,7 @@ async fn proxy_request_with_account_pool(
             log_health_registry_update_error(&err);
         }
     }
+    let active_stream_affinity_account_id = active_stream_affinity_account_for_request(request);
     let response_affinity_account_id = match routing_hint.previous_response_id.as_deref() {
         Some(previous_response_id) => resolve_affinity_account(previous_response_id)
             .await
@@ -9404,8 +10008,14 @@ async fn proxy_request_with_account_pool(
     let request_affinity_account_id = resolve_request_affinity_account_from_runtime(request)
         .await
         .or_else(|| request_affinity_account_from_registry(&health_registry, request, now));
-    let hard_affinity_account_id = response_affinity_account_id.clone();
-    let affinity_account_id = response_affinity_account_id.or(request_affinity_account_id);
+    let hard_affinity_account_id = active_stream_affinity_account_id
+        .clone()
+        .or(response_affinity_account_id.clone())
+        .or(request_affinity_account_id.clone());
+    let affinity_account_id = hard_affinity_account_id
+        .clone()
+        .or(response_affinity_account_id.clone())
+        .or(request_affinity_account_id.clone());
     if let Some(account_id) = affinity_account_id
         .as_deref()
         .map(str::trim)
@@ -9452,18 +10062,34 @@ async fn proxy_request_with_account_pool(
             build_ordered_account_ids(&routing_account_ids, start, affinity_account_id.as_deref());
         let mut strategy_account_ids =
             apply_collection_routing_strategy(&ordered_account_ids, collection);
-        sort_account_ids_by_health_estimate(&mut strategy_account_ids, &health_registry, now_ms());
-        let strategy_account_ids = pin_process_sticky_account(
-            strategy_account_ids,
+        let selector_now = now_ms();
+        sort_account_ids_by_health_estimate(
+            &mut strategy_account_ids,
             &health_registry,
-            Some(&routing_hint.model_key),
-            now_ms(),
+            selector_now,
         );
+        let process_sticky_account_id = process_sticky_account_id(
+            &health_registry,
+            &strategy_account_ids,
+            Some(&routing_hint.model_key),
+            selector_now,
+        );
+        let strategy_account_ids =
+            pin_account_to_front(strategy_account_ids, process_sticky_account_id.as_deref());
         let strategy_account_ids =
             pin_account_to_front(strategy_account_ids, affinity_account_id.as_deref());
         let strategy_account_ids = constrain_previous_response_affinity(
             strategy_account_ids,
             hard_affinity_account_id.as_deref(),
+        );
+        let selector_audit_summary = build_selector_audit_summary(
+            &strategy_account_ids,
+            &health_registry,
+            Some(&routing_hint.model_key),
+            selector_now,
+            max_credential_attempts,
+            affinity_account_id.as_deref(),
+            sticky_pruned,
         );
         let mut attempted_in_round = false;
         let mut round_cooldown_wait: Option<Duration> = None;
@@ -9819,7 +10445,17 @@ async fn proxy_request_with_account_pool(
                         None,
                         None,
                         Some("selected"),
-                        BTreeMap::from([("model_key".to_string(), routing_hint.model_key.clone())]),
+                        selector_audit_detail(
+                            &selector_audit_summary,
+                            selector_selected_reason(
+                                account.id.as_str(),
+                                active_stream_affinity_account_id.as_deref(),
+                                response_affinity_account_id.as_deref(),
+                                request_affinity_account_id.as_deref(),
+                                process_sticky_account_id.as_deref(),
+                            ),
+                            &routing_hint.model_key,
+                        ),
                     );
                     return Ok(ProxyDispatchSuccess {
                         upstream: response,
@@ -9833,25 +10469,26 @@ async fn proxy_request_with_account_pool(
                 let body = response.text().await.unwrap_or_default();
                 let classified =
                     classify_codex_upstream_error(status, Some(&upstream_headers), &body);
+                let request_id = health_registry_request_id_from_request(request);
                 update_health_registry_from_classified_error(
                     &mut health_registry,
                     &account.id,
                     Some(&routing_hint.model_key),
-                    health_registry_request_id_from_request(request),
+                    request_id.as_deref(),
                     &classified,
                     now_ms(),
-                );
-                persist_health_registry_with_audit(
-                    &account.id,
-                    Some(&routing_hint.model_key),
-                    request,
-                    &classified,
                 );
                 persist_account_quota_exhaustion_with_audit(
                     &account.id,
                     request,
                     &classified,
                     &body,
+                );
+                persist_health_registry_with_audit(
+                    &account.id,
+                    Some(&routing_hint.model_key),
+                    request,
+                    &classified,
                 );
                 let message = classified.safe_message.clone();
                 log_codex_api_failure(
@@ -9897,7 +10534,9 @@ async fn proxy_request_with_account_pool(
                         "max_credential_attempts".to_string(),
                         max_credential_attempts.to_string(),
                     );
-                    let can_try_next_account = attempts < max_credential_attempts;
+                    let hard_affinity_active = hard_affinity_account_id.is_some();
+                    let can_try_next_account =
+                        !hard_affinity_active && attempts < max_credential_attempts;
                     record_audit_event_from_context(
                         &context,
                         if can_try_next_account {
@@ -9910,6 +10549,8 @@ async fn proxy_request_with_account_pool(
                         None,
                         Some(if can_try_next_account {
                             "next_account"
+                        } else if hard_affinity_active {
+                            "hard_affinity"
                         } else {
                             "attempt_limit"
                         }),
@@ -10123,6 +10764,7 @@ fn build_synthetic_pool_unavailable_text(error: &ProxyDispatchError) -> String {
 fn build_synthetic_pool_unavailable_responses_payload(
     request: &ParsedRequest,
     error: &ProxyDispatchError,
+    include_visible_text: bool,
 ) -> Value {
     let routing_hint = build_request_routing_hint(request);
     let model = routing_hint
@@ -10134,7 +10776,11 @@ fn build_synthetic_pool_unavailable_responses_payload(
     let created_at = chrono::Utc::now().timestamp();
     let response_id = format!("resp_cockpit_pool_unavailable_{}", now_ms());
     let message_id = format!("msg_cockpit_pool_unavailable_{}", now_ms());
-    let text = build_synthetic_pool_unavailable_text(error);
+    let text = if include_visible_text {
+        build_synthetic_pool_unavailable_text(error)
+    } else {
+        String::new()
+    };
 
     json!({
         "id": response_id,
@@ -10339,15 +10985,16 @@ async fn write_in_band_pool_unavailable_response(
     error: &ProxyDispatchError,
     latency_ms: u64,
 ) -> Result<(), String> {
-    let payload = build_synthetic_pool_unavailable_responses_payload(request, error);
-    let response_id = extract_response_id(&payload);
-    let context = build_audit_context(request, error.account_id.as_deref());
     let is_stream_response = matches!(
         response_adapter,
         GatewayResponseAdapter::Passthrough {
             request_is_stream: true
         }
     );
+    let payload =
+        build_synthetic_pool_unavailable_responses_payload(request, error, !is_stream_response);
+    let response_id = extract_response_id(&payload);
+    let context = build_audit_context(request, error.account_id.as_deref());
     let mut detail = BTreeMap::from([
         ("latency_ms".to_string(), latency_ms.to_string()),
         ("transport_status".to_string(), "200".to_string()),
@@ -10828,8 +11475,11 @@ async fn handle_connection(
         Ok(success) => {
             let response_audit_context =
                 build_audit_context(&prepared_request, Some(success.account_id.as_str()));
-            let mut active_lease =
-                grant_active_stream_lease(&response_audit_context, &success.account_id);
+            let mut active_lease = grant_active_stream_lease_for_request(
+                &response_audit_context,
+                &success.account_id,
+                &prepared_request,
+            );
             let response_capture = match write_gateway_response(
                 &mut stream,
                 success.upstream,
@@ -10892,10 +11542,11 @@ async fn handle_connection(
 mod tests {
     use super::{
         acquire_local_api_backpressure, acquire_local_api_backpressure_with_wait,
-        active_stream_lease_count_for_account, append_audit_event_to_path,
-        apply_audit_trail_status_to_health_summary, apply_collection_routing_strategy,
-        apply_local_api_safety_preset_to_collection, backpressure_wait_budget, build_audit_context,
-        build_audit_event, build_chat_completion_payload, build_chat_completion_stream_body,
+        active_stream_affinity_account_for_request, active_stream_lease_count_for_account,
+        append_audit_event_to_path, apply_audit_trail_status_to_health_summary,
+        apply_collection_routing_strategy, apply_local_api_safety_preset_to_collection,
+        backpressure_wait_budget, build_audit_context, build_audit_event,
+        build_chat_completion_payload, build_chat_completion_stream_body,
         build_codex_api_failure_log, build_effective_local_access_account_ids,
         build_effective_local_access_account_ids_from_registry,
         build_follow_current_local_access_account_ids, build_health_summary_from_registry,
@@ -10903,10 +11554,12 @@ mod tests {
         build_local_models_response, build_ordered_account_ids, build_pool_unavailable_message,
         build_projection_seed_local_access_account_ids, build_request_routing_hint,
         build_routing_pool_account_ids, build_runtime_account, build_runtime_mode_state,
-        cache_prepared_account, classify_active_stream_terminal_error, classify_codex_api_failure,
+        build_selector_audit_summary, cache_prepared_account,
+        classify_active_stream_terminal_error, classify_codex_api_failure,
         classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
-        extract_usage_capture, filter_local_access_account_ids, first_stable_local_access_port,
-        gateway_runtime, grant_active_stream_lease, handle_connection,
+        extract_usage_capture, filter_local_access_account_ids, first_audit_timestamp_from_path,
+        first_stable_local_access_port, gateway_runtime, grant_active_stream_lease,
+        grant_active_stream_lease_for_request, handle_connection,
         health_registry_account_cooldown_wait, health_registry_account_is_schedulable,
         health_registry_model_key, is_responses_completion_event,
         is_responses_websocket_upgrade_request, is_websocket_upgrade_request,
@@ -10914,19 +11567,24 @@ mod tests {
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
         now_ms, parse_codex_retry_after, parse_responses_payload_from_upstream,
-        parse_retry_after_header_value, pin_process_sticky_account, pool_wait_fits_request_budget,
-        prepare_gateway_request, prune_process_sticky_binding, recover_health_registry_account,
+        parse_retry_after_header_value, pause_health_registry_account, pin_process_sticky_account,
+        pool_wait_fits_request_budget, prepare_gateway_request, proxy_request_with_account_pool,
+        prune_process_sticky_binding, record_manual_pause_audit_event,
+        record_manual_recovery_audit_event, recover_health_registry_account,
+        request_affinity_account_from_registry, request_affinity_key,
         reset_active_stream_leases_for_tests, reset_local_api_backpressure_for_tests,
         resolve_supported_model_alias, retry_failover_account_attempt_limit,
-        retry_failover_max_retries, save_health_registry_to_path, set_runtime_integration_mode,
-        should_defer_pool_unavailable, should_retry_single_account_upstream_status,
+        retry_failover_max_retries, save_health_registry_to_path, selector_audit_detail,
+        selector_selected_reason, set_runtime_integration_mode, should_defer_pool_unavailable,
+        should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, should_use_pool_unavailable_summary,
         should_write_in_band_pool_unavailable_response, sort_account_ids_by_health_estimate,
-        status_for_pool_unavailable, summarize_pool_unavailability,
-        update_health_registry_from_classified_error, upsert_process_sticky_binding,
-        upsert_request_affinity_binding, upsert_successful_account_health, ActiveStreamTerminal,
-        AuditContext, AuditTrailStatus, CodexLocalAccessErrorType, GatewayResponseAdapter,
+        sort_account_ids_by_health_estimate_with_quota_hints, status_for_pool_unavailable,
+        summarize_pool_unavailability, update_health_registry_from_classified_error,
+        upsert_process_sticky_binding, upsert_request_affinity_binding,
+        upsert_successful_account_health, AccountQuotaSortHint, ActiveStreamTerminal, AuditContext,
+        AuditTrailStatus, CodexLocalAccessErrorType, GatewayResponseAdapter,
         LocalApiBackpressureState, ParsedRequest, ProxyDispatchError, ResponseUsageCollector,
         StreamWriteState, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID,
         CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME, DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES,
@@ -11115,6 +11773,17 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         .expect("retry after should be parsed");
 
         assert_eq!(wait, Duration::from_secs(12));
+    }
+
+    #[test]
+    fn parses_codex_retry_after_from_reset_after_aliases() {
+        let wait = parse_codex_retry_after(
+            StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"type":"usage_limit_reached","reset_after_seconds":"45"}}"#,
+        )
+        .expect("retry after should be parsed from reset_after_seconds");
+
+        assert_eq!(wait, Duration::from_secs(45));
     }
 
     #[test]
@@ -11637,6 +12306,122 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn health_estimate_sorting_preserves_recent_success_continuity() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        for (account_id, last_success_at_ms) in
+            [("used-older", now - 60_000), ("used-recent", now - 1_000)]
+        {
+            registry.accounts.insert(
+                account_id.to_string(),
+                CodexLocalAccessAccountHealth {
+                    status: CodexLocalAccessAccountHealthStatus::Healthy,
+                    estimated_remaining_percentage: Some(80),
+                    last_selected_at_ms: Some(last_success_at_ms),
+                    last_success_at_ms: Some(last_success_at_ms),
+                    api_service_success_count: 1,
+                    updated_at: last_success_at_ms,
+                    ..CodexLocalAccessAccountHealth::default()
+                },
+            );
+        }
+
+        let mut account_ids = vec![
+            "new-reserve".to_string(),
+            "used-older".to_string(),
+            "used-recent".to_string(),
+        ];
+        sort_account_ids_by_health_estimate(&mut account_ids, &registry, now);
+
+        assert_eq!(
+            account_ids,
+            vec![
+                "used-recent".to_string(),
+                "used-older".to_string(),
+                "new-reserve".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn health_estimate_sorting_prefers_used_recovered_accounts_over_new_reserve() {
+        let now = 1_700_000_000_000;
+        const TEST_WEEK_MS: i64 = 7 * 24 * 60 * 60 * 1000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "used-recovered".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::EstimatedAvailable,
+                estimated_remaining_percentage: Some(100),
+                estimated_reset_at_ms: Some(now - 1),
+                last_success_at_ms: Some(now - TEST_WEEK_MS),
+                last_quota_exhausted_at_ms: Some(now - 60_000),
+                api_service_success_count: 3,
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+
+        let mut account_ids = vec!["new-reserve".to_string(), "used-recovered".to_string()];
+        sort_account_ids_by_health_estimate(&mut account_ids, &registry, now);
+
+        assert_eq!(
+            account_ids,
+            vec!["used-recovered".to_string(), "new-reserve".to_string()]
+        );
+    }
+
+    #[test]
+    fn health_estimate_sorting_uses_account_quota_hints_for_visible_order() {
+        let now = 1_700_000_000_000;
+        let registry = empty_health_registry(now);
+        let mut account_ids = vec![
+            "weekly-0".to_string(),
+            "weekly-97".to_string(),
+            "weekly-30".to_string(),
+        ];
+        let quota_hints = HashMap::from([
+            (
+                "weekly-0".to_string(),
+                AccountQuotaSortHint {
+                    remaining_percentage: Some(0),
+                    earliest_reset_at_ms: Some(now + 1_000),
+                },
+            ),
+            (
+                "weekly-97".to_string(),
+                AccountQuotaSortHint {
+                    remaining_percentage: Some(97),
+                    earliest_reset_at_ms: Some(now + 9_000),
+                },
+            ),
+            (
+                "weekly-30".to_string(),
+                AccountQuotaSortHint {
+                    remaining_percentage: Some(30),
+                    earliest_reset_at_ms: Some(now + 100),
+                },
+            ),
+        ]);
+
+        sort_account_ids_by_health_estimate_with_quota_hints(
+            &mut account_ids,
+            &registry,
+            now,
+            &quota_hints,
+        );
+
+        assert_eq!(
+            account_ids,
+            vec![
+                "weekly-97".to_string(),
+                "weekly-30".to_string(),
+                "weekly-0".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn health_registry_manual_required_blocks_schedulability() {
         let mut registry = empty_health_registry(1_700_000_000_000);
         let classified = classify_codex_upstream_error(StatusCode::UNAUTHORIZED, None, "");
@@ -11948,6 +12733,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             response_text
         );
         assert!(
+            !response_text.contains("Cockpit API Service pool_unavailable")
+                && !response_text.contains("API 服务号池暂无可调度账号"),
+            "streaming local pool_unavailable completion must stay silent so it does not pollute the active Codex turn: {}",
+            response_text
+        );
+        assert!(
             response_text.contains("response.output_item.added")
                 && response_text.contains("response.content_part.added")
                 && response_text.contains("response.output_text.delta")
@@ -12190,6 +12981,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(
             !response_text.contains("response.failed"),
             "Codex-facing exhausted request must not emit response.failed: {}",
+            response_text
+        );
+        assert!(
+            !response_text.contains("Cockpit API Service pool_unavailable")
+                && !response_text.contains("API 服务号池暂无可调度账号"),
+            "streaming local pool_unavailable completion must not become visible assistant text: {}",
             response_text
         );
         assert!(
@@ -12936,7 +13733,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn same_client_request_id_soft_affinity_falls_back_to_current_pool_after_usage_limit() {
+    async fn same_client_request_id_hard_affinity_blocks_fallback_after_usage_limit() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -12965,73 +13762,49 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("fake upstream should have addr");
         let upstream_server = tokio::spawn(async move {
             let mut seen = Vec::new();
-            for index in 0..2 {
-                let (mut socket, _) = upstream_listener
-                    .accept()
+            let (mut socket, _) = upstream_listener
+                .accept()
+                .await
+                .expect("fake upstream should accept affinity request");
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let read = socket
+                    .read(&mut chunk)
                     .await
-                    .expect("fake upstream should accept affinity fallback request");
-                let mut request = Vec::new();
-                let mut chunk = [0u8; 1024];
-                loop {
-                    let read = socket
-                        .read(&mut chunk)
-                        .await
-                        .expect("fake upstream should read request");
-                    if read == 0 {
-                        break;
-                    }
-                    request.extend_from_slice(&chunk[..read]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                        break;
-                    }
+                    .expect("fake upstream should read request");
+                if read == 0 {
+                    break;
                 }
-                let request_text = String::from_utf8_lossy(&request).to_string();
-                seen.push(request_text.clone());
-                if index == 0 {
-                    assert!(
-                        request_text.contains("Authorization: Bearer sk-local-old")
-                            || request_text.contains("authorization: Bearer sk-local-old"),
-                        "first attempt should use the request-affinity account: {}",
-                        request_text
-                    );
-                    let body =
-                        r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
-                    let response = format!(
-                        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nRetry-After: 600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.as_bytes().len(),
-                        body
-                    );
-                    socket
-                        .write_all(response.as_bytes())
-                        .await
-                        .expect("fake upstream should write 429");
-                } else {
-                    assert!(
-                        request_text.contains("Authorization: Bearer sk-local-current")
-                            || request_text.contains("authorization: Bearer sk-local-current"),
-                        "second attempt should fall back to the current pool account: {}",
-                        request_text
-                    );
-                    let body = concat!(
-                        "event: response.created\n",
-                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_request_affinity_fallback_ok\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
-                        "event: response.output_text.delta\n",
-                        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"OK\"}\n\n",
-                        "event: response.completed\n",
-                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_request_affinity_fallback_ok\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
-                        "data: [DONE]\n\n"
-                    );
-                    let response = format!(
-                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                        body.as_bytes().len(),
-                        body
-                    );
-                    socket
-                        .write_all(response.as_bytes())
-                        .await
-                        .expect("fake upstream should write fallback response");
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
                 }
             }
+            let request_text = String::from_utf8_lossy(&request).to_string();
+            seen.push(request_text.clone());
+            assert!(
+                request_text.contains("Authorization: Bearer sk-local-old")
+                    || request_text.contains("authorization: Bearer sk-local-old"),
+                "attempt should use the request-affinity account: {}",
+                request_text
+            );
+            assert!(
+                !request_text.contains("Authorization: Bearer sk-local-current")
+                    && !request_text.contains("authorization: Bearer sk-local-current"),
+                "same task must not be sent to the replacement account: {}",
+                request_text
+            );
+            let body = r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+            let response = format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nRetry-After: 600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.as_bytes().len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("fake upstream should write 429");
             seen
         });
 
@@ -13161,29 +13934,32 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("response read should succeed");
         let response_text = String::from_utf8_lossy(&response);
         assert!(
-            response_text.contains("resp_request_affinity_fallback_ok")
-                && response_text.contains("OK"),
-            "request-id soft affinity must fall back to current pool account: {}",
+            response_text.contains("resp_cockpit_pool_unavailable_")
+                && response_text.contains("data: [DONE]"),
+            "request-id hard affinity should finish locally instead of switching accounts: {}",
             response_text
         );
         assert!(
-            !response_text.contains("Cockpit API Service pool_unavailable"),
-            "request-id soft affinity must not stop at old account cooldown: {}",
+            !response_text.contains("resp_request_affinity_fallback_ok")
+                && !response_text.contains("CURRENT"),
+            "request-id hard affinity must not replay on replacement account: {}",
             response_text
         );
 
         let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
             .expect("audit should be written to isolated root");
-        assert!(audit.contains("\"phase\":\"fallback_selected\""));
-        assert!(audit.contains("\"phase\":\"stream_completed\""));
-        assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
+        assert!(audit.contains("\"phase\":\"fallback_blocked\""));
+        assert!(audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(audit.contains("\"outcome\":\"in_band_local_completion\""));
+        assert!(!audit.contains("\"phase\":\"fallback_selected\""));
+        assert!(!audit.contains("\"phase\":\"stream_completed\""));
 
         let server_result = server.await.expect("server task should join");
         assert!(server_result.is_ok(), "server failed: {:?}", server_result);
         let seen = upstream_server
             .await
             .expect("fake upstream task should join");
-        assert_eq!(seen.len(), 2);
+        assert_eq!(seen.len(), 1);
         {
             let mut runtime = gateway_runtime().lock().await;
             *runtime = super::GatewayRuntime::default();
@@ -13199,6 +13975,1054 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
         }
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn codex_turn_state_hard_affinity_blocks_fallback_after_usage_limit() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-turn-state-fallback-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_server = tokio::spawn(async move {
+            let (mut socket, _) = upstream_listener
+                .accept()
+                .await
+                .expect("fake upstream should accept turn-state request");
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            loop {
+                let read = socket
+                    .read(&mut chunk)
+                    .await
+                    .expect("fake upstream should read request");
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&chunk[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request_text = String::from_utf8_lossy(&request).to_string();
+            assert!(
+                request_text.contains("Authorization: Bearer sk-local-old")
+                    || request_text.contains("authorization: Bearer sk-local-old"),
+                "turn-state affinity should use the original account: {}",
+                request_text
+            );
+            assert!(
+                !request_text.contains("Authorization: Bearer sk-local-current")
+                    && !request_text.contains("authorization: Bearer sk-local-current"),
+                "turn-state affinity must not switch to the current pool account: {}",
+                request_text
+            );
+            assert!(
+                request_text
+                    .to_ascii_lowercase()
+                    .contains("x-codex-turn-state: turn-secret-state"),
+                "turn-state header must be forwarded to upstream: {}",
+                request_text
+            );
+            let body = r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+            let response = format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nRetry-After: 600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.as_bytes().len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("fake upstream should write 429");
+            request_text
+        });
+
+        let now = now_ms();
+        let registry = empty_health_registry(now);
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": 0,
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 1,
+                "minRequestIntervalSeconds": 1,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 5,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "next_request_only",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-current"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection.clone());
+            runtime.running = true;
+        }
+
+        let old_account = CodexAccount::new_api_key(
+            "api-old".to_string(),
+            "api-old@example.com".to_string(),
+            "sk-local-old".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        let current_account = CodexAccount::new_api_key(
+            "api-current".to_string(),
+            "api-current@example.com".to_string(),
+            "sk-local-current".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        crate::modules::codex_account::save_account(&old_account)
+            .expect("old affinity account should be persisted");
+        crate::modules::codex_account::save_account(&current_account)
+            .expect("current pool account should be persisted");
+        cache_prepared_account(&old_account).await;
+
+        let turn_state = "turn-secret-state";
+        let affinity_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([("x-codex-turn-state".to_string(), turn_state.to_string())]),
+            body: br#"{"model":"gpt-5.5","input":"previous successful turn step"}"#.to_vec(),
+        };
+        let mut persisted_registry =
+            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
+                .expect("health registry should load from isolated test root");
+        assert!(upsert_request_affinity_binding(
+            &mut persisted_registry,
+            &affinity_request,
+            "api-old",
+            now_ms(),
+        ));
+        save_health_registry_to_path(
+            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
+            &persisted_registry,
+        )
+        .expect("persistent turn-state affinity should be written");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            runtime.request_affinity.clear();
+        }
+
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([
+                ("accept".to_string(), "text/event-stream".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+                ("x-codex-turn-state".to_string(), turn_state.to_string()),
+            ]),
+            body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
+        };
+        let err = proxy_request_with_account_pool(&request, &collection)
+            .await
+            .expect_err("turn-state hard affinity should not fall back to replacement account");
+        assert_eq!(err.account_id.as_deref(), Some("api-old"));
+        assert_eq!(err.status, StatusCode::TOO_MANY_REQUESTS.as_u16());
+
+        let seen = upstream_server
+            .await
+            .expect("fake upstream task should join");
+        assert!(seen.contains("sk-local-old"));
+
+        let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
+            .expect("audit should be written to isolated root");
+        assert!(audit.contains("\"phase\":\"fallback_blocked\""));
+        assert!(audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(audit.contains("x-codex-turn-state:sha256:"));
+        assert!(
+            !audit.contains(turn_state),
+            "raw x-codex-turn-state must not be written to audit"
+        );
+        assert!(!audit.contains("\"phase\":\"fallback_selected\""));
+
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        match previous_accounts_root {
+            Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
+            None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn codex_turn_metadata_is_turn_scoped_even_when_client_request_id_is_thread_scoped() {
+        let now = 1_700_000_000_000;
+        let old_turn = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([
+                (
+                    "x-client-request-id".to_string(),
+                    "thread-request-id".to_string(),
+                ),
+                (
+                    "x-codex-turn-metadata".to_string(),
+                    r#"{"turn_id":"turn-old"}"#.to_string(),
+                ),
+            ]),
+            body: br#"{"model":"gpt-5.5","input":"old turn"}"#.to_vec(),
+        };
+        let new_turn = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([
+                (
+                    "x-client-request-id".to_string(),
+                    "thread-request-id".to_string(),
+                ),
+                (
+                    "x-codex-turn-metadata".to_string(),
+                    r#"{"turn_id":"turn-new"}"#.to_string(),
+                ),
+            ]),
+            body: br#"{"model":"gpt-5.5","input":"new turn"}"#.to_vec(),
+        };
+
+        let old_key = request_affinity_key(&old_turn).expect("old turn should have affinity key");
+        let new_key = request_affinity_key(&new_turn).expect("new turn should have affinity key");
+        assert!(old_key.starts_with("x-codex-turn-metadata.turn_id:sha256:"));
+        assert!(new_key.starts_with("x-codex-turn-metadata.turn_id:sha256:"));
+        assert_ne!(
+            old_key, new_key,
+            "Codex x-client-request-id is thread-scoped; turn metadata must reset affinity"
+        );
+
+        let mut registry = empty_health_registry(now);
+        assert!(upsert_request_affinity_binding(
+            &mut registry,
+            &old_turn,
+            "api-old",
+            now,
+        ));
+        assert_eq!(
+            request_affinity_account_from_registry(&registry, &old_turn, now).as_deref(),
+            Some("api-old")
+        );
+        assert_eq!(
+            request_affinity_account_from_registry(&registry, &new_turn, now),
+            None,
+            "a new Codex turn in the same thread must be admitted independently"
+        );
+    }
+
+    #[test]
+    fn active_stream_lease_uses_turn_state_affinity_even_with_client_request_id() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-turn-state-active-lease-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        reset_active_stream_leases_for_tests();
+
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([
+                (
+                    "x-client-request-id".to_string(),
+                    "thread-request-id".to_string(),
+                ),
+                (
+                    "x-codex-turn-state".to_string(),
+                    "turn-secret-state".to_string(),
+                ),
+            ]),
+            body: br#"{"model":"gpt-5.5","input":"active turn"}"#.to_vec(),
+        };
+        let context = build_audit_context(&request, Some("api-old"));
+        let mut lease = grant_active_stream_lease_for_request(&context, "api-old", &request);
+
+        assert_eq!(
+            active_stream_affinity_account_for_request(&request).as_deref(),
+            Some("api-old"),
+            "active stream affinity must use the Codex turn-state key, not the thread request id"
+        );
+
+        lease.release(ActiveStreamTerminal::Completed);
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn active_stream_request_affinity_blocks_old_task_fallback_but_allows_new_task() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-active-affinity-fallback-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let upstream_seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_seen_task = std::sync::Arc::clone(&upstream_seen);
+        let upstream_server = tokio::spawn(async move {
+            loop {
+                let accept =
+                    tokio::time::timeout(Duration::from_secs(5), upstream_listener.accept()).await;
+                let Ok(Ok((mut socket, _))) = accept else {
+                    break;
+                };
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let read = socket
+                        .read(&mut chunk)
+                        .await
+                        .expect("fake upstream should read request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request_text = String::from_utf8_lossy(&request).to_string();
+                upstream_seen_task.lock().await.push(request_text.clone());
+
+                if request_text.contains("Bearer sk-local-old") {
+                    let body =
+                        r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nRetry-After: 600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.as_bytes().len(),
+                        body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("fake upstream should write old-account 429");
+                    continue;
+                }
+
+                let body = concat!(
+                    "event: response.created\n",
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_current_ok\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                    "event: response.output_text.delta\n",
+                    "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"CURRENT\"}\n\n",
+                    "event: response.completed\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_current_ok\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                    "data: [DONE]\n\n"
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("fake upstream should write current-account response");
+            }
+        });
+
+        let now = now_ms();
+        let registry = empty_health_registry(now);
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": addr.port(),
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 1,
+                "minRequestIntervalSeconds": 0,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 5,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "next_request_only",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-current"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection);
+            runtime.running = true;
+            runtime.actual_port = Some(addr.port());
+        }
+
+        let old_account = CodexAccount::new_api_key(
+            "api-old".to_string(),
+            "api-old@example.com".to_string(),
+            "sk-local-old".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        let current_account = CodexAccount::new_api_key(
+            "api-current".to_string(),
+            "api-current@example.com".to_string(),
+            "sk-local-current".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        crate::modules::codex_account::save_account(&old_account)
+            .expect("old active account should be persisted");
+        crate::modules::codex_account::save_account(&current_account)
+            .expect("current pool account should be persisted");
+
+        let active_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                "x-client-request-id".to_string(),
+                "req-active-task".to_string(),
+            )]),
+            body: br#"{"model":"gpt-5.5","input":"already running"}"#.to_vec(),
+        };
+        let active_context = build_audit_context(&active_request, Some("api-old"));
+        let mut active_lease = grant_active_stream_lease(&active_context, "api-old");
+        assert_eq!(active_stream_lease_count_for_account("api-old"), 1);
+
+        let mut persisted_registry =
+            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
+                .expect("health registry should load from isolated test root");
+        assert!(upsert_request_affinity_binding(
+            &mut persisted_registry,
+            &active_request,
+            "api-old",
+            now_ms(),
+        ));
+        save_health_registry_to_path(
+            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
+            &persisted_registry,
+        )
+        .expect("persistent request affinity should be written");
+
+        let server = tokio::spawn(async move {
+            let mut handlers = Vec::new();
+            for _ in 0..2 {
+                let (stream, peer) = listener.accept().await.expect("server should accept");
+                handlers.push(tokio::spawn(async move {
+                    handle_connection(stream, peer).await
+                }));
+            }
+            for handler in handlers {
+                handler.await.expect("server connection task should join")?;
+            }
+            Ok::<(), String>(())
+        });
+
+        let mut active_client = TcpStream::connect(addr)
+            .await
+            .expect("active client should connect");
+        let active_body = br#"{"model":"gpt-5.5","input":"continue old task"}"#;
+        let active_http = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-active-task\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            active_body.len(),
+            String::from_utf8_lossy(active_body)
+        );
+        active_client
+            .write_all(active_http.as_bytes())
+            .await
+            .expect("active request should be written");
+        let mut active_response = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            active_client.read_to_end(&mut active_response),
+        )
+        .await
+        .expect("active request response should finish")
+        .expect("active response read should succeed");
+
+        let mut new_client = TcpStream::connect(addr)
+            .await
+            .expect("new client should connect");
+        let new_body = br#"{"model":"gpt-5.5","input":"new task"}"#;
+        let new_http = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-new-task\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            new_body.len(),
+            String::from_utf8_lossy(new_body)
+        );
+        new_client
+            .write_all(new_http.as_bytes())
+            .await
+            .expect("new request should be written");
+        let mut new_response = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            new_client.read_to_end(&mut new_response),
+        )
+        .await
+        .expect("new request response should finish")
+        .expect("new response read should succeed");
+
+        let server_result = server.await.expect("server task should join");
+        assert!(server_result.is_ok(), "server failed: {:?}", server_result);
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        upstream_server.abort();
+
+        let active_response_text = String::from_utf8_lossy(&active_response);
+        let new_response_text = String::from_utf8_lossy(&new_response);
+        let seen = upstream_seen.lock().await.clone();
+        let seen_text = seen.join("\n--- request ---\n");
+
+        active_lease.release(ActiveStreamTerminal::Completed);
+        assert_eq!(active_stream_lease_count_for_account("api-old"), 0);
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        match previous_accounts_root {
+            Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
+            None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
+        }
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(
+            !active_response_text.contains("resp_current_ok")
+                && !active_response_text.contains("CURRENT"),
+            "active task must not be replayed on the replacement account: {}",
+            active_response_text
+        );
+        assert!(
+            new_response_text.contains("resp_current_ok") && new_response_text.contains("CURRENT"),
+            "new task should immediately use the current replacement account: {}",
+            new_response_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("req-active-task")
+                    && request.contains("Bearer sk-local-old")),
+            "active task should reach the old account: {}",
+            seen_text
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|request| request.contains("req-active-task")
+                    && request.contains("Bearer sk-local-current")),
+            "active task must not be sent to the replacement account: {}",
+            seen_text
+        );
+        assert!(
+            seen.iter().any(|request| request.contains("req-new-task")
+                && request.contains("Bearer sk-local-current")),
+            "new task should reach the replacement account: {}",
+            seen_text
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn in_flight_stream_finishes_on_original_account_while_new_task_uses_replacement() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-inflight-stream-switch-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let upstream_seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let old_stream_started = std::sync::Arc::new(tokio::sync::Notify::new());
+        let finish_old_stream = std::sync::Arc::new(tokio::sync::Notify::new());
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_seen_task = std::sync::Arc::clone(&upstream_seen);
+        let old_stream_started_task = std::sync::Arc::clone(&old_stream_started);
+        let finish_old_stream_task = std::sync::Arc::clone(&finish_old_stream);
+        let upstream_server = tokio::spawn(async move {
+            let mut handlers = Vec::new();
+            for _ in 0..2 {
+                let (mut socket, _) = upstream_listener
+                    .accept()
+                    .await
+                    .expect("fake upstream should accept");
+                let upstream_seen_task = std::sync::Arc::clone(&upstream_seen_task);
+                let old_stream_started_task = std::sync::Arc::clone(&old_stream_started_task);
+                let finish_old_stream_task = std::sync::Arc::clone(&finish_old_stream_task);
+                handlers.push(tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut chunk = [0u8; 1024];
+                    loop {
+                        let read = socket
+                            .read(&mut chunk)
+                            .await
+                            .expect("fake upstream should read request");
+                        if read == 0 {
+                            break;
+                        }
+                        request.extend_from_slice(&chunk[..read]);
+                        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                            break;
+                        }
+                    }
+                    let request_text = String::from_utf8_lossy(&request).to_string();
+                    upstream_seen_task.lock().await.push(request_text.clone());
+
+                    if request_text.contains("Bearer sk-local-old") {
+                        let old_first = concat!(
+                            "event: response.created\n",
+                            "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_old_stream\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                            "event: response.output_text.delta\n",
+                            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"OLD-START\"}\n\n"
+                        );
+                        let old_rest = concat!(
+                            "event: response.output_text.delta\n",
+                            "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"OLD-DONE\"}\n\n",
+                            "event: response.completed\n",
+                            "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_old_stream\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":2,\"total_tokens\":3}}}\n\n",
+                            "data: [DONE]\n\n"
+                        );
+                        let content_length =
+                            old_first.as_bytes().len() + old_rest.as_bytes().len();
+                        let response_head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            content_length
+                        );
+                        socket
+                            .write_all(response_head.as_bytes())
+                            .await
+                            .expect("fake upstream should write old response headers");
+                        socket
+                            .write_all(old_first.as_bytes())
+                            .await
+                            .expect("fake upstream should write old first chunk");
+                        old_stream_started_task.notify_waiters();
+                        finish_old_stream_task.notified().await;
+                        socket
+                            .write_all(old_rest.as_bytes())
+                            .await
+                            .expect("fake upstream should finish old stream");
+                        return;
+                    }
+
+                    let body = concat!(
+                        "event: response.created\n",
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_current_stream\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                        "event: response.output_text.delta\n",
+                        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"CURRENT\"}\n\n",
+                        "event: response.completed\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_current_stream\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.as_bytes().len(),
+                        body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("fake upstream should write current-account response");
+                }));
+            }
+            for handler in handlers {
+                handler
+                    .await
+                    .expect("fake upstream connection task should join");
+            }
+        });
+
+        let now = now_ms();
+        let registry = empty_health_registry(now);
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": addr.port(),
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 1,
+                "minRequestIntervalSeconds": 0,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 5,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "next_request_only",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-old", "api-current"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection);
+            runtime.running = true;
+            runtime.actual_port = Some(addr.port());
+        }
+
+        let old_account = CodexAccount::new_api_key(
+            "api-old".to_string(),
+            "api-old@example.com".to_string(),
+            "sk-local-old".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        let current_account = CodexAccount::new_api_key(
+            "api-current".to_string(),
+            "api-current@example.com".to_string(),
+            "sk-local-current".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        crate::modules::codex_account::save_account(&old_account)
+            .expect("old account should be persisted");
+        crate::modules::codex_account::save_account(&current_account)
+            .expect("current account should be persisted");
+
+        let old_affinity_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                "x-client-request-id".to_string(),
+                "req-inflight-old-stream".to_string(),
+            )]),
+            body: br#"{"model":"gpt-5.5","input":"old stream start"}"#.to_vec(),
+        };
+        let mut persisted_registry =
+            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
+                .expect("health registry should load from isolated test root");
+        assert!(upsert_request_affinity_binding(
+            &mut persisted_registry,
+            &old_affinity_request,
+            "api-old",
+            now_ms(),
+        ));
+        save_health_registry_to_path(
+            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
+            &persisted_registry,
+        )
+        .expect("persistent request affinity should be written");
+
+        let server = tokio::spawn(async move {
+            let mut handlers = Vec::new();
+            for _ in 0..2 {
+                let (stream, peer) = listener.accept().await.expect("server should accept");
+                handlers.push(tokio::spawn(async move {
+                    handle_connection(stream, peer).await
+                }));
+            }
+            for handler in handlers {
+                handler.await.expect("server connection task should join")?;
+            }
+            Ok::<(), String>(())
+        });
+
+        let old_client_task = tokio::spawn(async move {
+            let mut client = TcpStream::connect(addr)
+                .await
+                .expect("old client should connect");
+            let body = br#"{"model":"gpt-5.5","input":"old stream"}"#;
+            let request = format!(
+                "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-inflight-old-stream\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                String::from_utf8_lossy(body)
+            );
+            client
+                .write_all(request.as_bytes())
+                .await
+                .expect("old request should be written");
+            let mut response = Vec::new();
+            client
+                .read_to_end(&mut response)
+                .await
+                .expect("old response read should succeed");
+            response
+        });
+
+        tokio::time::timeout(Duration::from_secs(2), old_stream_started.notified())
+            .await
+            .expect("old upstream stream should start");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                if active_stream_lease_count_for_account("api-old") == 1 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("old active stream lease should be granted");
+
+        let mut registry =
+            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
+                .expect("health registry should load before simulated exhaustion");
+        let exhausted = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#,
+        );
+        update_health_registry_from_classified_error(
+            &mut registry,
+            "api-old",
+            Some("gpt-5.5"),
+            Some("req-inflight-old-stream"),
+            &exhausted,
+            now_ms(),
+        );
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("simulated quota exhaustion should be persisted");
+
+        let mut new_client = TcpStream::connect(addr)
+            .await
+            .expect("new client should connect");
+        let new_body = br#"{"model":"gpt-5.5","input":"new task after exhaustion"}"#;
+        let new_request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-new-after-exhausted\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            new_body.len(),
+            String::from_utf8_lossy(new_body)
+        );
+        new_client
+            .write_all(new_request.as_bytes())
+            .await
+            .expect("new request should be written");
+        let mut new_response = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            new_client.read_to_end(&mut new_response),
+        )
+        .await
+        .expect("new request response should finish")
+        .expect("new response read should succeed");
+        finish_old_stream.notify_waiters();
+        let old_response = tokio::time::timeout(Duration::from_secs(2), old_client_task)
+            .await
+            .expect("old client task should finish")
+            .expect("old client task should not panic");
+
+        let server_result = server.await.expect("server task should join");
+        assert!(server_result.is_ok(), "server failed: {:?}", server_result);
+        let upstream_result = upstream_server.await;
+        assert!(
+            upstream_result.is_ok(),
+            "fake upstream task should join: {:?}",
+            upstream_result
+        );
+
+        let old_response_text = String::from_utf8_lossy(&old_response);
+        let new_response_text = String::from_utf8_lossy(&new_response);
+        let seen = upstream_seen.lock().await.clone();
+        let seen_text = seen.join("\n--- request ---\n");
+
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        match previous_accounts_root {
+            Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
+            None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
+        }
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(
+            old_response_text.contains("OLD-START")
+                && old_response_text.contains("OLD-DONE")
+                && old_response_text.contains("resp_old_stream"),
+            "old stream should complete from the original account: {}",
+            old_response_text
+        );
+        assert!(
+            !old_response_text.contains("CURRENT"),
+            "old stream must not be replaced by the new account response: {}",
+            old_response_text
+        );
+        assert!(
+            new_response_text.contains("CURRENT")
+                && new_response_text.contains("resp_current_stream"),
+            "new task should immediately use the replacement account: {}",
+            new_response_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("req-inflight-old-stream")
+                    && request.contains("Bearer sk-local-old")),
+            "old stream should reach the original account: {}",
+            seen_text
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|request| request.contains("req-inflight-old-stream")
+                    && request.contains("Bearer sk-local-current")),
+            "old stream must never be replayed on the replacement account: {}",
+            seen_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("req-new-after-exhausted")
+                    && request.contains("Bearer sk-local-current")),
+            "new task should reach the replacement account: {}",
+            seen_text
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -13863,6 +15687,226 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn manual_pause_marks_account_disabled_and_prunes_affinity() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "account-paused".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::Healthy,
+                last_success_at_ms: Some(now - 1),
+                api_service_success_count: 3,
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        upsert_process_sticky_binding(&mut registry, "account-paused", now);
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                "x-client-request-id".to_string(),
+                "req-manual-pause".to_string(),
+            )]),
+            body: Vec::new(),
+        };
+        assert!(upsert_request_affinity_binding(
+            &mut registry,
+            &request,
+            "account-paused",
+            now
+        ));
+        registry.model_cooldowns.insert(
+            health_registry_model_key("account-paused", "gpt-5.5"),
+            CodexLocalAccessModelCooldown {
+                account_id: "account-paused".to_string(),
+                model: "gpt-5.5".to_string(),
+                cooldown_until_ms: now + 60_000,
+                last_error_type: Some("model_capacity".to_string()),
+                last_request_id: Some("req-model-pause".to_string()),
+                updated_at: now,
+            },
+        );
+
+        assert!(pause_health_registry_account(
+            &mut registry,
+            "account-paused",
+            now + 1
+        ));
+
+        let account = registry
+            .accounts
+            .get("account-paused")
+            .expect("paused account health should remain visible");
+        assert_eq!(
+            account.status,
+            CodexLocalAccessAccountHealthStatus::Disabled
+        );
+        assert_eq!(account.reset_source.as_deref(), Some("manual_pause"));
+        assert_eq!(account.confidence.as_deref(), Some("manual"));
+        assert_eq!(account.last_error_type.as_deref(), Some("manual_paused"));
+        assert!(!health_registry_account_is_schedulable(
+            &registry,
+            "account-paused",
+            Some("gpt-5.5"),
+            now + 1
+        ));
+        assert!(registry.sticky_bindings.is_empty());
+        assert!(registry.request_affinity.is_empty());
+        assert!(registry.model_cooldowns.is_empty());
+    }
+
+    #[test]
+    fn health_summary_exposes_scoped_account_health_views() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "account-auth".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::ManualRequired,
+                manual_required: true,
+                last_status: Some(401),
+                last_error_type: Some("auth_error".to_string()),
+                last_provider_code: Some("invalid_token".to_string()),
+                last_request_id: Some("req-auth-secret".to_string()),
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.accounts.insert(
+            "account-outside".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::ManualRequired,
+                manual_required: true,
+                last_status: Some(401),
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.model_cooldowns.insert(
+            health_registry_model_key("account-auth", "gpt-5.5"),
+            CodexLocalAccessModelCooldown {
+                account_id: "account-auth".to_string(),
+                model: "gpt-5.5".to_string(),
+                cooldown_until_ms: now + 60_000,
+                last_error_type: Some("model_capacity".to_string()),
+                last_request_id: Some("req-model".to_string()),
+                updated_at: now,
+            },
+        );
+
+        let account_ids = vec!["account-auth".to_string(), "account-missing".to_string()];
+        let summary = build_health_summary_from_registry_for_accounts(&registry, now, &account_ids);
+
+        assert_eq!(summary.manual_required_count, 1);
+        assert_eq!(summary.healthy_count, 1);
+        assert_eq!(summary.active_model_cooldown_count, 1);
+        assert_eq!(summary.accounts.len(), 2);
+        assert!(summary
+            .accounts
+            .iter()
+            .all(|view| view.account_id != "account-outside"));
+
+        let auth = summary
+            .accounts
+            .iter()
+            .find(|view| view.account_id == "account-auth")
+            .expect("auth account health should be exposed");
+        assert_eq!(
+            auth.status,
+            CodexLocalAccessAccountHealthStatus::ManualRequired
+        );
+        assert!(auth.manual_required);
+        assert_eq!(auth.last_status, Some(401));
+        assert_eq!(auth.last_error_type.as_deref(), Some("auth_error"));
+        assert_eq!(auth.last_provider_code.as_deref(), Some("invalid_token"));
+        assert_eq!(auth.active_model_cooldown_count, 1);
+        assert_eq!(auth.nearest_model_cooldown_until_ms, Some(now + 60_000));
+
+        let missing = summary
+            .accounts
+            .iter()
+            .find(|view| view.account_id == "account-missing")
+            .expect("missing scoped account should default to healthy");
+        assert_eq!(missing.status, CodexLocalAccessAccountHealthStatus::Healthy);
+        assert!(!missing.manual_required);
+    }
+
+    #[test]
+    fn manual_recovery_restores_manually_paused_account_locally() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+
+        assert!(pause_health_registry_account(
+            &mut registry,
+            "account-paused",
+            now
+        ));
+        assert!(recover_health_registry_account(
+            &mut registry,
+            "account-paused",
+            None,
+            now + 1
+        ));
+
+        let account = registry
+            .accounts
+            .get("account-paused")
+            .expect("recovered account health should remain visible");
+        assert_eq!(
+            account.status,
+            CodexLocalAccessAccountHealthStatus::EstimatedAvailable
+        );
+        assert_eq!(account.reset_source.as_deref(), Some("manual_recovery"));
+        assert_eq!(account.confidence.as_deref(), Some("manual"));
+        assert_eq!(account.last_error_type, None);
+        assert!(health_registry_account_is_schedulable(
+            &registry,
+            "account-paused",
+            Some("gpt-5.5"),
+            now + 1
+        ));
+    }
+
+    #[test]
+    fn manual_pause_and_recovery_audit_events_are_redacted() {
+        let _guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-manual-audit-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+
+        record_manual_pause_audit_event("account-secret-user@example.com", true);
+        record_manual_recovery_audit_event(
+            "account-secret-user@example.com",
+            Some("gpt-5.5"),
+            true,
+        );
+
+        let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
+            .expect("manual audit log should be written");
+        assert!(audit.contains("\"phase\":\"manual_pause\""));
+        assert!(audit.contains("\"phase\":\"manual_recovery\""));
+        assert!(audit.contains("\"errorType\":\"manual_paused\""));
+        assert!(audit.contains("\"accountHash\":\"sha256:"));
+        for secret in ["account-secret-user@example.com", "@", "sk-"] {
+            assert!(!audit.contains(secret), "manual audit leaked {secret}");
+        }
+
+        match previous {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn health_summary_counts_statuses_and_redacts_sticky_account() {
         let now = 1_700_000_000_000;
         let mut registry = empty_health_registry(now);
@@ -13973,8 +16017,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         ];
         let summary = build_health_summary_from_registry_for_accounts(&registry, now, &account_ids);
 
-        assert_eq!(summary.healthy_count, 1);
-        assert_eq!(summary.estimated_available_count, 1);
+        assert_eq!(summary.healthy_count, 2);
+        assert_eq!(summary.estimated_available_count, 0);
         assert_eq!(summary.cooling_count, 0);
         assert_eq!(summary.active_model_cooldown_count, 0);
         assert_eq!(summary.nearest_cooldown_until_ms, None);
@@ -14155,6 +16199,50 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let rotated =
             fs::read_to_string(path.with_extension("jsonl.1")).expect("rotated audit log exists");
         assert!(rotated.contains("\"phase\":\"listener\""));
+    }
+
+    #[test]
+    fn audit_timestamp_reader_tolerates_concatenated_jsonl_objects() {
+        let path = temp_audit_path("concatenated");
+        let context = AuditContext {
+            request_id: "req-concat".to_string(),
+            route: "/v1/responses".to_string(),
+            model: "gpt-5.5".to_string(),
+            account_hash: "sha256:concat123".to_string(),
+        };
+        let first = build_audit_event(
+            DAY_WINDOW_MS,
+            &context,
+            "listener",
+            None,
+            None,
+            None,
+            Some("accepted"),
+            BTreeMap::new(),
+        );
+        let second = build_audit_event(
+            DAY_WINDOW_MS + 1,
+            &context,
+            "stream_write",
+            Some(200),
+            None,
+            Some("headers_written"),
+            Some("ok"),
+            BTreeMap::new(),
+        );
+        let content = format!(
+            "{}{}\n",
+            serde_json::to_string(&first).expect("first event should serialize"),
+            serde_json::to_string(&second).expect("second event should serialize")
+        );
+        fs::write(&path, content).expect("test audit log should be written");
+
+        assert_eq!(
+            first_audit_timestamp_from_path(&path).expect("timestamp should be readable"),
+            Some(DAY_WINDOW_MS)
+        );
+
+        let _ = fs::remove_file(path);
     }
 
     #[test]
@@ -15002,6 +17090,170 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             2
         );
         assert_eq!(build_routing_pool_account_ids(&collection).len(), 500);
+    }
+
+    #[test]
+    fn selector_audit_summary_records_redacted_counts_and_selected_reason() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        registry.accounts.insert(
+            "acc-sticky".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::Healthy,
+                estimated_remaining_percentage: Some(10),
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.accounts.insert(
+            "acc-cooling".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::CoolingDown,
+                cooldown_until_ms: Some(now + 60_000),
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        registry.accounts.insert(
+            "acc-disabled".to_string(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::Disabled,
+                updated_at: now,
+                ..CodexLocalAccessAccountHealth::default()
+            },
+        );
+        upsert_process_sticky_binding(&mut registry, "acc-sticky", now);
+
+        let candidate_ids = vec![
+            "acc-cooling".to_string(),
+            "acc-sticky".to_string(),
+            "acc-new".to_string(),
+            "acc-disabled".to_string(),
+        ];
+        let summary = build_selector_audit_summary(
+            &candidate_ids,
+            &registry,
+            Some("gpt-5.5"),
+            now,
+            3,
+            None,
+            false,
+        );
+        let selected_reason =
+            selector_selected_reason("acc-sticky", None, None, None, Some("acc-sticky"));
+        let detail = selector_audit_detail(&summary, selected_reason, "gpt-5.5");
+
+        assert_eq!(detail.get("candidate_count").map(String::as_str), Some("4"));
+        assert_eq!(detail.get("eligible_count").map(String::as_str), Some("2"));
+        assert_eq!(
+            detail.get("selected_reason").map(String::as_str),
+            Some("sticky_selected")
+        );
+        assert_eq!(detail.get("cap_applied").map(String::as_str), Some("true"));
+        assert_eq!(detail.get("cap_limit").map(String::as_str), Some("3"));
+
+        let skipped: Value = serde_json::from_str(
+            detail
+                .get("skipped_counts_by_reason")
+                .expect("skip counts should be serialized"),
+        )
+        .expect("skip counts should parse");
+        assert_eq!(skipped["health_skipped"], json!(1));
+        assert_eq!(skipped["cap_truncated"], json!(1));
+
+        let serialized = serde_json::to_string(&detail).expect("detail should serialize");
+        for secret in ["acc-sticky", "acc-cooling", "acc-disabled", "@", "sk-"] {
+            assert!(
+                !serialized.contains(secret),
+                "selector audit detail leaked sensitive value {secret}: {serialized}"
+            );
+        }
+    }
+
+    #[test]
+    fn selector_audit_reason_distinguishes_previous_response_and_sticky_clear() {
+        let now = 1_700_000_000_000;
+        let registry = empty_health_registry(now);
+        let candidate_ids = vec!["acc-prev".to_string()];
+        let summary = build_selector_audit_summary(
+            &candidate_ids,
+            &registry,
+            Some("gpt-5.5"),
+            now,
+            2,
+            Some("acc-prev"),
+            true,
+        );
+        let selected_reason =
+            selector_selected_reason("acc-prev", None, Some("acc-prev"), None, None);
+        let detail = selector_audit_detail(&summary, selected_reason, "gpt-5.5");
+
+        assert_eq!(
+            detail.get("selected_reason").map(String::as_str),
+            Some("previous_response_affinity_selected")
+        );
+        assert_eq!(
+            detail.get("sticky_cleared").map(String::as_str),
+            Some("true")
+        );
+
+        let skipped: Value = serde_json::from_str(
+            detail
+                .get("skipped_counts_by_reason")
+                .expect("skip counts should be serialized"),
+        )
+        .expect("skip counts should parse");
+        assert_eq!(skipped["sticky_cleared"], json!(1));
+        assert_eq!(
+            selector_selected_reason("acc-fill", None, None, None, None),
+            "fill_first_selected"
+        );
+    }
+
+    #[test]
+    fn selector_audit_summary_handles_large_pool_in_milliseconds() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        for index in 0..10 {
+            registry.accounts.insert(
+                format!("acc-{index:03}"),
+                CodexLocalAccessAccountHealth {
+                    status: CodexLocalAccessAccountHealthStatus::CoolingDown,
+                    cooldown_until_ms: Some(now + 60_000),
+                    updated_at: now,
+                    ..CodexLocalAccessAccountHealth::default()
+                },
+            );
+        }
+        let candidate_ids: Vec<String> = (0..600).map(|index| format!("acc-{index:03}")).collect();
+
+        let started = std::time::Instant::now();
+        let summary = build_selector_audit_summary(
+            &candidate_ids,
+            &registry,
+            Some("gpt-5.5"),
+            now,
+            24,
+            None,
+            false,
+        );
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(100),
+            "selector audit summary should remain a pure millisecond-scale pass"
+        );
+        assert_eq!(summary.candidate_count, 600);
+        assert_eq!(summary.eligible_count, 14);
+        assert!(summary.cap_applied);
+        assert_eq!(summary.cap_limit, 24);
+        assert_eq!(
+            summary.skipped_counts_by_reason.get("health_skipped"),
+            Some(&10)
+        );
+        assert_eq!(
+            summary.skipped_counts_by_reason.get("cap_truncated"),
+            Some(&576)
+        );
     }
 
     #[test]

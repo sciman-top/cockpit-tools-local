@@ -4,6 +4,7 @@ import {
   getCodexPlanFilterKey,
   isCodexApiKeyAccount,
   isCodexNewApiAccount,
+  isCodexQuotaLimitError,
 } from "../types/codex";
 
 export const CODEX_RECOMMENDED_SORT_BY = "recommended";
@@ -29,6 +30,11 @@ export interface CodexAccountSortOptions {
   groupSortMeta?: Map<string, CodexGroupSortMeta>;
   currentAccountId?: string | null;
   getSubscriptionTimestampMs?: (account: CodexAccount) => number | null | undefined;
+}
+
+export interface CodexLocalAccessRefreshSortOptions {
+  nowMs?: number;
+  accountOrderMeta?: Map<string, number>;
 }
 
 function toNullableSortNumber(value: number | null | undefined): number | null {
@@ -290,6 +296,170 @@ function getCodexQuotaResetSortValue(
       ? account.quota?.weekly_reset_time
       : account.quota?.hourly_reset_time,
   );
+}
+
+function getCodexEarliestQuotaResetSortValue(account: CodexAccount): number | null {
+  const values = [
+    getCodexQuotaResetSortValue(account, "hourly_reset"),
+    getCodexQuotaResetSortValue(account, "weekly_reset"),
+  ].filter((value): value is number => value != null);
+  if (values.length === 0) return null;
+  return Math.min(...values);
+}
+
+function normalizeCodexQuotaResetTimestampMs(
+  value: number | null | undefined,
+): number | null {
+  const normalized = toNullablePositiveSortNumber(value);
+  if (normalized == null) return null;
+  return normalized < 1_000_000_000_000 ? normalized * 1000 : normalized;
+}
+
+function getCodexEarliestQuotaResetMs(account: CodexAccount): number | null {
+  const values = [
+    normalizeCodexQuotaResetTimestampMs(account.quota?.hourly_reset_time),
+    normalizeCodexQuotaResetTimestampMs(account.quota?.weekly_reset_time),
+  ].filter((value): value is number => value != null);
+  if (values.length === 0) return null;
+  return Math.min(...values);
+}
+
+function getCodexLocalAccessRefreshPriorityBucket(
+  account: CodexAccount,
+  nowMs: number,
+): number {
+  if (isCodexApiKeyAccount(account)) return 99;
+  if (account.quota_error && !isCodexQuotaLimitError(account.quota_error)) {
+    return 0;
+  }
+  if (!account.quota) return 1;
+
+  const resetAtMs = getCodexEarliestQuotaResetMs(account);
+  if (resetAtMs != null && resetAtMs <= nowMs) return 2;
+
+  const quotaScore = getCodexAccountQuotaAvailabilityScore(account);
+  if (quotaScore === 0) return 3;
+  if (quotaScore != null && quotaScore <= 10) return 4;
+  return 5;
+}
+
+export function compareCodexAccountsByLocalAccessRefreshPriority(
+  left: CodexAccount,
+  right: CodexAccount,
+  options: CodexLocalAccessRefreshSortOptions = {},
+): number {
+  const nowMs = options.nowMs ?? Date.now();
+  const leftBucket = getCodexLocalAccessRefreshPriorityBucket(left, nowMs);
+  const rightBucket = getCodexLocalAccessRefreshPriorityBucket(right, nowMs);
+  if (leftBucket !== rightBucket) return leftBucket - rightBucket;
+
+  const resetDiff = compareNullableSortNumber(
+    getCodexEarliestQuotaResetMs(left),
+    getCodexEarliestQuotaResetMs(right),
+    "asc",
+  );
+  if (resetDiff !== 0) return resetDiff;
+
+  const quotaDiff = compareNullableSortNumber(
+    getCodexAccountQuotaAvailabilityScore(left),
+    getCodexAccountQuotaAvailabilityScore(right),
+    "asc",
+  );
+  if (quotaDiff !== 0) return quotaDiff;
+
+  const errorTimestampDiff = compareNullableSortNumber(
+    left.quota_error?.timestamp,
+    right.quota_error?.timestamp,
+    "asc",
+  );
+  if (errorTimestampDiff !== 0) return errorTimestampDiff;
+
+  const leftOrder = options.accountOrderMeta?.get(left.id);
+  const rightOrder = options.accountOrderMeta?.get(right.id);
+  const orderDiff = compareNullableSortNumber(leftOrder, rightOrder, "asc");
+  if (orderDiff !== 0) return orderDiff;
+
+  return compareCodexAccountTieBreak(left, right);
+}
+
+export function compareCodexAccountsByLocalAccessSchedule(
+  left: CodexAccount,
+  right: CodexAccount,
+  currentAccountId: string | null | undefined,
+): number {
+  const currentDiff = compareCodexCurrentAccountFirst(left, right, currentAccountId);
+  if (currentDiff !== 0) return currentDiff;
+
+  const quotaDiff = compareCodexAccountsByQuotaAvailability(left, right, "desc");
+  if (quotaDiff !== 0) return quotaDiff;
+
+  const resetDiff = compareNullableSortNumber(
+    getCodexEarliestQuotaResetSortValue(left),
+    getCodexEarliestQuotaResetSortValue(right),
+    "asc",
+  );
+  if (resetDiff !== 0) return resetDiff;
+
+  return compareCodexAccountTieBreak(left, right);
+}
+
+export function sortCodexLocalAccessAccountsForScheduling(
+  accounts: CodexAccount[],
+  currentAccountId: string | null | undefined,
+): CodexAccount[] {
+  return [...accounts].sort((left, right) =>
+    compareCodexAccountsByLocalAccessSchedule(left, right, currentAccountId),
+  );
+}
+
+export function sortCodexLocalAccessAccountIdsForScheduling(
+  accountIds: string[],
+  accounts: CodexAccount[],
+  currentAccountId: string | null | undefined,
+): string[] {
+  const accountById = new Map(accounts.map((account) => [account.id, account]));
+  const knownAccounts = accountIds
+    .map((accountId) => accountById.get(accountId))
+    .filter((account): account is CodexAccount => Boolean(account));
+  const sortedKnownIds = sortCodexLocalAccessAccountsForScheduling(
+    knownAccounts,
+    currentAccountId,
+  ).map((account) => account.id);
+  const missingIds = accountIds
+    .filter((accountId) => !accountById.has(accountId))
+    .sort((left, right) => left.localeCompare(right));
+  return [...sortedKnownIds, ...missingIds];
+}
+
+export function sortCodexLocalAccessAccountsForRefresh(
+  accounts: CodexAccount[],
+  options: CodexLocalAccessRefreshSortOptions = {},
+): CodexAccount[] {
+  return [...accounts].sort((left, right) =>
+    compareCodexAccountsByLocalAccessRefreshPriority(left, right, options),
+  );
+}
+
+export function sortCodexLocalAccessAccountIdsForRefresh(
+  accountIds: string[],
+  accounts: CodexAccount[],
+  nowMs: number = Date.now(),
+): string[] {
+  const accountById = new Map(accounts.map((account) => [account.id, account]));
+  const accountOrderMeta = new Map(
+    accountIds.map((accountId, index) => [accountId, index]),
+  );
+  const knownAccounts = accountIds
+    .map((accountId) => accountById.get(accountId))
+    .filter((account): account is CodexAccount => Boolean(account));
+  const sortedKnownIds = sortCodexLocalAccessAccountsForRefresh(knownAccounts, {
+    accountOrderMeta,
+    nowMs,
+  }).map((account) => account.id);
+  const missingIds = accountIds
+    .filter((accountId) => !accountById.has(accountId))
+    .sort((left, right) => left.localeCompare(right));
+  return [...sortedKnownIds, ...missingIds];
 }
 
 export function compareCodexAccountsByRecommendedSort(

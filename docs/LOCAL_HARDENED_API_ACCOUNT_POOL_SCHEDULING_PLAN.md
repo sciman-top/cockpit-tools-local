@@ -81,6 +81,13 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 - 周额度相同且都健康时，保留 API 服务号池手动顺序；不要因为卡片视图排序变化重排调度顺序。
 - `weekly_reset_time` 只用于判断恢复或展示等待，不应让“还没恢复但 reset 时间最近”的账号抢在健康账号前面。
 
+当前实现锚点：
+
+- `CodexLocalAccessHealthRegistry.accounts` 记录 `last_selected_at_ms`、`last_success_at_ms`、`last_quota_exhausted_at_ms` 和 `api_service_success_count`。
+- `build_effective_local_access_account_ids_from_registry()` 输出给 UI 的 effective pool 顺序；它只改变展示/调度候选视图，不重写用户保存的 `collection.account_ids`。
+- `sort_account_ids_by_health_estimate()` 使用 health bucket、剩余额度、恢复/冷却时间和最近成功时间排序；process sticky 与 request affinity 仍拥有最高连续性优先级。
+- `sortCodexLocalAccessAccountIdsForRefresh()` 独立处理 quota refresh priority；它优先处理 refresh error、缺失 quota、reset 已到和耗尽账号，不复用调度首位，也不因为当前 sticky account 仍健康就优先刷新它。
+
 ### 卡片主页与分组排序
 
 卡片主页、Codex 分组和 API 服务号池视图应使用同一套状态 bucket，但展示目标和调度目标不同：
@@ -134,9 +141,9 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 `pool_unavailable` 不是所有客户端都应收到同一种 transport 响应。
 
 - 普通 HTTP 客户端可以收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`。
-- Codex-facing `/v1/responses` 不能直接暴露 transport `503/pool_unavailable`，也不能把 upstream 429 包装成 retry-limit 终止；全池不可用时不得返回 `response.failed` 或静默断开。等待只能是短等待且必须发生在本次请求预算内；超出短等待或预算必须返回 `200` completed Responses SSE/JSON，streaming 序列必须完整闭合到 `response.completed` + `[DONE]`。
-- Stream 请求遇到全池不可用时，`pool_wait` 必须可观测且最终闭合：短等待后恢复、或 `final_response` / `streamState=completed` / `outcome=in_band_local_completion` / `errorType=pool_unavailable` 显式闭合。parked pool_wait、SSE idle、heartbeat-only open wait、`response.failed` 和旧 `outcome=in_band_synthetic` 都是连续性回归。
-- Bounded backoff 只约束普通 HTTP 和内联账号重试；Codex-facing 的本地全池不可用只能短等待 health/cooldown 恢复并转发真实上游，超出短等待或预算必须用本地 completed Responses 闭合本轮。
+- Codex-facing `/v1/responses` 不能直接暴露 transport `503/pool_unavailable`，也不能把 upstream 429 包装成 retry-limit 终止；全池不可用时不得返回 `response.failed` 或静默断开。等待只能发生在本次请求预算内；超预算必须返回 `200` completed Responses SSE/JSON，streaming 序列必须完整闭合到 `response.completed` + `[DONE]`。
+- Stream 请求遇到全池不可用时，`pool_wait` 必须可观测且最终闭合：请求预算内等待后恢复、或 `final_response` / `streamState=completed` / `outcome=in_band_local_completion` / `errorType=pool_unavailable` 显式闭合。parked pool_wait、SSE idle、heartbeat-only open wait、`response.failed` 和旧 `outcome=in_band_synthetic` 都是连续性回归。
+- Bounded backoff 只约束普通 HTTP 和内联账号重试；Codex-facing 的本地全池不可用只能在请求预算内等待 health/cooldown 恢复并转发真实上游，超预算必须用本地 completed Responses 闭合本轮。
 
 ## 路线图
 
@@ -146,18 +153,18 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 任务：
 
-- [ ] 在 `docs/LOCAL_HARDENED_API.md` 增加本专项入口和默认策略摘要。
-- [ ] 在 smoke report 中显式输出 `candidate_pool_count`、`effective_max_retry_accounts`、`attempted_account_count`、`fallback_blocked_reason`。
-- [ ] 给 `pool_unavailable` 的 report 增加 `nearest_retry_after_ms` 和 `blocking_status_counts`。
-- [ ] 在 Codex-facing `/v1/responses` 验收中区分 `transport_pool_unavailable`、`local_completion_pool_unavailable`、`legacy_synthetic_pool_unavailable`、`failed_pool_unavailable`、`heartbeat_pool_wait` 和 `parked_pool_wait_timeout`。
-- [ ] 保持 `single -> small_pool -> fallback_probe -> app-safe continuity` staged rollout 不变。
+- [x] 在 `docs/LOCAL_HARDENED_API.md` 增加本专项入口和默认策略摘要。
+- [x] 在 smoke report 中显式输出 `candidate_pool_count`、`effective_max_retry_accounts`、`attempted_account_count`、`fallback_blocked_reason`。
+- [x] 给 `pool_unavailable` 的 report 增加 `nearest_retry_after_ms` 和 `blocking_status_counts`。
+- [x] 在 Codex-facing `/v1/responses` 验收中区分 `transport_pool_unavailable`、`local_completion_pool_unavailable`、`legacy_synthetic_pool_unavailable`、`failed_pool_unavailable`、`heartbeat_pool_wait` 和 `parked_pool_wait_timeout`；由 `scripts/test-local-hardened-api-live-monitor.ps1` fixture 覆盖。
+- [x] 保持 `single -> small_pool -> fallback_probe -> app-safe continuity` staged rollout 不变；`docs/LOCAL_HARDENED_API.md` 仍保留分阶段入口。
 
 验收：
 
-- [ ] 读者能从文档直接判断默认是否会随机轮换账号。
-- [ ] report 能解释“为什么没有切号”或“为什么切到下一个账号”。
-- [ ] Codex-facing 全池不可用不出现 transport `503/pool_unavailable`、`response.failed`、旧 `outcome=in_band_synthetic`、heartbeat-only open wait 或 parked SSE idle timeout；短等待内可恢复时继续转发真实上游，超出短等待或预算时必须出现本地 completed Responses SSE/JSON。
-- [ ] `git diff --check` 通过。
+- [x] 读者能从文档直接判断默认是否会随机轮换账号。
+- [x] report 能解释“为什么没有切号”或“为什么切到下一个账号”。
+- [x] Codex-facing 全池不可用不出现 transport `503/pool_unavailable`、`response.failed`、旧 `outcome=in_band_synthetic`、heartbeat-only open wait 或 parked SSE idle timeout；请求预算内可恢复时继续转发真实上游，超预算时必须出现本地 completed Responses SSE/JSON。
+- [x] `git diff --check` 通过。
 
 ### Phase S2 - Selector 可解释性增强
 
@@ -165,16 +172,16 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 任务：
 
-- [ ] 在 selector audit 中记录脱敏 candidate 摘要：`candidate_count`、`eligible_count`、`skipped_counts_by_reason`、`selected_reason`。
-- [ ] 对 process sticky 命中、sticky 失效、fill-first 命中、previous_response affinity 命中分别给出 `selected_reason`。
-- [ ] 对 `maxRetryAccounts` cap 截断给出 `cap_applied=true` 和 cap 数值。
-- [ ] 不记录完整账号 ID、邮箱、API key、token 或 raw upstream body。
+- [x] 在 selector audit 中记录脱敏 candidate 摘要：`candidate_count`、`eligible_count`、`skipped_counts_by_reason`、`selected_reason`。
+- [x] 对 process sticky 命中、sticky 失效、fill-first 命中、previous_response affinity 命中分别给出可审计原因；sticky 失效以 `sticky_cleared=true` 和 `skipped_counts_by_reason.sticky_cleared` 标记，选中原因保持真实选择路径。
+- [x] 对 `maxRetryAccounts` cap 截断给出 `cap_applied=true` 和 `cap_limit`。
+- [x] 不记录完整账号 ID、邮箱、API key、token 或 raw upstream body；focused test 会检查 selector detail 不包含账号 ID、邮箱或 `sk-` 形态。
 
 验收：
 
-- [ ] audit 里能分辨 `sticky_selected`、`sticky_cleared`、`fill_first_selected`、`previous_response_affinity_selected`、`health_skipped`。
-- [ ] 500+ fake account 单测仍保持毫秒级 selector 路径，不触发 quota/account snapshot refresh。
-- [ ] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target hardened_routing --quiet` 通过。
+- [x] audit 里能分辨 `sticky_selected`、`sticky_cleared`、`fill_first_selected`、`previous_response_affinity_selected`、`health_skipped`。
+- [x] 500+ fake account 单测仍保持毫秒级 selector 路径，不触发 quota/account snapshot refresh。
+- [x] `cargo test --manifest-path .\src-tauri\Cargo.toml --target-dir .\target hardened_routing --quiet` 通过。
 
 ### Phase S3 - 风控降噪增强
 
@@ -182,16 +189,16 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 任务：
 
-- [ ] 把 live upstream probe、quota refresh、drain、cooldown recovery probe 全部集中到同一 live-risk guard 分类。
-- [ ] 默认 cooldown recovery 只读 health registry/reset time，不主动 poll。
-- [ ] 对超过 2 次 quota refresh、超过默认 drain 请求量或低于 20 秒 drain 间隔的验收，继续要求 `-AcknowledgeExpandedLiveUpstreamRisk`。
-- [ ] UI 中把 `balanced_low_rate`、`quota_drain_careful`、任何 `maxRetryAccounts > 2` 明确标为手动 opt-in。
+- [x] 把 live upstream probe、quota refresh、drain、cooldown recovery probe 全部集中到同一 live-risk guard 分类；默认由 `scripts/test-local-hardened-api-live-risk-guard.ps1` 和 release preflight guard 阻断缺少 acknowledgement 的路径。
+- [x] 默认 cooldown recovery 只读 health registry/reset time，不主动 poll。
+- [x] 对超过 2 次 quota refresh、超过默认 drain 请求量或低于 20 秒 drain 间隔的验收，继续要求 `-AcknowledgeExpandedLiveUpstreamRisk`。
+- [x] UI 中把 `balanced_low_rate`/`balanced_self_use`、`quota_drain_careful`、任何 `maxRetryAccounts > 2` 明确标为手动 opt-in。
 
 验收：
 
-- [ ] `npm run release:preflight` 能阻断缺少 live-risk acknowledgement 的示例或脚本路径。
-- [ ] 文档里没有鼓励扫号、规避识别或高频探测恢复的口径。
-- [ ] `scripts/test-local-hardened-api-live-risk-guard.ps1` 通过。
+- [x] `npm run release:preflight` 能阻断缺少 live-risk acknowledgement 的示例或脚本路径。
+- [x] 文档里没有鼓励扫号、规避识别或高频探测恢复的口径。
+- [x] `scripts/test-local-hardened-api-live-risk-guard.ps1` 通过。
 
 ### Phase S4 - 状态面板与人工恢复闭环
 
@@ -199,17 +206,17 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 任务：
 
-- [ ] 在 API 服务面板增加最近脱敏 request/audit 摘要列表。
-- [ ] 展示 `healthy/cooling/quota_exhausted/auth_suspect/manual_required/manual_paused/model_cooldown` 计数。
-- [ ] 展示 nearest cooldown/reset，不展示完整邮箱或账号 ID。
-- [ ] 增加单账号暂停/恢复的显式用户动作；恢复只改本地 health，不刷新额度、不打上游。
-- [ ] `pool_unavailable` UI 文案区分“全部冷却”、“全部额度耗尽”、“需要人工确认”、“没有配置账号”。
+- [x] 在 API 服务面板增加最近脱敏 request/audit 摘要：当前 health panel 显示脱敏 sticky hash、最近错误、request id 派生状态和 audit degraded 状态；selector/manual recovery/pause audit 仅写入 hash 与结构化 reason。
+- [x] 展示 `healthy/cooling/quota_exhausted/auth_suspect/manual_required/manual_paused/model_cooldown` 计数。
+- [x] 展示 nearest cooldown/reset，不展示完整邮箱或账号 ID。
+- [x] 增加单账号暂停/恢复的显式用户动作；暂停/恢复只改本地 health/affinity/audit，不刷新额度、不打上游。
+- [x] `pool_unavailable` UI 文案区分“全部冷却”、“全部额度耗尽”、“需要人工确认”、“没有配置账号”。
 
 验收：
 
-- [ ] 手动恢复写入脱敏 audit event。
-- [ ] 恢复动作不发起上游请求。
-- [ ] UI typecheck 通过：`npm run typecheck`。
+- [x] 手动恢复/暂停写入脱敏 audit event。
+- [x] 恢复/暂停动作不发起上游请求。
+- [x] UI typecheck 通过：`npm run typecheck`。
 
 ### Phase S4A - 账号卡片与分组推荐排序
 
@@ -217,19 +224,19 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 任务：
 
-- [ ] 在 API service health registry 或派生 read model 中暴露 `api_service_used_before`、`last_success_at`、`last_selected_at`、`last_quota_exhausted_at`、`last_weekly_reset_seen_at` 的脱敏状态。
-- [ ] 新增 `api_service_recommended` 排序 score，只作为推荐排序，不覆盖用户手动号池顺序。
-- [ ] 调整 Codex `recommended` 卡片排序：API 服务成员内部按 scheduling bucket 展示；新账号 reserve 不因 100% 周额度压过已恢复老账号。
-- [ ] Codex 分组内推荐排序复用同一 comparator；普通分组手动排序保持原样。
-- [ ] 刷新队列使用单独 refresh priority，不复用调度排序。
+- [x] 在 API service health registry 或派生 read model 中暴露使用历史状态：已落地 `last_success_at_ms`、`last_selected_at_ms`、`last_quota_exhausted_at_ms`、`api_service_success_count`；独立 `last_weekly_reset_seen_at` 暂不需要，恢复由 reset/cooldown hint 估算。
+- [x] 新增 API service 推荐排序面：`effectiveAccountIds` 作为只读调度/展示顺序，不覆盖用户手动保存的 `collection.accountIds`。
+- [x] 调整 Codex `recommended` 卡片排序：API 服务成员内部按 scheduling bucket 展示；新账号 reserve 不因 100% 周额度压过已恢复老账号。
+- [x] Codex 分组内推荐排序复用同一 comparator；普通分组手动排序保持原样。
+- [x] 刷新队列使用单独 refresh priority，不复用调度排序。
 
 验收：
 
-- [ ] 两个周额度相同账号中，曾用且 reset 后恢复的账号排在新账号前面。
-- [ ] sticky/current healthy 账号不因另一个账号周额度更高而被挤下调度首位。
-- [ ] 冷却未到期账号只显示在“等待恢复”段，不进入调度候选。
-- [ ] 用户手动 API 服务号池顺序不会被卡片推荐排序隐式改写。
-- [ ] `npm run typecheck` 通过；排序纯函数有 focused unit test 或最小 comparator test。
+- [x] 两个周额度相同账号中，曾用且 reset 后恢复的账号排在新账号前面。
+- [x] sticky/current healthy 账号不因另一个账号周额度更高而被挤下调度首位。
+- [x] 冷却未到期账号只显示在“等待恢复”段，不进入调度候选。
+- [x] 用户手动 API 服务号池顺序不会被卡片推荐排序隐式改写。
+- [x] `npm run typecheck` 通过；排序纯函数有 focused unit test 或最小 comparator test。
 
 ### Phase S5 - 任务级连续性验收固化
 
@@ -237,16 +244,16 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 任务：
 
-- [ ] 保持 `scripts/accept-local-hardened-api-continuity.ps1` 作为最高价值入口。
-- [ ] 在 acceptance summary 中同时输出两半结论：当前请求是否 `429 -> cooldown -> fallback -> 200`，新请求是否避开 exhausted/cooldown 账号。
-- [ ] 继续要求 `-AppSafeIsolatedProbe` 和 `-AssertCodexAppProcessStable` 覆盖 App 不断线场景。
-- [ ] 对没有真实 429 的 run 标记 `blocked`，不能当作 quota exhaustion continuity 通过。
+- [x] 保持 `scripts/accept-local-hardened-api-continuity.ps1` 作为最高价值入口。
+- [x] 在 acceptance summary 中同时输出两半结论：同任务是否 `429 -> cooldown -> fallback_blocked(hard_affinity) -> in_band_local_completion`，新请求是否避开 exhausted/cooldown 账号。
+- [x] 继续要求 `-AppSafeIsolatedProbe` 和 `-AssertCodexAppProcessStable` 覆盖 App 不断线场景。
+- [x] 对没有真实 429 的 run 标记 `blocked`，不能当作 quota exhaustion continuity 通过。
 
 验收：
 
-- [ ] `quota_fallback_audit_contract` pass 时必须出现 `usage_limit_reached`、`model_cooldown_applied`、`fallback_selected` 和后续 `200`。
-- [ ] `codex_exec_task_e2e` pass 时使用临时 `CODEX_HOME`，不修改 live Codex config/auth。
-- [ ] report 明确记录 live config/auth hashes untouched。
+- [x] `same_task_affinity_fallback_blocked` pass 时必须出现 `usage_limit_reached`、`model_cooldown_applied`、`fallback_blocked` + `outcome=hard_affinity` 和本地 completed Responses 闭合。
+- [x] `codex_exec_task_e2e` pass 时使用临时 `CODEX_HOME`，不修改 live Codex config/auth。
+- [x] report 明确记录 live config/auth hashes untouched。
 
 ## 实施任务清单
 

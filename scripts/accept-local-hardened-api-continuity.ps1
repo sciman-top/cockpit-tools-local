@@ -97,6 +97,30 @@ function Get-ResultStatus {
   "missing"
 }
 
+function New-AcceptanceContinuitySummary {
+  param([object]$Report)
+  if ($Report.continuitySummary) {
+    return $Report.continuitySummary
+  }
+
+  [ordered]@{
+    sameTaskAffinityFallbackBlocked = [ordered]@{
+      status = Get-ResultStatus $Report "same_task_affinity_fallback_blocked"
+      reason = "smoke report did not include continuitySummary; using same_task_affinity_fallback_blocked status"
+      evidence = [ordered]@{
+        audit = $Report.audit
+      }
+    }
+    newRequestAvoidsExhaustedCooldown = [ordered]@{
+      status = Get-ResultStatus $Report "new_request_avoids_exhausted_account"
+      reason = "smoke report did not include continuitySummary; using legacy new_request_avoids_exhausted_account status"
+      evidence = [ordered]@{
+        audit = $Report.audit
+      }
+    }
+  }
+}
+
 function Get-SmokeJsonFromStdout {
   param([string]$Path)
   if (-not (Test-Path -LiteralPath $Path)) {
@@ -216,6 +240,7 @@ if ($exitCode -ne 0) {
 }
 
 $report = Get-SmokeJsonFromStdout $stdoutPath
+$continuitySummary = New-AcceptanceContinuitySummary $report
 
 $summary = [ordered]@{
   overall = [string]$report.overall
@@ -226,11 +251,12 @@ $summary = [ordered]@{
   expandedLiveUpstreamRiskAcknowledged = [bool]$AcknowledgeExpandedLiveUpstreamRisk
   configuredAccountCount = [int]$report.temporaryFallbackConfig.accountCount
   drainRequested = [bool]$report.autoDrainFirstFreeAccountUntilFallback
-  drainResult = Get-ResultStatus $report "quota_drain_until_fallback"
-  quotaFallback = Get-ResultStatus $report "quota_fallback_audit_contract"
+  drainResult = Get-ResultStatus $report "quota_drain_until_hard_affinity_block"
+  sameTaskAffinity = Get-ResultStatus $report "same_task_affinity_fallback_blocked"
   codexExec = Get-ResultStatus $report "codex_exec_task_e2e"
   cliUntouched = Get-ResultStatus $report "codex_cli_config_auth_untouched"
   appStable = Get-ResultStatus $report "codex_app_process_stable"
+  continuitySummary = $continuitySummary
   gatewayStopped = [bool]$report.ephemeralGateway.stopped
   liveConfigRestored = [bool]$report.ephemeralGateway.restoredConfig
   tempRoot = $tempRoot

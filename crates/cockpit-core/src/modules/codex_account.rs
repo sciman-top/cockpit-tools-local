@@ -20,6 +20,13 @@ static CODEX_TOKEN_REFRESH_LOCKS: std::sync::LazyLock<
     Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static CODEX_AUTO_SWITCH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 const CODEX_QUOTA_ALERT_COOLDOWN_SECONDS: i64 = 300;
 const ACCOUNT_CHECK_URL: &str = "https://chatgpt.com/backend-api/wham/accounts/check";
 const API_KEY_LOGIN_PLAN_TYPE: &str = "API_KEY";
@@ -864,11 +871,7 @@ fn migrate_codex_data_if_needed(new_data_dir: &PathBuf) {
 
 /// 获取我们的多账号存储路径（统一使用 ~/.antigravity_cockpit/）
 fn get_accounts_storage_path() -> PathBuf {
-    let data_dir = account::get_data_dir().unwrap_or_else(|_| {
-        dirs::home_dir()
-            .expect("无法获取用户目录")
-            .join(".antigravity_cockpit")
-    });
+    let data_dir = get_codex_accounts_data_dir();
     fs::create_dir_all(&data_dir).ok();
     migrate_codex_data_if_needed(&data_dir);
     data_dir.join("codex_accounts.json")
@@ -876,14 +879,30 @@ fn get_accounts_storage_path() -> PathBuf {
 
 /// 获取账号详情存储目录（统一使用 ~/.antigravity_cockpit/codex_accounts/）
 fn get_accounts_dir() -> PathBuf {
-    let data_dir = account::get_data_dir().unwrap_or_else(|_| {
-        dirs::home_dir()
-            .expect("无法获取用户目录")
-            .join(".antigravity_cockpit")
-    });
+    let data_dir = get_codex_accounts_data_dir();
     let accounts_dir = data_dir.join("codex_accounts");
     fs::create_dir_all(&accounts_dir).ok();
     accounts_dir
+}
+
+fn get_codex_accounts_data_dir() -> PathBuf {
+    #[cfg(test)]
+    if let Some(from_test) =
+        TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE.with(|value| value.borrow().clone())
+    {
+        return from_test;
+    }
+
+    #[cfg(test)]
+    if let Ok(path) = std::env::var("COCKPIT_TOOLS_TEST_DATA_DIR") {
+        return PathBuf::from(path);
+    }
+
+    account::get_data_dir().unwrap_or_else(|_| {
+        dirs::home_dir()
+            .expect("无法获取用户目录")
+            .join(".antigravity_cockpit")
+    })
 }
 
 /// 解析 JWT Token 的 payload
@@ -2533,13 +2552,20 @@ enum CodexJsonImportCandidate {
 
 fn extract_account_note_from_value(value: &serde_json::Value) -> Option<String> {
     let obj = value.as_object()?;
-    ["account_note", "accountInfo", "account_info", "note", "notes", "remark"]
-        .iter()
-        .find_map(|key| {
-            obj.get(*key)
-                .and_then(|value| value.as_str())
-                .and_then(|value| normalize_optional_ref(Some(value)))
-        })
+    [
+        "account_note",
+        "accountInfo",
+        "account_info",
+        "note",
+        "notes",
+        "remark",
+    ]
+    .iter()
+    .find_map(|key| {
+        obj.get(*key)
+            .and_then(|value| value.as_str())
+            .and_then(|value| normalize_optional_ref(Some(value)))
+    })
 }
 
 fn extract_refresh_token_only_from_value(value: &serde_json::Value) -> Option<String> {
@@ -2630,9 +2656,7 @@ async fn import_codex_candidate(
         CodexJsonImportCandidate::RefreshToken {
             refresh_token,
             account_note,
-        } => {
-            upsert_account_from_refresh_token(refresh_token, account_note).await
-        }
+        } => upsert_account_from_refresh_token(refresh_token, account_note).await,
     }
 }
 
@@ -2873,8 +2897,9 @@ fn extract_codex_tokens_from_value(
 mod tests {
     use super::{
         build_account_storage_id, extract_codex_tokens_from_value, get_accounts_dir,
-        get_accounts_storage_path, get_current_account, list_accounts_checked, load_account,
-        load_account_index, read_api_provider_from_config_toml, read_quick_config_from_config_toml,
+        get_accounts_storage_path, get_codex_accounts_data_dir, get_current_account,
+        list_accounts_checked, load_account, load_account_index,
+        read_api_provider_from_config_toml, read_quick_config_from_config_toml,
         resolve_api_provider_config, save_account, save_account_index, sync_account_from_auth_dir,
         sync_managed_projection_from_auth_dir, validate_api_key_credentials,
         write_account_bundle_to_dir, write_api_provider_to_config_toml,
@@ -2914,12 +2939,17 @@ mod tests {
         fn new(prefix: &str) -> Self {
             let home_dir = make_temp_dir(prefix);
             let codex_home = home_dir.join(".codex");
+            let accounts_data_dir = home_dir.join(".antigravity_cockpit");
             fs::create_dir_all(&codex_home).expect("create codex home");
+            fs::create_dir_all(&accounts_data_dir).expect("create accounts data dir");
 
             let previous_home = std::env::var("HOME").ok();
             let previous_codex_home = std::env::var("CODEX_HOME").ok();
             std::env::set_var("HOME", &home_dir);
             std::env::set_var("CODEX_HOME", &codex_home);
+            super::TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE.with(|value| {
+                *value.borrow_mut() = Some(accounts_data_dir);
+            });
 
             Self {
                 home_dir,
@@ -2931,10 +2961,17 @@ mod tests {
         fn codex_home(&self) -> std::path::PathBuf {
             self.home_dir.join(".codex")
         }
+
+        fn accounts_data_dir(&self) -> std::path::PathBuf {
+            self.home_dir.join(".antigravity_cockpit")
+        }
     }
 
     impl Drop for TestEnvGuard {
         fn drop(&mut self) {
+            super::TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE.with(|value| {
+                *value.borrow_mut() = None;
+            });
             match self.previous_home.as_ref() {
                 Some(value) => std::env::set_var("HOME", value),
                 None => std::env::remove_var("HOME"),
@@ -3015,6 +3052,20 @@ mod tests {
         save_account_index(&index).expect("save index");
 
         account
+    }
+
+    #[test]
+    fn codex_account_storage_uses_test_data_dir_override() {
+        let _lock = TEST_ENV_LOCK.lock().expect("test env lock");
+        let env = TestEnvGuard::new("codex-account-storage-isolation-test");
+        let expected_data_dir = env.accounts_data_dir();
+
+        assert_eq!(get_codex_accounts_data_dir(), expected_data_dir);
+        assert_eq!(
+            get_accounts_storage_path(),
+            expected_data_dir.join("codex_accounts.json")
+        );
+        assert_eq!(get_accounts_dir(), expected_data_dir.join("codex_accounts"));
     }
 
     fn write_oauth_auth_file(base_dir: &std::path::Path, tokens: &CodexTokens, account_id: &str) {

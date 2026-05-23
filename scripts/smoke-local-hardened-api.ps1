@@ -253,7 +253,7 @@ function Get-CodexAppProcessGuardState {
   param([string[]]$ProcessNames)
   $items = @()
   foreach ($name in $ProcessNames) {
-    $items += @(Get-Process -Name $name -ErrorAction SilentlyContinue | ForEach-Object {
+    $items += @(Get-Process -Name $name -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -ceq $name } | ForEach-Object {
       [ordered]@{
         processName = $_.ProcessName
         id = $_.Id
@@ -367,8 +367,8 @@ function Set-TemporaryFallbackProbeConfig {
 
   $config = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
   $accountCount = if ($config.accountIds) { @($config.accountIds).Count } else { 0 }
-  if ($accountCount -lt 1 -or $accountCount -gt 3) {
-    throw "fallback_probe 需要手动配置 1 到 3 个 API 服务号池账号，当前 accountCount=$accountCount；请先在 Cockpit API 服务号池中调整账号后再运行验收"
+  if ($accountCount -lt 1) {
+    throw "fallback_probe 需要至少 1 个手动配置的 API 服务号池账号，当前 accountCount=$accountCount；请先在 Cockpit API 服务号池中添加账号后再运行验收"
   }
 
   if ($null -eq $config.safetyConfig) {
@@ -592,7 +592,7 @@ function Get-ScopedHealthFileSummary {
           "auth_suspect" { $summary.authSuspectCount++ }
           "manual_required" { $summary.manualRequiredCount++ }
           "disabled" { $summary.disabledCount++ }
-          default { $summary.estimatedAvailableCount++ }
+          default { $summary.healthyCount++ }
         }
         if ($account.manualRequired -and [string]$account.status -ne "manual_required") {
           $summary.manualRequiredCount++
@@ -611,7 +611,7 @@ function Get-ScopedHealthFileSummary {
     foreach ($accountId in $accountIds) {
       $value = [string]$accountId
       if ($value.Trim() -and -not $observed.ContainsKey($value)) {
-        $summary.estimatedAvailableCount++
+        $summary.healthyCount++
       }
     }
 
@@ -654,6 +654,12 @@ function Get-AuditTailSummary {
     } catch {
     }
   }
+  $attemptedAccountHashes = @(
+    $events |
+      ForEach-Object { $_.accountHash } |
+      Where-Object { $_ -and [string]$_ -ne "-" } |
+      Select-Object -Unique
+  )
   [ordered]@{
     exists = $true
     length = $item.Length
@@ -661,7 +667,86 @@ function Get-AuditTailSummary {
     phases = @($events | ForEach-Object { $_.phase } | Where-Object { $_ } | Select-Object -Unique)
     errorTypes = @($events | ForEach-Object { $_.errorType } | Where-Object { $_ } | Select-Object -Unique)
     statuses = @($events | ForEach-Object { $_.status } | Where-Object { $null -ne $_ } | Select-Object -Unique)
+    attemptedAccountCount = $attemptedAccountHashes.Count
+    attemptedAccountHashes = @($attemptedAccountHashes)
     hasSensitiveMarkers = [bool](@($events | ConvertTo-Json -Depth 8) -match '(authorization|cookie|token|api[_-]?key|sk-[A-Za-z0-9])')
+  }
+}
+
+function Get-SmokeResultByName {
+  param([object[]]$Results, [string]$Name)
+  @($Results | Where-Object { $_.name -eq $Name } | Select-Object -First 1)
+}
+
+function Get-SmokeFallbackBlockedReason {
+  param([object[]]$Results)
+  $sameTask = Get-SmokeResultByName $Results "same_task_affinity_fallback_blocked"
+  if ($sameTask -and $sameTask.status -eq "pass") {
+    return $null
+  }
+  if ($sameTask -and $sameTask.reason) {
+    return [string]$sameTask.reason
+  }
+  if (-not $RunUpstreamSmoke -and -not $RunCodexExecSmoke) {
+    return "upstream_probe_not_requested"
+  }
+  if ($Stage -eq "single") {
+    return "single_stage_account_pool"
+  }
+  $null
+}
+
+function Test-SmokeValidAccountHash {
+  param([object]$Value)
+  $text = [string]$Value
+  $text -and $text -ne "-" -and $text -match '^sha256:'
+}
+
+function Test-SmokeUsageLimitEvent {
+  param([object]$Event)
+  [string]$Event.errorType -eq "usage_limit_reached" -or
+    [string]$Event.errorType -eq "insufficient_quota" -or
+    [string]$Event.detail.provider_code -eq "usage_limit_reached" -or
+    [string]$Event.detail.provider_code -eq "insufficient_quota"
+}
+
+function New-SmokeRoutingReport {
+  param($Config, [object[]]$Results, $AuditSummary)
+  $accountIds = if ($Config -and $Config.accountIds) { @($Config.accountIds) } else { @() }
+  $safety = if ($Config) { $Config.safetyConfig } else { $null }
+  $rawMaxRetryAccounts = if ($safety -and $safety.maxRetryAccounts) {
+    [int]$safety.maxRetryAccounts
+  } else {
+    1
+  }
+  $effectiveMaxRetryAccounts = [Math]::Max($rawMaxRetryAccounts, 2)
+  [ordered]@{
+    candidate_pool_count = $accountIds.Count
+    effective_max_retry_accounts = $effectiveMaxRetryAccounts
+    attempted_account_count = if ($AuditSummary -and $AuditSummary.exists) { [int]$AuditSummary.attemptedAccountCount } else { 0 }
+    fallback_blocked_reason = Get-SmokeFallbackBlockedReason $Results
+    stage = $Stage
+    fallback_mode = if ($safety -and $safety.fallbackMode) { [string]$safety.fallbackMode } else { $null }
+  }
+}
+
+function New-SmokePoolUnavailableReport {
+  param($HealthSummary)
+  $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $nearestRetryAfterMs = $null
+  if ($HealthSummary -and $HealthSummary.nearestCooldownUntilMs) {
+    $nearestRetryAfterMs = [Math]::Max(0, [int64]$HealthSummary.nearestCooldownUntilMs - $nowMs)
+  }
+  [ordered]@{
+    nearest_retry_after_ms = $nearestRetryAfterMs
+    blocking_status_counts = [ordered]@{
+      cooling = if ($HealthSummary) { [int]$HealthSummary.coolingCount } else { 0 }
+      exhausted = if ($HealthSummary) { [int]$HealthSummary.exhaustedCount } else { 0 }
+      auth_suspect = if ($HealthSummary) { [int]$HealthSummary.authSuspectCount } else { 0 }
+      manual_required = if ($HealthSummary) { [int]$HealthSummary.manualRequiredCount } else { 0 }
+      disabled = if ($HealthSummary) { [int]$HealthSummary.disabledCount } else { 0 }
+      model_cooldown = if ($HealthSummary) { [int]$HealthSummary.activeModelCooldownCount } else { 0 }
+    }
   }
 }
 
@@ -687,18 +772,173 @@ function Get-QuotaFallbackAuditEvidence {
   $has200 = [bool](@($events | Where-Object { $_.status -eq 200 }).Count)
   $hasModelCooldown = [bool](@($events | Where-Object { $_.phase -eq "model_cooldown_applied" }).Count)
   $hasFallbackSelected = [bool](@($events | Where-Object { $_.phase -eq "fallback_selected" }).Count)
+  $hasFallbackBlocked = [bool](@($events | Where-Object { $_.phase -eq "fallback_blocked" }).Count)
+  $hasHardAffinityFallbackBlocked = [bool](@($events | Where-Object { $_.phase -eq "fallback_blocked" -and $_.outcome -eq "hard_affinity" }).Count)
   $hasUsageLimit = [bool](@($events | Where-Object { $_.errorType -eq "usage_limit_reached" }).Count)
   $first429Index = -1
   $first200After429Index = -1
+  $firstBlockedAccountIndex = -1
+  $blockedAccountHashes = @()
+  $blockedAccountRecords = @()
+  $fallbackCycleCount = 0
+  $sameTaskAffinityBlockTransitions = @()
+  $healthyAccountHashesAfterFallback = @()
   for ($i = 0; $i -lt $events.Count; $i++) {
-    if ($first429Index -lt 0 -and $events[$i].status -eq 429) {
+    $event = $events[$i]
+    if ($first429Index -lt 0 -and $event.status -eq 429) {
       $first429Index = $i
     }
-    if ($first429Index -ge 0 -and $i -gt $first429Index -and $events[$i].status -eq 200) {
+    if ($first429Index -ge 0 -and $i -gt $first429Index -and $event.status -eq 200) {
       $first200After429Index = $i
       break
     }
   }
+  for ($i = 0; $i -lt $events.Count; $i++) {
+    $event = $events[$i]
+    $isBlockingAccountEvent = (Test-SmokeValidAccountHash $event.accountHash) -and (
+      ($event.status -eq 429 -and (Test-SmokeUsageLimitEvent $event)) -or
+      $event.phase -eq "model_cooldown_applied" -or
+      $event.phase -eq "fallback_selected" -or
+      $event.phase -eq "fallback_blocked"
+    )
+    if ($isBlockingAccountEvent) {
+      if ($firstBlockedAccountIndex -lt 0) {
+        $firstBlockedAccountIndex = $i
+      }
+      $blockedAccountHashes += $event.accountHash
+      $blockedAccountRecords += [ordered]@{
+        index = $i
+        accountHash = $event.accountHash
+        requestId = $event.requestId
+        phase = $event.phase
+      }
+    }
+
+    if ($event.phase -eq "fallback_selected") {
+      $next200 = $null
+      for ($j = $i + 1; $j -lt $events.Count; $j++) {
+        $candidate = $events[$j]
+        if ($candidate.requestId -ne $event.requestId) {
+          continue
+        }
+        if ($candidate.phase -eq "listener") {
+          break
+        }
+        if ($candidate.status -eq 200 -and (Test-SmokeValidAccountHash $candidate.accountHash)) {
+          $next200 = $candidate
+          break
+        }
+      }
+      if ($next200 -and (Test-SmokeValidAccountHash $event.accountHash) -and $next200.accountHash -ne $event.accountHash) {
+        $fallbackCycleCount++
+        $healthyAccountHashesAfterFallback += $next200.accountHash
+      }
+    }
+    if ($event.phase -eq "fallback_blocked" -and $event.outcome -eq "hard_affinity") {
+      $localCompletion = $null
+      for ($j = $i + 1; $j -lt $events.Count; $j++) {
+        $candidate = $events[$j]
+        if ($candidate.requestId -ne $event.requestId) {
+          continue
+        }
+        if ($candidate.phase -eq "listener") {
+          break
+        }
+        if (
+          $candidate.status -eq 200 -and
+          $candidate.errorType -eq "pool_unavailable" -and
+          ($candidate.streamState -eq "completed" -or $candidate.outcome -eq "in_band_local_completion" -or ($candidate | ConvertTo-Json -Depth 10 -Compress) -match 'response\.completed')
+        ) {
+          $localCompletion = $candidate
+          break
+        }
+      }
+      $sameTaskAffinityBlockTransitions += [ordered]@{
+        requestId = $event.requestId
+        blockedAccountHash = $event.accountHash
+        localCompletionAccountHash = if ($localCompletion) { $localCompletion.accountHash } else { $null }
+        completedLocally = [bool]($null -ne $localCompletion)
+      }
+    }
+  }
+  $blockedAccountHashes = @($blockedAccountHashes | Sort-Object -Unique)
+
+  $newRequestGroups = @{}
+  for ($i = 0; $i -lt $events.Count; $i++) {
+    $event = $events[$i]
+    $requestId = [string]$event.requestId
+    if (-not $requestId -or $requestId -eq "-") {
+      continue
+    }
+    if (-not $newRequestGroups.ContainsKey($requestId)) {
+      $newRequestGroups[$requestId] = [ordered]@{
+        requestId = $requestId
+        firstIndex = $i
+        accountEvents = @()
+      }
+    }
+    $group = $newRequestGroups[$requestId]
+    if (Test-SmokeValidAccountHash $event.accountHash) {
+      $serializedEvent = $event | ConvertTo-Json -Depth 10 -Compress
+      $isLocalPoolUnavailable = $event.errorType -eq "pool_unavailable" -or $serializedEvent -match 'pool_unavailable|API 服务号池|API 服务账号均在冷却|可用账号均在冷却|本地接入集合暂无可用账号'
+      $group.accountEvents += [ordered]@{
+        accountHash = $event.accountHash
+        status = $event.status
+        isLocalPoolUnavailable = [bool]$isLocalPoolUnavailable
+      }
+    }
+  }
+
+  $newRequestAvoidance = @()
+  $newRequestBlockedReuse = @()
+  if ($firstBlockedAccountIndex -ge 0) {
+    foreach ($group in $newRequestGroups.Values) {
+      if ($group.firstIndex -le $firstBlockedAccountIndex) {
+        continue
+      }
+      $knownBlockedBeforeRequest = @(
+        $blockedAccountRecords |
+          Where-Object { $_.index -lt $group.firstIndex } |
+          ForEach-Object { $_.accountHash } |
+          Sort-Object -Unique
+      )
+      $blockedUsed = @(
+        $group.accountEvents |
+          Where-Object { $knownBlockedBeforeRequest -contains $_.accountHash } |
+          ForEach-Object { $_.accountHash } |
+          Sort-Object -Unique
+      )
+      $healthyUsed = @(
+        $group.accountEvents |
+          Where-Object { $_.status -eq 200 -and -not $_.isLocalPoolUnavailable -and $knownBlockedBeforeRequest -notcontains $_.accountHash } |
+          ForEach-Object { $_.accountHash } |
+          Sort-Object -Unique
+      )
+      if ($blockedUsed.Count -gt 0) {
+        $newRequestBlockedReuse += [ordered]@{
+          requestId = $group.requestId
+          blockedAccountHashes = @($blockedUsed)
+          knownBlockedBeforeRequest = @($knownBlockedBeforeRequest)
+        }
+      } elseif ($healthyUsed.Count -gt 0) {
+        $newRequestAvoidance += [ordered]@{
+          requestId = $group.requestId
+          knownBlockedBeforeRequest = @($knownBlockedBeforeRequest)
+          healthyAccountHashes = @($healthyUsed)
+        }
+      }
+    }
+  }
+
+  $currentPass = $has429 -and $has200 -and $hasUsageLimit -and $hasModelCooldown -and $hasFallbackSelected -and ($first200After429Index -gt $first429Index -and $first429Index -ge 0) -and $fallbackCycleCount -gt 0
+  $newRequestAvoidancePass = $newRequestAvoidance.Count -gt 0 -and $newRequestBlockedReuse.Count -eq 0
+  $completedSameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.completedLocally })
+  $distinctHealthyAccountHashesAfterBlock = @(
+    $newRequestAvoidance |
+      ForEach-Object { $_.healthyAccountHashes } |
+      Sort-Object -Unique
+  )
+  $sameTaskPass = $has429 -and $hasUsageLimit -and $hasModelCooldown -and $completedSameTaskAffinityBlocks.Count -gt 0
 
   [ordered]@{
     auditPath = $Path
@@ -709,22 +949,42 @@ function Get-QuotaFallbackAuditEvidence {
     hasUsageLimitReached = $hasUsageLimit
     hasModelCooldownApplied = $hasModelCooldown
     hasFallbackSelected = $hasFallbackSelected
-    has200After429 = ($first200After429Index -gt $first429Index -and $first429Index -ge 0)
-    pass = ($has429 -and $has200 -and $hasUsageLimit -and $hasModelCooldown -and $hasFallbackSelected -and ($first200After429Index -gt $first429Index -and $first429Index -ge 0))
+    hasFallbackBlocked = $hasFallbackBlocked
+    hasHardAffinityFallbackBlocked = $hasHardAffinityFallbackBlocked
+    legacyHas200After429 = ($first200After429Index -gt $first429Index -and $first429Index -ge 0)
+    fallbackCycleCount = $fallbackCycleCount
+    distinctHealthyAccountCountAfterFallback = @($healthyAccountHashesAfterFallback | Sort-Object -Unique).Count
+    sameTaskAffinityFallbackBlockedCount = $sameTaskAffinityBlockTransitions.Count
+    sameTaskAffinityLocalCompletionCount = $completedSameTaskAffinityBlocks.Count
+    sameTaskAffinityFallbackBlockedRequestIds = @($sameTaskAffinityBlockTransitions | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sameTaskAffinityFallbackBlockedTransitions = @($sameTaskAffinityBlockTransitions)
+    distinctHealthyAccountCountAfterBlock = $distinctHealthyAccountHashesAfterBlock.Count
+    distinctHealthyAccountHashesAfterBlock = @($distinctHealthyAccountHashesAfterBlock)
+    blockedAccountCount = $blockedAccountHashes.Count
+    blockedAccountHashes = @($blockedAccountHashes)
+    newRequestAvoidanceCount = $newRequestAvoidance.Count
+    newRequestAvoidanceRequestIds = @($newRequestAvoidance | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    newRequestBlockedReuseCount = $newRequestBlockedReuse.Count
+    newRequestBlockedReuseRequestIds = @($newRequestBlockedReuse | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    newRequestAvoidance = @($newRequestAvoidance)
+    newRequestBlockedReuse = @($newRequestBlockedReuse)
+    newRequestAvoidancePass = $newRequestAvoidancePass
+    legacySameRequestFallbackPass = $currentPass
+    pass = $sameTaskPass
   }
 }
 
 function Test-QuotaFallbackAudit {
   param([string]$Path)
-  $result = New-SmokeResult "quota_fallback_audit_contract"
+  $result = New-SmokeResult "same_task_affinity_fallback_blocked"
   if (-not $RequireQuotaFallback) {
-    Set-SmokeSkipped $result "未传入 -RequireQuotaFallback；不强制要求本次 run 出现真实 429->fallback->200"
+    Set-SmokeSkipped $result "未传入 -RequireQuotaFallback；不强制要求本次 run 出现同任务 hard-affinity 429 闭合"
     return $result
   }
 
   $evidence = Get-QuotaFallbackAuditEvidence $Path
   if (-not $evidence.auditExists) {
-    Set-SmokeBlocked $result "缺少 audit 文件，无法证明额度耗尽后的 fallback" $evidence
+    Set-SmokeBlocked $result "缺少 audit 文件，无法证明额度耗尽后的同任务 hard-affinity 行为" $evidence
     return $result
   }
 
@@ -733,8 +993,70 @@ function Test-QuotaFallbackAudit {
     return $result
   }
 
-  Set-SmokeBlocked $result "本次 run 未证明真实额度耗尽后 fallback；需要选入第一个会返回 429 的 OAuth 账号和第二个会返回 200 的 OAuth 账号" $evidence
+  Set-SmokeBlocked $result "本次 run 未证明同任务额度耗尽后阻止切号并以本地 completed Responses 闭合" $evidence
   $result
+}
+
+function Test-NewRequestAvoidanceAudit {
+  param([string]$Path)
+  $result = New-SmokeResult "new_request_avoids_exhausted_account"
+  if (-not $RequireQuotaFallback) {
+    Set-SmokeSkipped $result "未传入 -RequireQuotaFallback；不强制要求观察后续新请求避开 exhausted/cooldown 账号"
+    return $result
+  }
+
+  $evidence = Get-QuotaFallbackAuditEvidence $Path
+  if (-not $evidence.auditExists) {
+    Set-SmokeBlocked $result "缺少 audit 文件，无法证明后续新请求调度行为" $evidence
+    return $result
+  }
+
+  if ($evidence.newRequestBlockedReuseCount -gt 0) {
+    Set-SmokeFail $result "后续新请求仍命中过已 exhausted/cooldown 的账号" $evidence
+    return $result
+  }
+
+  if ($evidence.newRequestAvoidancePass) {
+    Set-SmokePass $result $evidence
+    return $result
+  }
+
+  Set-SmokeBlocked $result "本次 run 未观察到后续新请求避开 exhausted/cooldown 账号" $evidence
+  $result
+}
+
+function New-SmokeContinuitySummary {
+  param($AuditEvidence, [object[]]$Results)
+  $sameTask = Get-SmokeResultByName $Results "same_task_affinity_fallback_blocked"
+  $newRequest = Get-SmokeResultByName $Results "new_request_avoids_exhausted_account"
+
+  [ordered]@{
+    sameTaskAffinityFallbackBlocked = [ordered]@{
+      status = if ($sameTask) { [string]$sameTask.status } else { "missing" }
+      reason = if ($sameTask) { $sameTask.reason } else { "same_task_affinity_fallback_blocked result missing" }
+      evidence = [ordered]@{
+        has429 = if ($AuditEvidence) { [bool]$AuditEvidence.has429 } else { $false }
+        hasUsageLimitReached = if ($AuditEvidence) { [bool]$AuditEvidence.hasUsageLimitReached } else { $false }
+        hasModelCooldownApplied = if ($AuditEvidence) { [bool]$AuditEvidence.hasModelCooldownApplied } else { $false }
+        hasFallbackBlocked = if ($AuditEvidence) { [bool]$AuditEvidence.hasFallbackBlocked } else { $false }
+        hasHardAffinityFallbackBlocked = if ($AuditEvidence) { [bool]$AuditEvidence.hasHardAffinityFallbackBlocked } else { $false }
+        sameTaskAffinityFallbackBlockedCount = if ($AuditEvidence) { [int]$AuditEvidence.sameTaskAffinityFallbackBlockedCount } else { 0 }
+        sameTaskAffinityLocalCompletionCount = if ($AuditEvidence) { [int]$AuditEvidence.sameTaskAffinityLocalCompletionCount } else { 0 }
+        sameTaskAffinityFallbackBlockedRequestIds = if ($AuditEvidence) { @($AuditEvidence.sameTaskAffinityFallbackBlockedRequestIds) } else { @() }
+      }
+    }
+    newRequestAvoidsExhaustedCooldown = [ordered]@{
+      status = if ($newRequest) { [string]$newRequest.status } else { "missing" }
+      reason = if ($newRequest) { $newRequest.reason } else { "new_request_avoids_exhausted_account result missing" }
+      evidence = [ordered]@{
+        blockedAccountCount = if ($AuditEvidence) { [int]$AuditEvidence.blockedAccountCount } else { 0 }
+        newRequestAvoidanceCount = if ($AuditEvidence) { [int]$AuditEvidence.newRequestAvoidanceCount } else { 0 }
+        newRequestAvoidanceRequestIds = if ($AuditEvidence) { @($AuditEvidence.newRequestAvoidanceRequestIds) } else { @() }
+        newRequestBlockedReuseCount = if ($AuditEvidence) { [int]$AuditEvidence.newRequestBlockedReuseCount } else { 0 }
+        newRequestBlockedReuseRequestIds = if ($AuditEvidence) { @($AuditEvidence.newRequestBlockedReuseRequestIds) } else { @() }
+      }
+    }
+  }
 }
 
 function ConvertTo-RedactedText {
@@ -824,12 +1146,12 @@ function Test-LocalAccessConfigContract {
       return $result
     }
     if ($effectiveMaxRetryAccounts -lt 2) {
-      Set-SmokeBlocked $result "small_pool 阶段要求有效 maxRetryAccounts >= 2，以覆盖无感当前请求 failover" $evidence
+      Set-SmokeBlocked $result "small_pool 阶段要求有效 maxRetryAccounts >= 2，以覆盖新 admission 的账号尝试上限" $evidence
       return $result
     }
   } elseif ($Stage -eq "fallback_probe") {
-    if ($accountCount -lt 1 -or $accountCount -gt 3) {
-      Set-SmokeBlocked $result "fallback_probe 阶段要求 accountIds 为 1 到 3 个" $evidence
+    if ($accountCount -lt 1) {
+      Set-SmokeBlocked $result "fallback_probe 阶段要求 accountIds 至少 1 个" $evidence
       return $result
     }
     if ($effectiveMaxRetryAccounts -lt 2) {
@@ -913,7 +1235,7 @@ function Invoke-UpstreamChatSmoke {
   param([string]$ResolvedBaseUrl, [string]$ResolvedApiKey, [string]$Model)
   $result = New-SmokeResult "single_account_upstream_chat"
   if ($AutoDrainFirstFreeAccountUntilFallback) {
-    Set-SmokeSkipped $result "已启用 -AutoDrainFirstFreeAccountUntilFallback；由 quota_drain_until_fallback 执行真实上游请求"
+    Set-SmokeSkipped $result "已启用 -AutoDrainFirstFreeAccountUntilFallback；由 quota_drain_until_hard_affinity_block 执行真实上游请求"
     return $result
   }
   if (-not $RunUpstreamSmoke) {
@@ -968,7 +1290,7 @@ function Invoke-UpstreamChatSmoke {
 
 function Invoke-QuotaDrainUntilFallback {
   param([string]$ResolvedBaseUrl, [string]$ResolvedApiKey, [string]$Model, [string]$AuditPath)
-  $result = New-SmokeResult "quota_drain_until_fallback"
+  $result = New-SmokeResult "quota_drain_until_hard_affinity_block"
   if (-not $AutoDrainFirstFreeAccountUntilFallback) {
     Set-SmokeSkipped $result "未传入 -AutoDrainFirstFreeAccountUntilFallback；不主动消耗第一个 free 账号"
     return $result
@@ -1032,7 +1354,7 @@ function Invoke-QuotaDrainUntilFallback {
   }
 
   $finalAuditEvidence = Get-QuotaFallbackAuditEvidence $AuditPath
-  Set-SmokeBlocked $result "第一个 free 账号在最大消耗请求数内未触发 429->fallback->200；为避免过度请求已停止" @{
+  Set-SmokeBlocked $result "第一个 free 账号在最大消耗请求数内未触发同任务 hard-affinity 429 闭合；为避免过度请求已停止" @{
     uri = $uri
     model = $Model
     requestCount = $AutoDrainMaxRequests
@@ -1377,6 +1699,7 @@ try {
   $healthSummary = Get-ScopedHealthFileSummary $config $healthPath
   $auditSummary = Get-AuditTailSummary $auditPath
   $results += Test-QuotaFallbackAudit $auditPath
+  $results += Test-NewRequestAvoidanceAudit $auditPath
 } finally {
   if ($StartEphemeralGateway) {
     Stop-EphemeralGateway $ephemeralGateway
@@ -1401,6 +1724,7 @@ $overall = if ($results | Where-Object { $_.status -eq "fail" }) {
 } else {
   "pass"
 }
+$quotaAuditEvidence = if ($auditPath) { Get-QuotaFallbackAuditEvidence $auditPath } else { $null }
 
 $report = [ordered]@{
   schemaVersion = 1
@@ -1432,6 +1756,9 @@ $report = [ordered]@{
     comparison = $codexAppGuardComparison
     asserted = [bool]$AssertCodexAppProcessStable
   }
+  routing = New-SmokeRoutingReport $config $results $auditSummary
+  poolUnavailable = New-SmokePoolUnavailableReport $healthSummary
+  continuitySummary = New-SmokeContinuitySummary $quotaAuditEvidence $results
   results = $results
   health = $healthSummary
   healthRegistry = $healthRegistrySummary
@@ -1442,11 +1769,11 @@ $report = [ordered]@{
     "staged rollout: single -> small_pool -> fallback_probe",
     "use -RunUpstreamSmoke only after API service is enabled and the current stage contract passes",
     "use -RunCodexExecSmoke for a task-level E2E probe through an isolated CODEX_HOME",
-    "use -RequireQuotaFallback when the acceptance target is real quota-exhaustion continuity; the report blocks unless audit shows 429, model cooldown, fallback selection, and 200",
+    "use -RequireQuotaFallback when the acceptance target is real quota-exhaustion continuity; the report blocks unless audit shows 429, model cooldown, hard-affinity fallback_blocked, and local completed Responses closure",
     "use -StartEphemeralGateway to exercise the same gateway code path without switching live Codex provider",
     "use -TemporaryFallbackConfig only with -StartEphemeralGateway; the original codex_local_access.json is restored afterward",
     "use -AppSafeIsolatedProbe to keep probe local access config, health, audit, and port allocation in an isolated temp data root; the probe copies the existing API service account pool and does not auto-populate accounts",
-    "use -AutoDrainFirstFreeAccountUntilFallback only for explicit quota-drain acceptance; it sends bounded low-rate real requests until audit proves 429->fallback->200 or max requests is reached",
+    "use -AutoDrainFirstFreeAccountUntilFallback only for explicit quota-drain acceptance; it sends bounded low-rate real requests until audit proves same-task hard-affinity closure or max requests is reached",
     "this script records hashes for ~/.codex/config.toml and ~/.codex/auth.json but does not read or write their contents"
   )
 }

@@ -43,6 +43,12 @@ export async function recoverCodexLocalAccessHealth(
   return await invoke('codex_local_access_recover_health', { accountId, model });
 }
 
+export async function pauseCodexLocalAccessHealth(
+  accountId: string,
+): Promise<CodexLocalAccessState> {
+  return await invoke('codex_local_access_pause_health', { accountId });
+}
+
 export async function prepareCodexLocalAccessForRestart(): Promise<CodexLocalAccessState> {
   return await invoke('codex_local_access_prepare_restart');
 }

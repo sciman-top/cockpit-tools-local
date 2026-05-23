@@ -100,11 +100,36 @@ export interface CodexLocalAccessStats {
   monthly: CodexLocalAccessStatsWindow;
 }
 
+export type CodexLocalAccessAccountHealthStatus =
+  | 'healthy'
+  | 'estimated_available'
+  | 'cooling_down'
+  | 'exhausted'
+  | 'auth_suspect'
+  | 'manual_required'
+  | 'disabled';
+
+export interface CodexLocalAccessAccountHealthView {
+  accountId: string;
+  status: CodexLocalAccessAccountHealthStatus;
+  manualRequired: boolean;
+  cooldownUntilMs: number | null;
+  exhaustedAtMs: number | null;
+  estimatedResetAtMs: number | null;
+  lastStatus: number | null;
+  lastErrorType: string | null;
+  lastProviderCode: string | null;
+  updatedAt: number;
+  activeModelCooldownCount: number;
+  nearestModelCooldownUntilMs: number | null;
+}
+
 export interface CodexLocalAccessHealthSummary {
   schemaVersion: number;
   updatedAt: number;
   unavailable: boolean;
   loadError: string | null;
+  accounts?: CodexLocalAccessAccountHealthView[];
   healthyCount: number;
   estimatedAvailableCount: number;
   coolingCount: number;

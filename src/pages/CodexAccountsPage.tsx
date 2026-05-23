@@ -95,8 +95,10 @@ import {
   getCodexSubscriptionPresentation,
   hasCodexAccountName,
   isCodexApiKeyAccount,
+  isCodexAccountErrorState,
   isCodexExplicitFreePlanType,
   isCodexNewApiAccount,
+  isCodexQuotaLimitError,
   isCodexTeamLikePlan,
   type CodexApiProviderMode,
   type CodexQuotaErrorInfo,
@@ -113,8 +115,10 @@ import {
   CODEX_RECOMMENDED_SORT_BY,
   compareCodexAccountTieBreak,
   compareCodexAccountsBySort,
+  sortCodexLocalAccessAccountIdsForRefresh,
   type CodexGroupSortMeta,
 } from "../utils/codexAccountSort";
+import { getCodexLocalAccessQuotaAccountRefreshKey } from "../utils/codexLocalAccessHealth";
 
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -1575,6 +1579,32 @@ export function CodexAccountsPage() {
     updateApiKeyCredentials,
     updateAccountAppSpeed,
   } = store;
+  const lastLocalAccessQuotaAccountRefreshKeyRef = useRef<string | null>(null);
+  const localAccessQuotaAccountRefreshKey =
+    getCodexLocalAccessQuotaAccountRefreshKey(localAccessState?.health);
+
+  useEffect(() => {
+    if (!localAccessQuotaAccountRefreshKey) {
+      return;
+    }
+    if (
+      lastLocalAccessQuotaAccountRefreshKeyRef.current ===
+      localAccessQuotaAccountRefreshKey
+    ) {
+      return;
+    }
+    lastLocalAccessQuotaAccountRefreshKeyRef.current =
+      localAccessQuotaAccountRefreshKey;
+
+    void (async () => {
+      await fetchAccounts({ silent: true });
+      await fetchCurrentAccount();
+    })();
+  }, [
+    fetchAccounts,
+    fetchCurrentAccount,
+    localAccessQuotaAccountRefreshKey,
+  ]);
 
   const editingAccountNoteAccount = useMemo(
     () =>
@@ -3685,6 +3715,7 @@ export function CodexAccountsPage() {
           displayText: "",
           rawMessage: "",
           isRefreshRequestFailure: false,
+          isQuotaLimitError: false,
         };
       }
       const rawMessage = quotaError.message;
@@ -3706,6 +3737,7 @@ export function CodexAccountsPage() {
         rawMessage.match(/\[error_code:([^\]]+)\]/)?.[1] ||
         rawMessage.match(/error_code[=:]\s*([^,\]\s]+)/i)?.[1] ||
         "";
+      const isQuotaLimitError = isCodexQuotaLimitError(quotaError);
       const authFailureText =
         formatCodexAuthFailureMessage(normalizedRawMessage);
       const displayText =
@@ -3723,6 +3755,7 @@ export function CodexAccountsPage() {
         displayText,
         rawMessage,
         isRefreshRequestFailure,
+        isQuotaLimitError,
       };
     },
     [formatCodexAuthFailureMessage, t],
@@ -3893,7 +3926,7 @@ export function CodexAccountsPage() {
   );
 
   const isAbnormalAccount = useCallback(
-    (account: CodexAccount) => Boolean(account.quota_error),
+    (account: CodexAccount) => isCodexAccountErrorState(account),
     [],
   );
 
@@ -3906,6 +3939,13 @@ export function CodexAccountsPage() {
     localAccessState?.effectiveAccountIds ??
     localAccessCollection?.accountIds ??
     [];
+  const localAccessRuntimeActive =
+    localAccessLaunchCurrent ||
+    codexRuntimeMode?.mode === "cockpit_api_service";
+  const overviewCurrentAccountId =
+    localAccessRuntimeActive && localAccessEffectiveAccountIds.length > 0
+      ? localAccessEffectiveAccountIds[0]
+      : (currentAccount?.id ?? null);
   const localAccessEffectiveAccountIdSet = useMemo(
     () => new Set(localAccessEffectiveAccountIds),
     [localAccessEffectiveAccountIds],
@@ -3919,23 +3959,20 @@ export function CodexAccountsPage() {
         .filter((account): account is CodexAccount => Boolean(account)),
     [accounts, localAccessEffectiveAccountIds],
   );
-  const localAccessCurrentRefreshAccountId = useMemo(() => {
+  const localAccessRefreshCandidateIds = useMemo(() => {
     const candidateIds =
-      localAccessEffectiveAccountIds.length > 0
-        ? localAccessEffectiveAccountIds
-        : (localAccessCollection?.accountIds ?? []);
-    for (const accountId of candidateIds) {
+      localAccessCollection?.accountIds ?? localAccessEffectiveAccountIds;
+    return sortCodexLocalAccessAccountIdsForRefresh(candidateIds, accounts);
+  }, [accounts, localAccessCollection?.accountIds, localAccessEffectiveAccountIds]);
+  const localAccessCurrentRefreshAccountId = useMemo(() => {
+    for (const accountId of localAccessRefreshCandidateIds) {
       const account = accounts.find((item) => item.id === accountId);
       if (account && !isCodexApiKeyAccount(account)) {
         return account.id;
       }
     }
     return null;
-  }, [
-    accounts,
-    localAccessCollection?.accountIds,
-    localAccessEffectiveAccountIds,
-  ]);
+  }, [accounts, localAccessRefreshCandidateIds]);
   const localAccessQuotaPoolSummary = useMemo(
     () => summarizeCodexQuotaPool(localAccessAccounts),
     [localAccessAccounts],
@@ -4122,12 +4159,8 @@ export function CodexAccountsPage() {
   }, [accounts, reloadLocalAccessState]);
 
   const localAccessModalSelectedIds = useMemo(
-    () => [
-      ...(localAccessEffectiveAccountIds.length > 0
-        ? localAccessEffectiveAccountIds
-        : (localAccessCollection?.accountIds ?? [])),
-    ],
-    [localAccessCollection?.accountIds, localAccessEffectiveAccountIds],
+    () => [...(localAccessCollection?.accountIds ?? [])],
+    [localAccessCollection?.accountIds],
   );
 
   const handleSaveLocalAccessAccounts = useCallback(
@@ -4170,7 +4203,11 @@ export function CodexAccountsPage() {
         setLocalAccessSaving(false);
       }
     },
-    [accounts, setMessage, t],
+    [
+      accounts,
+      setMessage,
+      t,
+    ],
   );
 
   const handleRemoveLocalAccessAccount = useCallback(
@@ -4315,7 +4352,7 @@ export function CodexAccountsPage() {
       }
       const tier = resolvePlanKey(a);
       if (tier in counts) counts[tier as keyof typeof counts] += 1;
-      if (a.quota_error) counts.ERROR += 1;
+      if (isAbnormalAccount(a)) counts.ERROR += 1;
     });
     return counts;
   }, [isAbnormalAccount, overviewAccounts, resolvePlanKey]);
@@ -4347,12 +4384,17 @@ export function CodexAccountsPage() {
     }
 
     const groupAccountIds = new Set(activeGroup.accountIds);
-    const targetAccountIds = accounts
-      .filter(
-        (account) =>
-          groupAccountIds.has(account.id) && !isCodexApiKeyAccount(account),
-      )
-      .map((account) => account.id);
+    const targetAccountIds = sortCodexLocalAccessAccountIdsForRefresh(
+      activeGroup.accountIds,
+      accounts,
+    ).filter((accountId) => {
+      const account = accounts.find((item) => item.id === accountId);
+      return Boolean(
+        account &&
+          groupAccountIds.has(account.id) &&
+          !isCodexApiKeyAccount(account),
+      );
+    });
 
     if (targetAccountIds.length === 0) {
       setMessage({
@@ -4366,9 +4408,15 @@ export function CodexAccountsPage() {
 
     setGroupRefreshingAll(true);
     try {
-      const results = await Promise.allSettled(
-        targetAccountIds.map((accountId) => refreshQuota(accountId)),
-      );
+      const results: PromiseSettledResult<void>[] = [];
+      for (const accountId of targetAccountIds) {
+        try {
+          await refreshQuota(accountId);
+          results.push({ status: "fulfilled", value: undefined });
+        } catch (reason) {
+          results.push({ status: "rejected", reason });
+        }
+      }
       await fetchAccounts();
       await fetchCurrentAccount();
 
@@ -4670,6 +4718,30 @@ export function CodexAccountsPage() {
         return nextState;
       } catch (error) {
         console.error("Failed to recover local access health:", error);
+        throw new Error(String(error).replace(/^Error:\s*/, ""));
+      } finally {
+        setLocalAccessSaving(false);
+      }
+    },
+    [setMessage, t],
+  );
+
+  const handlePauseLocalAccessHealth = useCallback(
+    async (accountId: string) => {
+      setLocalAccessSaving(true);
+      try {
+        const nextState =
+          await codexLocalAccessService.pauseCodexLocalAccessHealth(accountId);
+        setLocalAccessState(nextState);
+        setMessage({
+          text: t(
+            "codex.localAccess.pauseAccountSuccess",
+            "账号已从 API 服务调度中暂停",
+          ),
+        });
+        return nextState;
+      } catch (error) {
+        console.error("Failed to pause local access health:", error);
         throw new Error(String(error).replace(/^Error:\s*/, ""));
       } finally {
         setLocalAccessSaving(false);
@@ -5007,20 +5079,6 @@ export function CodexAccountsPage() {
     ],
   );
 
-  const handleQuickToggleLocalAccessEnabled = useCallback(async () => {
-    try {
-      await handleToggleLocalAccessEnabled();
-    } catch (error) {
-      setMessage({
-        text: t("messages.actionFailed", {
-          action: t("codex.localAccess.toggleService", "切换 API 服务"),
-          error: String(error).replace(/^Error:\s*/, ""),
-        }),
-        tone: "error",
-      });
-    }
-  }, [handleToggleLocalAccessEnabled, setMessage, t]);
-
   const handleQuickActivateLocalAccess = useCallback(async () => {
     try {
       const currentKind = await resolveCurrentCodexLaunchCredentialKind();
@@ -5055,9 +5113,42 @@ export function CodexAccountsPage() {
     t,
   ]);
 
+  const handleQuickToggleLocalAccessEnabled = useCallback(async () => {
+    try {
+      if (
+        localAccessLaunchCurrent ||
+        codexRuntimeMode?.mode === "cockpit_api_service" ||
+        localAccessCollection?.enabled
+      ) {
+        await handleSetCodexRuntimeMode("direct_projection");
+        return;
+      }
+      await handleQuickActivateLocalAccess();
+    } catch (error) {
+      setMessage({
+        text: t("messages.actionFailed", {
+          action: t("codex.localAccess.toggleService", "切换 API 服务"),
+          error: String(error).replace(/^Error:\s*/, ""),
+        }),
+        tone: "error",
+      });
+    }
+  }, [
+    codexRuntimeMode?.mode,
+    handleQuickActivateLocalAccess,
+    handleSetCodexRuntimeMode,
+    localAccessCollection?.enabled,
+    localAccessLaunchCurrent,
+    setMessage,
+    t,
+  ]);
+
   const handleRefreshLocalAccessQuotaAccounts = useCallback(async (accountIds: string[]) => {
     const uniqueAccountIds = Array.from(new Set(accountIds));
-    const targetIds = uniqueAccountIds.filter((accountId) => {
+    const targetIds = sortCodexLocalAccessAccountIdsForRefresh(
+      uniqueAccountIds,
+      accounts,
+    ).filter((accountId) => {
       const account = accounts.find((item) => item.id === accountId);
       return Boolean(account && !isCodexApiKeyAccount(account));
     });
@@ -5075,15 +5166,22 @@ export function CodexAccountsPage() {
 
     setLocalAccessRefreshing(true);
     try {
-      const results = await Promise.allSettled(
-        targetIds.map((accountId) => refreshQuota(accountId)),
-      );
+      const results: PromiseSettledResult<void>[] = [];
+      for (const accountId of targetIds) {
+        try {
+          await refreshQuota(accountId);
+          results.push({ status: "fulfilled", value: undefined });
+        } catch (reason) {
+          results.push({ status: "rejected", reason });
+        }
+      }
       const successCount = results.filter(
         (result) => result.status === "fulfilled",
       ).length;
 
       await fetchAccounts();
       await fetchCurrentAccount();
+      await reloadLocalAccessState();
 
       if (successCount === targetIds.length) {
         setMessage({
@@ -5122,6 +5220,7 @@ export function CodexAccountsPage() {
     accounts,
     fetchAccounts,
     fetchCurrentAccount,
+    reloadLocalAccessState,
     refreshQuota,
     setMessage,
     t,
@@ -5226,14 +5325,6 @@ export function CodexAccountsPage() {
     });
     return map;
   }, [localAccessCollection?.accountIds, localAccessEffectiveAccountIds]);
-  const localAccessRuntimeActive =
-    localAccessLaunchCurrent ||
-    codexRuntimeMode?.mode === "cockpit_api_service";
-  const overviewCurrentAccountId =
-    localAccessRuntimeActive && localAccessEffectiveAccountIds.length > 0
-      ? localAccessEffectiveAccountIds[0]
-      : (currentAccount?.id ?? null);
-
   useEffect(() => {
     if (!localAccessRuntimeActive && !showLocalAccessModal) {
       return;
@@ -5300,7 +5391,7 @@ export function CodexAccountsPage() {
       }
       if (selectedTypes.size > 0) {
         result = result.filter((a) => {
-          if (selectedTypes.has("ERROR") && a.quota_error) {
+          if (selectedTypes.has("ERROR") && isAbnormalAccount(a)) {
             return true;
           }
           return selectedTypes.has(resolvePlanKey(a));
@@ -5911,13 +6002,16 @@ export function CodexAccountsPage() {
             void handleDropAccountsForActiveGroupOrder(event, account.id)
           }
         >
-          <div className="codex-compact-select">
+          <label
+            className="codex-compact-select"
+            aria-label={t("accounts.selectAccount", "选择账号")}
+          >
             <input
               type="checkbox"
               checked={isSelected}
               onChange={() => toggleSelect(account.id)}
             />
-          </div>
+          </label>
           <span
             className="codex-compact-email"
             title={maskAccountText(presentation.displayName)}
@@ -6064,10 +6158,24 @@ export function CodexAccountsPage() {
         quotaErrorMeta.isRefreshRequestFailure &&
         !quotaErrorMeta.statusCode &&
         !quotaErrorMeta.errorCode;
+      const isQuotaLimitNotice =
+        !reauthErrorMeta.rawMessage && quotaErrorMeta.isQuotaLimitError;
+      const accountIssueClass = isQuotaRefreshNotice
+        ? "quota-refresh"
+        : isQuotaLimitNotice
+          ? "quota-limited"
+          : "quota-error";
+      const accountIssueInlineClass = isQuotaRefreshNotice
+        ? "quota-refresh-notice"
+        : isQuotaLimitNotice
+          ? "quota-limit-notice"
+          : "";
       const accountIssueBadge = reauthErrorMeta.rawMessage
         ? t("codex.authError.badge", "授权异常")
         : isQuotaRefreshNotice
           ? t("codex.quotaError.refreshFailedBadge", "刷新失败")
+          : isQuotaLimitNotice
+            ? t("codex.quotaError.limitBadge", "额度用尽")
           : accountIssueMeta.statusCode ||
             t("codex.quotaError.badge", "配额异常");
       const showReauthorizeAction =
@@ -6116,13 +6224,16 @@ export function CodexAccountsPage() {
           }
         >
           <div className="card-top">
-            <div className="card-select">
+            <label
+              className="card-select"
+              aria-label={t("accounts.selectAccount", "选择账号")}
+            >
               <input
                 type="checkbox"
                 checked={isSelected}
                 onChange={() => toggleSelect(account.id)}
               />
-            </div>
+            </label>
             {isEditingApiKeyName ? (
               <input
                 className="account-email inline-name-editor"
@@ -6167,11 +6278,13 @@ export function CodexAccountsPage() {
             )}
             {hasQuotaError && (
               <span
-                className={`codex-status-pill ${isQuotaRefreshNotice ? "quota-refresh" : "quota-error"}`}
+                className={`codex-status-pill ${accountIssueClass}`}
                 title={accountIssueMeta.rawMessage}
               >
                 {isQuotaRefreshNotice ? (
                   <Info size={12} />
+                ) : isQuotaLimitNotice ? (
+                  <Clock size={12} />
                 ) : (
                   <CircleAlert size={12} />
                 )}
@@ -6267,11 +6380,13 @@ export function CodexAccountsPage() {
               <>
                 {hasQuotaError && (
                   <div
-                    className={`quota-error-inline ${isQuotaRefreshNotice ? "quota-refresh-notice" : ""}`}
+                    className={`quota-error-inline ${accountIssueInlineClass}`}
                     title={accountIssueMeta.rawMessage}
                   >
                     {isQuotaRefreshNotice ? (
                       <Info size={14} />
+                    ) : isQuotaLimitNotice ? (
+                      <Clock size={14} />
                     ) : (
                       <CircleAlert size={14} />
                     )}
@@ -6645,6 +6760,23 @@ export function CodexAccountsPage() {
                 "API 服务号池暂无可调度账号（{{reasons}}）；请刷新配额、调整号池或恢复账号后重试",
             })
         : null;
+    const localAccessEstimatedAvailableMessage =
+      localAccessCollection &&
+      localAccessHealth &&
+      (localAccessHealth.estimatedAvailableCount ?? 0) > 0
+        ? t("codex.localAccess.estimatedAvailableHint", {
+            count: localAccessHealth.estimatedAvailableCount,
+            defaultValue:
+              "API 服务已有 {{count}} 个账号按 reset 时间估算恢复；调度会重新尝试，真实配额需等待刷新确认",
+            })
+        : null;
+    const localAccessPrimaryActionIsDeactivate =
+      localAccessLaunchCurrent ||
+      codexRuntimeMode?.mode === "cockpit_api_service" ||
+      Boolean(localAccessCollection?.enabled);
+    const localAccessPrimaryActionTitle = localAccessPrimaryActionIsDeactivate
+      ? t("codex.localAccess.disableService", "停用服务")
+      : t("codex.localAccess.activateAction", "启动 API 服务");
 
     return (
       <div
@@ -7013,6 +7145,13 @@ export function CodexAccountsPage() {
               </div>
             )}
 
+            {localAccessEstimatedAvailableMessage && (
+              <div className="quota-error-inline">
+                <CircleAlert size={14} />
+                <span>{localAccessEstimatedAvailableMessage}</span>
+              </div>
+            )}
+
             {localAccessState?.lastError && (
               <div className="quota-error-inline">
                 <CircleAlert size={14} />
@@ -7050,31 +7189,19 @@ export function CodexAccountsPage() {
                 <div className="card-actions codex-card-actions--grouped">
                   <span className="codex-card-action-cluster codex-card-action-cluster-primary">
                     <button
-                      className="card-action-btn success"
-                      onClick={() => void handleQuickActivateLocalAccess()}
-                      title={t(
-                        "codex.localAccess.activateAction",
-                        "启动 API 服务",
-                      )}
+                      className={`card-action-btn ${localAccessPrimaryActionIsDeactivate ? "" : "success"}`}
+                      onClick={() => void handleQuickToggleLocalAccessEnabled()}
+                      title={localAccessPrimaryActionTitle}
+                      aria-label={localAccessPrimaryActionTitle}
                       disabled={localAccessBusy || !localAccessCollection}
                     >
-                      {localAccessStarting ? (
+                      {localAccessStarting || localAccessSaving ? (
                         <RefreshCw size={14} className="loading-spinner" />
+                      ) : localAccessPrimaryActionIsDeactivate ? (
+                        <Power size={14} />
                       ) : (
                         <Play size={14} />
                       )}
-                    </button>
-                    <button
-                      className={`card-action-btn ${localAccessCollection?.enabled ? "" : "success"}`}
-                      onClick={() => void handleQuickToggleLocalAccessEnabled()}
-                      title={
-                        localAccessCollection?.enabled
-                          ? t("codex.localAccess.disableService", "停用服务")
-                          : t("codex.localAccess.enableService", "启用服务")
-                      }
-                      disabled={localAccessBusy || !localAccessCollection}
-                    >
-                      <Power size={14} />
                     </button>
                   </span>
 
@@ -7308,10 +7435,24 @@ export function CodexAccountsPage() {
         quotaErrorMeta.isRefreshRequestFailure &&
         !quotaErrorMeta.statusCode &&
         !quotaErrorMeta.errorCode;
+      const isQuotaLimitNotice =
+        !reauthErrorMeta.rawMessage && quotaErrorMeta.isQuotaLimitError;
+      const accountIssueClass = isQuotaRefreshNotice
+        ? "quota-refresh"
+        : isQuotaLimitNotice
+          ? "quota-limited"
+          : "quota-error";
+      const accountIssueInlineClass = isQuotaRefreshNotice
+        ? "quota-refresh-notice"
+        : isQuotaLimitNotice
+          ? "quota-limit-notice"
+          : "";
       const accountIssueBadge = reauthErrorMeta.rawMessage
         ? t("codex.authError.badge", "授权异常")
         : isQuotaRefreshNotice
           ? t("codex.quotaError.refreshFailedBadge", "刷新失败")
+          : isQuotaLimitNotice
+            ? t("codex.quotaError.limitBadge", "额度用尽")
           : accountIssueMeta.statusCode ||
             t("codex.quotaError.badge", "配额异常");
       const showReauthorizeAction =
@@ -7479,11 +7620,13 @@ export function CodexAccountsPage() {
               {hasQuotaError && (
                 <div className="account-sub-line">
                   <span
-                    className={`codex-status-pill ${isQuotaRefreshNotice ? "quota-refresh" : "quota-error"}`}
+                    className={`codex-status-pill ${accountIssueClass}`}
                     title={accountIssueMeta.rawMessage}
                   >
                     {isQuotaRefreshNotice ? (
                       <Info size={12} />
+                    ) : isQuotaLimitNotice ? (
+                      <Clock size={12} />
                     ) : (
                       <CircleAlert size={12} />
                     )}
@@ -7569,11 +7712,13 @@ export function CodexAccountsPage() {
                 </div>
                 {hasQuotaError && (
                   <div
-                    className={`quota-error-inline table ${isQuotaRefreshNotice ? "quota-refresh-notice" : ""}`}
+                    className={`quota-error-inline table ${accountIssueInlineClass}`}
                     title={accountIssueMeta.rawMessage}
                   >
                     {isQuotaRefreshNotice ? (
                       <Info size={12} />
+                    ) : isQuotaLimitNotice ? (
+                      <Clock size={12} />
                     ) : (
                       <CircleAlert size={12} />
                     )}
@@ -10936,6 +11081,7 @@ export function CodexAccountsPage() {
             onClearStats={handleClearLocalAccessStats}
             onRefreshStats={reloadLocalAccessState}
             onRecoverHealth={handleRecoverLocalAccessHealth}
+            onPauseHealth={handlePauseLocalAccessHealth}
             onUpdatePort={handleUpdateLocalAccessPort}
             onUpdateRoutingStrategy={handleUpdateLocalAccessRoutingStrategy}
             onApplySafetyPreset={handleApplyLocalAccessSafetyPreset}

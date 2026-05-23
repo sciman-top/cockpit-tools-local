@@ -6,14 +6,26 @@ if (process.platform !== 'win32') {
 }
 
 const repoRoot = path.resolve(__dirname, '..');
-const targetExe = path.join(repoRoot, 'target', 'debug', 'cockpit_tools.exe');
-const escapedTarget = targetExe.replace(/'/g, "''").toLowerCase();
+const targetExeCandidates = [
+  path.join(repoRoot, 'target', 'debug', 'cockpit-tools.exe'),
+  // Keep the legacy underscore name so older local build artifacts are still cleaned up.
+  path.join(repoRoot, 'target', 'debug', 'cockpit_tools.exe'),
+];
+const escapedTargets = targetExeCandidates
+  .map((targetExe) => `'${targetExe.replace(/'/g, "''").toLowerCase()}'`)
+  .join(",\n  ");
 
 const script = `
 $ErrorActionPreference = 'Stop'
-$target = '${escapedTarget}'
-$processes = Get-CimInstance Win32_Process -Filter "Name = 'cockpit_tools.exe'" |
-  Where-Object { $_.ExecutablePath -and ($_.ExecutablePath.ToLowerInvariant() -eq $target) }
+$targets = @(
+  ${escapedTargets}
+)
+$processes = Get-CimInstance Win32_Process |
+  Where-Object {
+    $_.ExecutablePath -and
+    $_.Name -in @('cockpit-tools.exe', 'cockpit_tools.exe') -and
+    ($targets -contains $_.ExecutablePath.ToLowerInvariant())
+  }
 foreach ($process in $processes) {
   Stop-Process -Id $process.ProcessId -Force
   Write-Output ("Stopped stale Cockpit Tools debug process PID " + $process.ProcessId)

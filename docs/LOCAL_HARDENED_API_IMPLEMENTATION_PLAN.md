@@ -57,7 +57,7 @@
 
 1. `single`：账号池恰好 1 个账号，`maxRetryAccounts >= 2` 也只会实际尝试 1 个账号。
 2. `small_pool`：账号池 2-3 个账号，保持 `maxRetryAccounts >= 2`，验证 selector/sticky/health 不乱轮换且 failover-safe 429 可同请求切号。
-3. `fallback_probe`：账号池 2-3 个账号，`maxRetryAccounts >= 2`，只验证有限 fallback 边界；`fallbackMode` 不阻断当前请求内的 failover-safe 429 切号。
+3. `fallback_probe`：使用当前手动配置的 API 服务号池，至少 1 个账号；不自动挑号、不自动扩容，真实上游尝试仍由 `maxRetryAccounts >= 2` 限制，只验证有限 fallback 边界；`fallbackMode` 不阻断当前请求内的 failover-safe 429 切号。
 
 显式传入 `-RunUpstreamSmoke` 后才发起一次真实 `/v1/chat/completions`。若真实请求返回 429，验收重点不是“马上换号”，而是：
 
@@ -331,7 +331,7 @@ flowchart TD
 
 描述：把 retry、cooldown、single-account retry、next-account fallback、stream guard 统一到一个控制器。
 
-状态：2026-05-20 已修正当前请求 failover 边界：`maxRetries` 仍控制单账号状态重试和请求级冷却等待重试；`maxRetryAccounts` 控制 failover-safe 错误后的 distinct account 尝试上限，默认/legacy `1` 会按有效 `2` 处理，`fallbackMode` 不再阻断当前请求的安全切号；stream write state 继续保证 headers 或首个 chunk 写出后禁止 fallback。
+状态：2026-05-20 已修正当前请求 failover 边界；2026-05-23 进一步收紧 Codex 任务亲和：`maxRetries` 仍控制单账号状态重试和请求级冷却等待重试；`maxRetryAccounts` 只控制无硬亲和的新 admission distinct account 尝试上限，默认/legacy `1` 会按有效 `2` 处理；`fallbackMode` 表示新请求重新选号，不允许带 `previous_response_id`、`X-Codex-Turn-State` 或 `X-Client-Request-Id` 的同任务请求在 429 后静默切到新账号；stream write state 继续保证 headers 或首个 chunk 写出后禁止 fallback。
 
 验收：
 

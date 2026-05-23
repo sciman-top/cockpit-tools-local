@@ -600,10 +600,23 @@
   row-gap: 6px;
 }
 
+.accounts-page .card-select {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  margin: -10px -8px -10px -8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
 .accounts-page .card-select input[type="checkbox"] {
   width: 16px;
   height: 16px;
   accent-color: var(--accounts-primary);
+  cursor: pointer;
 }
 
 .accounts-page .account-card .account-email {

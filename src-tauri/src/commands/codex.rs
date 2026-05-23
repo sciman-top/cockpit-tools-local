@@ -787,6 +787,13 @@ pub async fn codex_local_access_recover_health(
 }
 
 #[tauri::command]
+pub async fn codex_local_access_pause_health(
+    account_id: String,
+) -> Result<CodexLocalAccessState, String> {
+    codex_local_access::pause_local_access_health(&account_id).await
+}
+
+#[tauri::command]
 pub async fn codex_local_access_prepare_restart() -> Result<CodexLocalAccessState, String> {
     codex_local_access::prepare_local_access_gateway_for_restart().await
 }

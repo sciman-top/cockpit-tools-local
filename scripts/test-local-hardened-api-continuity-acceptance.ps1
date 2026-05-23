@@ -57,8 +57,8 @@ param(
   overall = "pass"
   reportPath = "$reportPath"
   results = @(
-    [ordered]@{ name = "quota_fallback_audit_contract"; status = "pass"; evidence = [ordered]@{ has429 = `$true; has200After429 = `$true } },
-    [ordered]@{ name = "quota_drain_until_fallback"; status = if (`$drainRequested) { "pass" } else { "skipped" }; evidence = [ordered]@{ requested = `$drainRequested } },
+    [ordered]@{ name = "same_task_affinity_fallback_blocked"; status = "pass"; evidence = [ordered]@{ has429 = `$true; sameTaskAffinityLocalCompletionCount = 1 } },
+    [ordered]@{ name = "quota_drain_until_hard_affinity_block"; status = if (`$drainRequested) { "pass" } else { "skipped" }; evidence = [ordered]@{ requested = `$drainRequested } },
     [ordered]@{ name = "codex_exec_task_e2e"; status = "pass"; evidence = [ordered]@{ taskFileHasMarker = `$true } },
     [ordered]@{ name = "codex_cli_config_auth_untouched"; status = "pass"; evidence = [ordered]@{ unchanged = `$true } },
     [ordered]@{ name = "codex_app_process_stable"; status = "pass"; evidence = [ordered]@{ stable = `$true } }
@@ -110,7 +110,7 @@ param(
   }
   $summary = ($output | Out-String) | ConvertFrom-Json
   Assert-Equal $summary.overall "pass" "expected pass summary"
-  Assert-Equal $summary.quotaFallback "pass" "expected quota fallback pass"
+  Assert-Equal $summary.sameTaskAffinity "pass" "expected same-task affinity pass"
   Assert-Equal $summary.codexExec "pass" "expected codex exec pass"
   Assert-Equal $summary.cliUntouched "pass" "expected CLI guard pass"
   Assert-Equal $summary.appStable "pass" "expected App guard pass"
@@ -196,6 +196,50 @@ param(
   $contractResult = Get-ResultByName $contractReport "config_fallback_probe_contract"
   Assert-Equal $contractResult.status "pass" "fallback_probe config contract should allow a one-account API service pool"
   Assert-Equal $contractResult.evidence.accountCount 1 "expected one-account fallback_probe evidence"
+
+  $largePoolRoot = Join-Path $tempRoot "large-pool-data"
+  New-Item -ItemType Directory -Force -Path $largePoolRoot | Out-Null
+  [ordered]@{
+    enabled = $true
+    port = 1
+    apiKey = "test-api-key"
+    accountIds = @(
+      "codex_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "codex_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "codex_cccccccccccccccccccccccccccccccc",
+      "codex_dddddddddddddddddddddddddddddddd",
+      "codex_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "codex_ffffffffffffffffffffffffffffffff",
+      "codex_11111111111111111111111111111111",
+      "codex_22222222222222222222222222222222",
+      "codex_33333333333333333333333333333333",
+      "codex_44444444444444444444444444444444",
+      "codex_55555555555555555555555555555555",
+      "codex_66666666666666666666666666666666",
+      "codex_77777777777777777777777777777777"
+    )
+    safetyConfig = [ordered]@{
+      schemaVersion = 1
+      hardenedLocalMode = $true
+      maxConcurrentRequests = 1
+      minRequestIntervalSeconds = 20
+      maxRetryAccounts = 2
+      fallbackMode = "disabled"
+    }
+  } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $largePoolRoot "codex_local_access.json") -Encoding UTF8
+
+  $largePoolContractOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $smokeScript `
+    -Stage fallback_probe `
+    -DataRoot $largePoolRoot `
+    -BaseUrl "http://127.0.0.1:1/v1" `
+    -ApiKey "test-api-key" `
+    -RunUpstreamSmoke `
+    -AcknowledgeLiveUpstreamRisk 2>$null
+
+  $largePoolContractReport = Convert-JsonOutput $largePoolContractOutput "large-pool fallback_probe contract"
+  $largePoolContractResult = Get-ResultByName $largePoolContractReport "config_fallback_probe_contract"
+  Assert-Equal $largePoolContractResult.status "pass" "fallback_probe config contract should allow a fully configured API service pool"
+  Assert-Equal $largePoolContractResult.evidence.accountCount 13 "expected large-pool fallback_probe evidence"
 
   "PASS local hardened API continuity acceptance wrapper tests"
 } finally {

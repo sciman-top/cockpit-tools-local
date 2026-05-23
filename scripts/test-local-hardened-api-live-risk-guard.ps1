@@ -99,6 +99,12 @@ $agents = if (Test-Path -LiteralPath $agentsPath) { Get-Content -LiteralPath $ag
 $doc = Get-Content -LiteralPath (Join-Path $repoRoot "docs\LOCAL_HARDENED_API.md") -Raw
 $smoke = Get-Content -LiteralPath (Join-Path $PSScriptRoot "smoke-local-hardened-api.ps1") -Raw
 $accept = Get-Content -LiteralPath (Join-Path $PSScriptRoot "accept-local-hardened-api-continuity.ps1") -Raw
+$preflight = Get-Content -LiteralPath (Join-Path $repoRoot "scripts\release\preflight.cjs") -Raw
+$localAccessModal = Get-Content -LiteralPath (Join-Path $repoRoot "src\components\CodexLocalAccessModal.tsx") -Raw
+$localAccessService = Get-Content -LiteralPath (Join-Path $repoRoot "src\services\codexLocalAccessService.ts") -Raw
+$codexCommand = Get-Content -LiteralPath (Join-Path $repoRoot "src-tauri\src\commands\codex.rs") -Raw
+$tauriLib = Get-Content -LiteralPath (Join-Path $repoRoot "src-tauri\src\lib.rs") -Raw
+$localAccessModule = Get-Content -LiteralPath (Join-Path $repoRoot "src-tauri\src\modules\codex_local_access.rs") -Raw
 
 if ($agents) {
   Assert-Contains $agents "AcknowledgeLiveUpstreamRisk" "AGENTS.md must require live upstream acknowledgement"
@@ -124,6 +130,27 @@ Assert-Contains $accept "live_upstream_risk_ack_required" "acceptance wrapper mu
 Assert-Contains $accept "expanded_live_upstream_risk_ack_required" "acceptance wrapper must fail closed for expanded live risk"
 Assert-Contains $accept '"-AcknowledgeLiveUpstreamRisk"' "acceptance wrapper must pass live acknowledgement to smoke script"
 Assert-Contains $accept '"-AcknowledgeExpandedLiveUpstreamRisk"' "acceptance wrapper must pass expanded acknowledgement to smoke script"
+Assert-Contains $accept "continuitySummary" "acceptance wrapper must surface the two-part continuity summary"
+Assert-Contains $smoke "new_request_avoids_exhausted_account" "smoke report must check that later requests avoid exhausted/cooldown accounts"
+Assert-Contains $smoke "New-SmokeContinuitySummary" "smoke report must emit the two-part continuity summary"
+Assert-Contains $smoke 'ProcessName -ceq $name' "Codex App process guard must use exact process-name matching so nested lowercase codex CLI probes do not fail App stability"
+Assert-Contains $preflight "test-local-hardened-api-live-risk-guard.ps1" "release preflight must run the local hardened API live-risk guard"
+Assert-Contains $localAccessModal "balancedSelfUseDesc" "API service safety presets must keep the balanced self-use label visible"
+Assert-Contains $localAccessModal "quotaDrainCarefulDesc" "API service safety presets must keep the quota-drain label visible"
+Assert-Contains $localAccessModal "opt-in" "API service safety presets must label low-rate/drain modes as manual opt-in"
+Assert-Contains $localAccessModal "maxRetryAccountsManualOptIn" "API service panel must detect maxRetryAccounts > 2 as manual opt-in"
+Assert-Contains $localAccessModal "maxRetryAccounts &gt; 2" "API service panel must display maxRetryAccounts > 2 as manual opt-in"
+Assert-Contains $localAccessModal "health?.exhaustedCount" "API service health panel must display quota-exhausted account count"
+Assert-Contains $localAccessModal "health?.disabledCount" "API service health panel must display manually paused account count"
+Assert-Contains $localAccessModal "handlePauseHealth" "API service member UI must expose explicit manual pause action"
+Assert-Contains $localAccessModal "不刷新额度也不访问上游" "manual pause confirmation must state it does not refresh quota or call upstream"
+Assert-Contains $localAccessService "pauseCodexLocalAccessHealth" "frontend service must expose local health pause command"
+Assert-Contains $localAccessService "codex_local_access_pause_health" "frontend service must invoke local health pause command"
+Assert-Contains $codexCommand "codex_local_access_pause_health" "Tauri command layer must expose local health pause command"
+Assert-Contains $tauriLib "codex_local_access_pause_health" "Tauri invoke handler must register local health pause command"
+Assert-Contains $localAccessModule "pause_local_access_health" "backend must implement local health pause command"
+Assert-Contains $localAccessModule "record_manual_pause_audit_event" "manual pause must write a redacted audit event"
+Assert-Contains $localAccessModule "manual_paused" "manual pause must mark local health without upstream probing"
 
 $smokeBlockedOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "smoke-local-hardened-api.ps1") `
   -Stage single `

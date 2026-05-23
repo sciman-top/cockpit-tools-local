@@ -2301,13 +2301,16 @@ export function AccountsPage({ onNavigate }: AccountsPageProps) {
           className={`account-card ${isCurrent ? 'current' : ''} ${isDisabled ? 'disabled' : ''} ${isSelected ? 'selected' : ''}`}
         >
           <div className="card-top">
-            <div className="card-select">
+            <label
+              className="card-select"
+              aria-label={t("accounts.selectAccount", "选择账号")}
+            >
               <input
                 type="checkbox"
                 checked={isSelected}
                 onChange={() => toggleSelect(account.id)}
               />
-            </div>
+            </label>
             <span className="account-email" title={maskAccountText(account.email)}>
               {maskAccountText(account.email)}
             </span>

@@ -53,6 +53,70 @@ export interface CodexQuotaErrorInfo {
   timestamp: number;
 }
 
+const CODEX_QUOTA_LIMIT_ERROR_CODES = new Set([
+  "usage_limit_reached",
+  "insufficient_quota",
+  "rate_limit_exceeded",
+  "rate_limit_reached",
+  "model_cap_reached",
+  "model_cap_exceeded",
+]);
+
+function normalizeCodexQuotaErrorCode(value?: string | null): string {
+  return (value || "").trim().toLowerCase();
+}
+
+function extractCodexQuotaErrorCode(message: string): string {
+  return (
+    message.match(/\[error_code:([^\]]+)\]/)?.[1] ||
+    message.match(/error_code[=:]\s*([^,\]\s]+)/i)?.[1] ||
+    ""
+  );
+}
+
+function extractCodexQuotaErrorStatusCode(message: string): string {
+  return (
+    message.match(/API 返回错误\s+(\d{3})/i)?.[1] ||
+    message.match(/status[=: ]+(\d{3})/i)?.[1] ||
+    ""
+  );
+}
+
+export function isCodexQuotaLimitError(
+  error?: CodexQuotaErrorInfo | null,
+): boolean {
+  if (!error?.message) return false;
+  const rawMessage = error.message.trim();
+  const lowerMessage = rawMessage.toLowerCase();
+  const statusCode = extractCodexQuotaErrorStatusCode(rawMessage);
+  const errorCode = normalizeCodexQuotaErrorCode(
+    error.code || extractCodexQuotaErrorCode(rawMessage),
+  );
+
+  return (
+    statusCode === "429" ||
+    CODEX_QUOTA_LIMIT_ERROR_CODES.has(errorCode) ||
+    lowerMessage.includes("too many requests") ||
+    lowerMessage.includes("rate_limit") ||
+    lowerMessage.includes("rate limit") ||
+    lowerMessage.includes("limit_reached") ||
+    lowerMessage.includes("usage_limit") ||
+    lowerMessage.includes("usage limit") ||
+    lowerMessage.includes("model_cap") ||
+    (lowerMessage.includes("quota") &&
+      (lowerMessage.includes("exceed") ||
+        lowerMessage.includes("limit") ||
+        lowerMessage.includes("exhaust")))
+  );
+}
+
+export function isCodexAccountErrorState(account: CodexAccount): boolean {
+  return Boolean(
+    account.requires_reauth ||
+      (account.quota_error && !isCodexQuotaLimitError(account.quota_error)),
+  );
+}
+
 /** Codex Token 数据 */
 export interface CodexTokens {
   id_token: string;

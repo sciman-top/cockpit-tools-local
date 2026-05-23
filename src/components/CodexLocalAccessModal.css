@@ -55,7 +55,7 @@
 }
 
 .codex-local-access-modal-members {
-  max-width: min(780px, calc(100vw - 32px));
+  max-width: min(940px, calc(100vw - 32px));
 }
 
 .codex-local-access-modal .modal-header {
@@ -597,6 +597,11 @@
   color: #b45309;
 }
 
+.codex-local-access-health-metric-exhausted strong,
+.codex-local-access-health-metric-manualPaused strong {
+  color: #7f1d1d;
+}
+
 .codex-local-access-health-metric-auth strong,
 .codex-local-access-health-metric-manual strong {
   color: #b91c1c;
@@ -744,6 +749,25 @@
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.2;
+}
+
+.codex-local-access-manual-opt-in-badge {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--warning) 22%, var(--border));
+  background: color-mix(in srgb, var(--warning) 10%, transparent);
+  color: color-mix(in srgb, var(--warning) 74%, var(--text-primary));
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.codex-local-access-manual-opt-in-badge > svg {
+  flex-shrink: 0;
 }
 
 .codex-local-access-config-card {
@@ -1148,7 +1172,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 10px;
+  padding: 8px;
   border: 1px solid rgba(148, 163, 184, 0.16);
   border-radius: 14px;
   background: color-mix(in srgb, var(--bg-card) 88%, var(--bg-surface) 12%);
@@ -1171,17 +1195,16 @@
   min-width: 0;
 }
 
-.codex-local-access-current-members-check {
+.codex-local-access-current-members-title {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  color: var(--text-secondary);
-  font-size: 12px;
-  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
 }
 
-.codex-local-access-current-members-check input,
 .codex-local-access-current-member input {
   width: 16px;
   height: 16px;
@@ -1204,8 +1227,8 @@
 .codex-local-access-current-member-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  max-height: 154px;
+  gap: 5px;
+  max-height: min(52vh, 560px);
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -1214,8 +1237,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  min-height: 34px;
-  padding: 7px 8px;
+  min-height: 32px;
+  padding: 6px 8px;
   border: 1px solid transparent;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.42);
@@ -1242,6 +1265,15 @@
   background: rgba(254, 242, 242, 0.62);
 }
 
+.codex-local-access-current-member.is-account-issue,
+.codex-local-access-account-stat-row.is-account-issue,
+.codex-local-access-member-section .group-account-item.is-account-issue {
+  border-color: rgba(239, 68, 68, 0.26);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.68), rgba(254, 242, 242, 0.46)),
+    color-mix(in srgb, var(--bg-card) 90%, #fee2e2 10%);
+}
+
 .codex-local-access-current-member.is-dragging {
   border-color: color-mix(in srgb, var(--primary) 42%, rgba(148, 163, 184, 0.24));
   box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
@@ -1264,17 +1296,21 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
+  width: 32px;
+  height: 32px;
   padding: 0;
   border: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
   color: var(--text-muted);
   cursor: grab;
   flex: 0 0 auto;
   touch-action: none;
   -webkit-user-drag: none;
+}
+
+.codex-local-access-member-drag svg {
+  pointer-events: none;
 }
 
 .codex-local-access-member-drag:hover:not(:disabled) {
@@ -1293,6 +1329,11 @@
   margin-left: auto;
   flex: 0 0 auto;
   flex-wrap: nowrap;
+}
+
+.codex-local-access-member-order-controls
+  .codex-local-access-order-btn:not(.codex-local-access-remove-member-btn) {
+  display: none;
 }
 
 @media (max-width: 760px) {
@@ -1324,6 +1365,15 @@
 .codex-local-access-remove-member-btn:hover:not(:disabled) {
   background: rgba(220, 38, 38, 0.1);
   color: #b91c1c;
+}
+
+.codex-local-access-pause-member-btn {
+  color: #b45309;
+}
+
+.codex-local-access-pause-member-btn:hover:not(:disabled) {
+  background: rgba(245, 158, 11, 0.1);
+  color: #92400e;
 }
 
 .codex-local-access-current-member-email {
@@ -1368,6 +1418,7 @@
     border-color 0.18s ease,
     box-shadow 0.18s ease,
     background 0.18s ease;
+  cursor: default;
 }
 
 .codex-local-access-member-section .group-account-item:hover {
@@ -1404,11 +1455,31 @@
 }
 
 .codex-local-access-member-section .group-account-item.group-account-item-header {
-  min-height: 46px;
-  padding: 10px 14px;
+  min-height: 38px;
+  padding: 8px 12px;
   border-style: dashed;
   background: rgba(255, 255, 255, 0.34);
   box-shadow: none;
+}
+
+.codex-local-access-member-section
+  .group-account-item.group-account-item-header
+  .group-account-main {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.codex-local-access-select-visible-title {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.codex-local-access-select-visible-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .codex-local-access-member-section .group-account-item.group-account-item-header:hover {
@@ -1423,6 +1494,7 @@
   height: 16px;
   margin: 2px 0 0;
   accent-color: var(--primary);
+  cursor: pointer;
 }
 
 .codex-local-access-member-section .group-account-main {
@@ -1432,6 +1504,7 @@
   flex-direction: column;
   align-items: flex-start;
   gap: 8px;
+  cursor: pointer;
 }
 
 .codex-local-access-member-list {
@@ -1457,9 +1530,50 @@
 
 .codex-local-access-member-mainline .codex-local-access-member-metric,
 .codex-local-access-member-mainline .codex-local-access-quota-line,
-.codex-local-access-member-mainline .tier-badge {
+.codex-local-access-member-mainline .tier-badge,
+.codex-local-access-member-mainline .codex-local-access-account-issue-pill {
   flex-wrap: nowrap;
   flex-shrink: 0;
+}
+
+.codex-local-access-account-issue-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(239, 68, 68, 0.24);
+  background: rgba(239, 68, 68, 0.1);
+  color: #b91c1c;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  flex: 0 0 auto;
+}
+
+.codex-local-access-account-issue-pill svg {
+  flex: 0 0 auto;
+}
+
+.codex-local-access-account-issue-pill.quota-refresh,
+.codex-local-access-account-issue-pill.health-cooling {
+  border-color: color-mix(in srgb, var(--primary) 14%, var(--border));
+  background: color-mix(in srgb, var(--primary) 6%, var(--bg-secondary));
+  color: color-mix(in srgb, var(--primary) 70%, var(--text-secondary));
+}
+
+.codex-local-access-account-issue-pill.quota-limited {
+  border-color: rgba(245, 158, 11, 0.26);
+  background: rgba(245, 158, 11, 0.1);
+  color: #b45309;
+}
+
+.codex-local-access-account-issue-pill.health-disabled {
+  border-color: rgba(100, 116, 139, 0.24);
+  background: rgba(100, 116, 139, 0.1);
+  color: #475569;
 }
 
 .codex-local-access-member-unsupported {
@@ -1491,6 +1605,25 @@
   white-space: nowrap;
   text-transform: uppercase;
   letter-spacing: 0.05em;
+}
+
+.codex-local-access-candidate-add-btn {
+  align-self: center;
+  flex: 0 0 auto;
+  min-width: 84px;
+  height: 32px;
+  padding: 0 10px;
+  gap: 6px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.codex-local-access-candidate-add-btn.is-added {
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--bg-surface) 92%, var(--primary) 8%);
+  border-color: rgba(148, 163, 184, 0.18);
 }
 
 .codex-local-access-member-mainline .tier-badge::before,
@@ -1911,6 +2044,32 @@
     linear-gradient(180deg, rgba(15, 23, 42, 0.98), rgba(30, 64, 175, 0.16)),
     color-mix(in srgb, var(--primary) 8%, rgba(15, 23, 42, 0.92));
   border-color: rgba(96, 165, 250, 0.28);
+}
+
+[data-theme="dark"] .codex-local-access-current-member.is-account-issue,
+[data-theme="dark"] .codex-local-access-account-stat-row.is-account-issue,
+[data-theme="dark"] .codex-local-access-member-section .group-account-item.is-account-issue {
+  background:
+    linear-gradient(180deg, rgba(69, 10, 10, 0.38), rgba(30, 41, 59, 0.86)),
+    var(--bg-card);
+  border-color: rgba(248, 113, 113, 0.28);
+}
+
+[data-theme="dark"] .codex-local-access-account-issue-pill {
+  color: #fca5a5;
+}
+
+[data-theme="dark"] .codex-local-access-account-issue-pill.quota-refresh,
+[data-theme="dark"] .codex-local-access-account-issue-pill.health-cooling {
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .codex-local-access-account-issue-pill.quota-limited {
+  color: #fbbf24;
+}
+
+[data-theme="dark"] .codex-local-access-account-issue-pill.health-disabled {
+  color: #cbd5e1;
 }
 
 [data-theme="dark"] .codex-local-access-modal .codex-local-access-code,

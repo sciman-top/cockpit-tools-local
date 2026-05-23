@@ -71,7 +71,7 @@ interface CodexAccountState {
   error: string | null;
   
   // Actions
-  fetchAccounts: () => Promise<void>;
+  fetchAccounts: (options?: { silent?: boolean }) => Promise<void>;
   fetchCurrentAccount: () => Promise<void>;
   switchAccount: (accountId: string) => Promise<CodexAccount>;
   deleteAccount: (accountId: string) => Promise<void>;
@@ -101,8 +101,10 @@ export const useCodexAccountStore = create<CodexAccountState>((set, get) => ({
   loading: false,
   error: null,
   
-  fetchAccounts: async () => {
-    set({ loading: true, error: null });
+  fetchAccounts: async (options) => {
+    if (!options?.silent) {
+      set({ loading: true, error: null });
+    }
     try {
       const accounts = await codexService.listCodexAccounts();
       if (
@@ -111,15 +113,17 @@ export const useCodexAccountStore = create<CodexAccountState>((set, get) => ({
         !allowNextEmptyCodexAccountList
       ) {
         console.warn('[CodexAccountStore] 忽略异常空账号列表，保留本地缓存账号');
-        set({ loading: false });
+        if (!options?.silent) {
+          set({ loading: false });
+        }
         return;
       }
       allowNextEmptyCodexAccountList = false;
-      set({ accounts, loading: false });
+      set(options?.silent ? { accounts } : { accounts, loading: false });
       persistCodexAccountsCache(accounts);
       void get().hydrateAccountProfilesIfNeeded(accounts.map((account) => account.id));
     } catch (e) {
-      set({ error: String(e), loading: false });
+      set(options?.silent ? { error: String(e) } : { error: String(e), loading: false });
     }
   },
   

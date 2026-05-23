@@ -457,6 +457,8 @@ pub struct CodexLocalAccessHealthSummary {
     pub updated_at: i64,
     pub unavailable: bool,
     pub load_error: Option<String>,
+    #[serde(default)]
+    pub accounts: Vec<CodexLocalAccessAccountHealthView>,
     pub healthy_count: usize,
     pub estimated_available_count: usize,
     pub cooling_count: usize,
@@ -475,6 +477,34 @@ pub struct CodexLocalAccessHealthSummary {
     pub audit_degraded: bool,
     pub audit_error: Option<String>,
     pub audit_degraded_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessAccountHealthView {
+    pub account_id: String,
+    #[serde(default)]
+    pub status: CodexLocalAccessAccountHealthStatus,
+    #[serde(default)]
+    pub manual_required: bool,
+    #[serde(default)]
+    pub cooldown_until_ms: Option<i64>,
+    #[serde(default)]
+    pub exhausted_at_ms: Option<i64>,
+    #[serde(default)]
+    pub estimated_reset_at_ms: Option<i64>,
+    #[serde(default)]
+    pub last_status: Option<u16>,
+    #[serde(default)]
+    pub last_error_type: Option<String>,
+    #[serde(default)]
+    pub last_provider_code: Option<String>,
+    #[serde(default)]
+    pub updated_at: i64,
+    #[serde(default)]
+    pub active_model_cooldown_count: usize,
+    #[serde(default)]
+    pub nearest_model_cooldown_until_ms: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

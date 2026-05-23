@@ -1916,9 +1916,9 @@
         "maximumSafety": "Maximum Safety",
         "maximumSafetyDesc": "1 concurrent · 60s · 2 accounts",
         "balancedSelfUse": "Balanced Self-use",
-        "balancedSelfUseDesc": "1 concurrent · 20s · 2 accounts",
+        "balancedSelfUseDesc": "1 concurrent · 20s · 2 accounts · manual opt-in",
         "quotaDrainCareful": "Careful Quota Drain",
-        "quotaDrainCarefulDesc": "1 concurrent · 30s · 2 accounts"
+        "quotaDrainCarefulDesc": "1 concurrent · 30s · 2 accounts · manual opt-in"
       },
       "stats": {
         "requests": "Requests",

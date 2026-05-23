@@ -355,6 +355,10 @@ function Get-AuditAcceptanceSummary {
   $firstFallbackIndex = -1
   $first429AccountHash = $null
   $firstFallbackAccountHash = $null
+  $firstBlockedAccountIndex = -1
+  $firstBlockedAccountHash = $null
+  $blockedAccountHashes = @()
+  $blockedAccountRecords = @()
   for ($i = 0; $i -lt $parsedEvents.Count; $i++) {
     $event = $parsedEvents[$i]
     if ($first429Index -lt 0 -and $event.status -eq 429) {
@@ -365,22 +369,35 @@ function Get-AuditAcceptanceSummary {
       $firstFallbackIndex = $i
       $firstFallbackAccountHash = $event.accountHash
     }
+    $isBlockingAccountEvent = (Test-ValidAccountHash $event.accountHash) -and (
+      ($event.status -eq 429 -and (Test-UsageLimitEvent $event)) -or
+      $event.phase -eq "model_cooldown_applied" -or
+      $event.phase -eq "fallback_selected" -or
+      $event.phase -eq "fallback_blocked"
+    )
+    if ($isBlockingAccountEvent) {
+      if ($firstBlockedAccountIndex -lt 0) {
+        $firstBlockedAccountIndex = $i
+        $firstBlockedAccountHash = $event.accountHash
+      }
+      $blockedAccountHashes += $event.accountHash
+      $blockedAccountRecords += [ordered]@{
+        index = $i
+        accountHash = $event.accountHash
+        requestId = $event.requestId
+        phase = $event.phase
+      }
+    }
   }
+  $blockedAccountHashes = @($blockedAccountHashes | Sort-Object -Unique)
 
-  $has200After429 = $false
   $hasDifferentAccount200AfterFallback = $false
-  $first200After429AccountHash = $null
   $fallbackTransitions = @()
+  $sameTaskAffinityBlockTransitions = @()
   $healthyAccountHashesAfterFallback = @()
   $unrecoveredFallback429Events = @()
   for ($i = 0; $i -lt $parsedEvents.Count; $i++) {
     $event = $parsedEvents[$i]
-    if ($first429Index -ge 0 -and $i -gt $first429Index -and $event.status -eq 200) {
-      $has200After429 = $true
-      if (-not $first200After429AccountHash) {
-        $first200After429AccountHash = $event.accountHash
-      }
-    }
     if ($firstFallbackIndex -ge 0 -and $i -gt $firstFallbackIndex -and $event.status -eq 200) {
       if ($event.accountHash -and $event.accountHash -ne "-" -and $event.accountHash -ne $firstFallbackAccountHash) {
         $hasDifferentAccount200AfterFallback = $true
@@ -432,6 +449,116 @@ function Get-AuditAcceptanceSummary {
         sameRequest = [bool]($next200 -and $next200.requestId -eq $event.requestId)
         completed = [bool]($null -ne $next200)
         differentAccount = [bool]$hasDifferent
+      }
+    }
+
+    if ($event.phase -eq "fallback_blocked" -and $event.outcome -eq "hard_affinity") {
+      $localCompletion = $null
+      $terminal429 = $null
+      for ($j = $i + 1; $j -lt $parsedEvents.Count; $j++) {
+        $candidate = $parsedEvents[$j]
+        if ($candidate.requestId -ne $event.requestId) {
+          continue
+        }
+        if ($candidate.phase -eq "listener") {
+          break
+        }
+        if (
+          (Test-LocalPoolUnavailableEvent $candidate) -and
+          (Test-CodexResponsesRoute $candidate) -and
+          $candidate.status -eq 200 -and
+          ($candidate.streamState -eq "completed" -or $candidate.outcome -eq "in_band_local_completion" -or $candidate.rawLine -match 'response\.completed')
+        ) {
+          $localCompletion = $candidate
+          break
+        }
+        if ($candidate.phase -eq "final_response" -and $candidate.status -eq 429 -and -not (Test-LocalPoolUnavailableEvent $candidate)) {
+          $terminal429 = $candidate
+          break
+        }
+      }
+
+      if ($terminal429) {
+        $unrecoveredFallback429Events += $terminal429
+      }
+
+      $sameTaskAffinityBlockTransitions += [ordered]@{
+        requestId = $event.requestId
+        blockedAccountHash = $event.accountHash
+        blockedTimestamp = $event.timestamp
+        localCompletionTimestamp = if ($localCompletion) { $localCompletion.timestamp } else { $null }
+        localCompletionAccountHash = if ($localCompletion) { $localCompletion.accountHash } else { $null }
+        terminal429Timestamp = if ($terminal429) { $terminal429.timestamp } else { $null }
+        completedLocally = [bool]($null -ne $localCompletion)
+      }
+    }
+  }
+
+  $newRequestGroups = @{}
+  for ($i = 0; $i -lt $parsedEvents.Count; $i++) {
+    $event = $parsedEvents[$i]
+    $requestId = $event.requestId
+    if (-not $requestId -or $requestId -eq "-") {
+      continue
+    }
+    if (-not $newRequestGroups.ContainsKey($requestId)) {
+      $newRequestGroups[$requestId] = [ordered]@{
+        requestId = $requestId
+        firstIndex = $i
+        firstTimestamp = $event.timestamp
+        accountEvents = @()
+      }
+    }
+    $group = $newRequestGroups[$requestId]
+    if (Test-ValidAccountHash $event.accountHash) {
+      $group.accountEvents += [ordered]@{
+        accountHash = $event.accountHash
+        status = $event.status
+        isLocalPoolUnavailable = [bool](Test-LocalPoolUnavailableEvent $event)
+      }
+    }
+  }
+
+  $newRequestAvoidance = @()
+  $newRequestBlockedReuse = @()
+  if ($firstBlockedAccountIndex -ge 0) {
+    foreach ($group in $newRequestGroups.Values) {
+      if ($group.firstIndex -le $firstBlockedAccountIndex) {
+        continue
+      }
+      $knownBlockedBeforeRequest = @(
+        $blockedAccountRecords |
+          Where-Object { $_.index -lt $group.firstIndex } |
+          ForEach-Object { $_.accountHash } |
+          Sort-Object -Unique
+      )
+      $blockedUsed = @(
+        $group.accountEvents |
+          Where-Object { $knownBlockedBeforeRequest -contains $_.accountHash } |
+          ForEach-Object { $_.accountHash } |
+          Sort-Object -Unique
+      )
+      $healthyUsed = @(
+        $group.accountEvents |
+          Where-Object { $_.status -eq 200 -and -not $_.isLocalPoolUnavailable -and $knownBlockedBeforeRequest -notcontains $_.accountHash } |
+          ForEach-Object { $_.accountHash } |
+          Sort-Object -Unique
+      )
+      if ($blockedUsed.Count -gt 0) {
+        $newRequestBlockedReuse += [ordered]@{
+          requestId = $group.requestId
+          firstTimestamp = $group.firstTimestamp
+          blockedAccountHashes = @($blockedUsed)
+          knownBlockedBeforeRequest = @($knownBlockedBeforeRequest)
+          accountHashes = @($group.accountEvents | ForEach-Object { $_.accountHash } | Sort-Object -Unique)
+        }
+      } elseif ($healthyUsed.Count -gt 0) {
+        $newRequestAvoidance += [ordered]@{
+          requestId = $group.requestId
+          firstTimestamp = $group.firstTimestamp
+          knownBlockedBeforeRequest = @($knownBlockedBeforeRequest)
+          healthyAccountHashes = @($healthyUsed)
+        }
       }
     }
   }
@@ -569,6 +696,12 @@ function Get-AuditAcceptanceSummary {
   $interruptedStreams = @($startedStreams | Where-Object { $_.interruptedByCooldown })
   $completedFallbackTransitions = @($fallbackTransitions | Where-Object { $_.completed -and $_.differentAccount })
   $distinctHealthyAccountHashesAfterFallback = @($healthyAccountHashesAfterFallback | Sort-Object -Unique)
+  $completedSameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.completedLocally })
+  $distinctHealthyAccountHashesAfterBlock = @(
+    $newRequestAvoidance |
+      ForEach-Object { $_.healthyAccountHashes } |
+      Sort-Object -Unique
+  )
   $retryLimitErrorCount = [int]$retryLimitEvents.Count + [int]$unrecoveredFallback429Events.Count
   $openPoolWaitRequestIds = @()
   foreach ($poolWaitRequestId in @($poolWaitEvents | ForEach-Object { $_.requestId } | Where-Object { $_ -and $_ -ne "-" } | Sort-Object -Unique)) {
@@ -592,16 +725,32 @@ function Get-AuditAcceptanceSummary {
     hasUsageLimitReached = [bool]@($parsedEvents | Where-Object { Test-UsageLimitEvent $_ }).Count
     hasModelCooldownApplied = [bool]@($parsedEvents | Where-Object { $_.phase -eq "model_cooldown_applied" }).Count
     hasFallbackSelected = [bool]@($parsedEvents | Where-Object { $_.phase -eq "fallback_selected" }).Count
-    has200After429 = [bool]$has200After429
+    hasFallbackBlocked = [bool]@($parsedEvents | Where-Object { $_.phase -eq "fallback_blocked" }).Count
+    hasHardAffinityFallbackBlocked = [bool]@($parsedEvents | Where-Object { $_.phase -eq "fallback_blocked" -and $_.outcome -eq "hard_affinity" }).Count
     hasDifferentAccount200AfterFallback = [bool]$hasDifferentAccount200AfterFallback
     fallbackSelectedCount = @($parsedEvents | Where-Object { $_.phase -eq "fallback_selected" }).Count
+    fallbackBlockedCount = @($parsedEvents | Where-Object { $_.phase -eq "fallback_blocked" }).Count
     fallbackCycleCount = $completedFallbackTransitions.Count
     distinctHealthyAccountCountAfterFallback = $distinctHealthyAccountHashesAfterFallback.Count
     distinctHealthyAccountHashesAfterFallback = @($distinctHealthyAccountHashesAfterFallback)
     fallbackTransitions = @($fallbackTransitions)
+    sameTaskAffinityFallbackBlockedCount = $sameTaskAffinityBlockTransitions.Count
+    sameTaskAffinityLocalCompletionCount = $completedSameTaskAffinityBlocks.Count
+    sameTaskAffinityFallbackBlockedRequestIds = @($sameTaskAffinityBlockTransitions | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sameTaskAffinityFallbackBlockedTransitions = @($sameTaskAffinityBlockTransitions)
+    distinctHealthyAccountCountAfterBlock = $distinctHealthyAccountHashesAfterBlock.Count
+    distinctHealthyAccountHashesAfterBlock = @($distinctHealthyAccountHashesAfterBlock)
     first429AccountHash = $first429AccountHash
     firstFallbackAccountHash = $firstFallbackAccountHash
-    first200After429AccountHash = $first200After429AccountHash
+    firstBlockedAccountHash = $firstBlockedAccountHash
+    blockedAccountCount = $blockedAccountHashes.Count
+    blockedAccountHashes = @($blockedAccountHashes)
+    newRequestAvoidanceCount = $newRequestAvoidance.Count
+    newRequestAvoidanceRequestIds = @($newRequestAvoidance | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    newRequestAvoidance = @($newRequestAvoidance)
+    newRequestBlockedReuseCount = $newRequestBlockedReuse.Count
+    newRequestBlockedReuseRequestIds = @($newRequestBlockedReuse | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    newRequestBlockedReuse = @($newRequestBlockedReuse)
     retryLimitErrorFound = [bool]$retryLimitErrorCount
     retryLimitErrorCount = $retryLimitErrorCount
     retryLimitTextMatchCount = $retryLimitEvents.Count
@@ -681,62 +830,64 @@ function New-AcceptanceResults {
   )
   $results = @()
 
-  $quota = New-MonitorResult "quota_fallback_audit_contract"
-  $quotaEvidence = @{
+  $sameTask = New-MonitorResult "same_task_affinity_fallback_blocked"
+  $sameTaskEvidence = @{
     has429 = [bool]$AuditSummary.has429
     hasUsageLimitReached = [bool]$AuditSummary.hasUsageLimitReached
     hasModelCooldownApplied = [bool]$AuditSummary.hasModelCooldownApplied
-    hasFallbackSelected = [bool]$AuditSummary.hasFallbackSelected
-    has200After429 = [bool]$AuditSummary.has200After429
-    hasDifferentAccount200AfterFallback = [bool]$AuditSummary.hasDifferentAccount200AfterFallback
-    fallbackCycleCount = [int]$AuditSummary.fallbackCycleCount
+    hasFallbackBlocked = [bool]$AuditSummary.hasFallbackBlocked
+    hasHardAffinityFallbackBlocked = [bool]$AuditSummary.hasHardAffinityFallbackBlocked
+    sameTaskAffinityFallbackBlockedCount = [int]$AuditSummary.sameTaskAffinityFallbackBlockedCount
+    sameTaskAffinityLocalCompletionCount = [int]$AuditSummary.sameTaskAffinityLocalCompletionCount
+    sameTaskAffinityFallbackBlockedRequestIds = @($AuditSummary.sameTaskAffinityFallbackBlockedRequestIds)
     requiredFallbackCycles = [int]$RequiredFallbackCycles
-    distinctHealthyAccountCountAfterFallback = [int]$AuditSummary.distinctHealthyAccountCountAfterFallback
-    requiredDistinctHealthyAccounts = [int]$RequiredDistinctHealthyAccounts
     first429AccountHash = $AuditSummary.first429AccountHash
-    firstFallbackAccountHash = $AuditSummary.firstFallbackAccountHash
-    first200After429AccountHash = $AuditSummary.first200After429AccountHash
     localPoolUnavailableCount = [int]$AuditSummary.localPoolUnavailableCount
+    responsesLocalCompletionPoolUnavailableCount = [int]$AuditSummary.responsesLocalCompletionPoolUnavailableCount
   }
-  $quotaPass = $AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.hasFallbackSelected -and $AuditSummary.has200After429 -and $AuditSummary.fallbackCycleCount -ge $RequiredFallbackCycles
-  if ($quotaPass) {
-    $results += Set-MonitorStatus $quota "pass" $null $quotaEvidence
+  $sameTaskPass = $AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.sameTaskAffinityFallbackBlockedCount -ge $RequiredFallbackCycles -and $AuditSummary.sameTaskAffinityLocalCompletionCount -ge $RequiredFallbackCycles
+  if ($sameTaskPass) {
+    $results += Set-MonitorStatus $sameTask "pass" $null $sameTaskEvidence
   } elseif ($RequireQuotaFallback) {
-    $results += Set-MonitorStatus $quota "blocked" "未在监测窗口内观察到完整 429 -> cooldown -> fallback -> 200 链路" $quotaEvidence
+    $results += Set-MonitorStatus $sameTask "blocked" "未在监测窗口内观察到同任务 429 -> cooldown -> fallback_blocked(hard_affinity) -> 本地 completed 闭合" $sameTaskEvidence
   } else {
-    $results += Set-MonitorStatus $quota "skipped" "未要求 quota fallback 必须出现；仅记录 audit 观察结果" $quotaEvidence
+    $results += Set-MonitorStatus $sameTask "skipped" "未要求 quota hard-affinity 必须出现；仅记录 audit 观察结果" $sameTaskEvidence
   }
 
   $newRequest = New-MonitorResult "new_request_avoids_exhausted_account"
   $newRequestEvidence = @{
-    hasDifferentAccount200AfterFallback = [bool]$AuditSummary.hasDifferentAccount200AfterFallback
-    distinctHealthyAccountCountAfterFallback = [int]$AuditSummary.distinctHealthyAccountCountAfterFallback
-    requiredDistinctHealthyAccounts = [int]$RequiredDistinctHealthyAccounts
-    first429AccountHash = $AuditSummary.first429AccountHash
-    first200After429AccountHash = $AuditSummary.first200After429AccountHash
+    blockedAccountCount = [int]$AuditSummary.blockedAccountCount
+    blockedAccountHashes = @($AuditSummary.blockedAccountHashes)
+    newRequestAvoidanceCount = [int]$AuditSummary.newRequestAvoidanceCount
+    newRequestAvoidanceRequestIds = @($AuditSummary.newRequestAvoidanceRequestIds)
+    newRequestBlockedReuseCount = [int]$AuditSummary.newRequestBlockedReuseCount
+    newRequestBlockedReuseRequestIds = @($AuditSummary.newRequestBlockedReuseRequestIds)
   }
-  if ($AuditSummary.hasDifferentAccount200AfterFallback -and $AuditSummary.distinctHealthyAccountCountAfterFallback -ge $RequiredDistinctHealthyAccounts) {
+  if ($AuditSummary.newRequestBlockedReuseCount -gt 0) {
+    $results += Set-MonitorStatus $newRequest "fail" "监测窗口内后续新请求仍命中过已 exhausted/cooldown 的账号" $newRequestEvidence
+  } elseif ($AuditSummary.newRequestAvoidanceCount -gt 0) {
     $results += Set-MonitorStatus $newRequest "pass" $null $newRequestEvidence
   } elseif ($RequireQuotaFallback) {
-    $results += Set-MonitorStatus $newRequest "blocked" "未观察到 fallback 后由不同健康账号返回 200" $newRequestEvidence
+    $results += Set-MonitorStatus $newRequest "blocked" "未观察到后续新请求避开 exhausted/cooldown 账号" $newRequestEvidence
   } else {
     $results += Set-MonitorStatus $newRequest "skipped" "未要求观察新请求避开 exhausted/cooldown 账号" $newRequestEvidence
   }
 
   $multi = New-MonitorResult "multi_account_fallback_observed"
   $multiEvidence = @{
-    fallbackCycleCount = [int]$AuditSummary.fallbackCycleCount
+    sameTaskAffinityFallbackBlockedCount = [int]$AuditSummary.sameTaskAffinityFallbackBlockedCount
+    sameTaskAffinityLocalCompletionCount = [int]$AuditSummary.sameTaskAffinityLocalCompletionCount
     requiredFallbackCycles = [int]$RequiredFallbackCycles
-    distinctHealthyAccountCountAfterFallback = [int]$AuditSummary.distinctHealthyAccountCountAfterFallback
+    distinctHealthyAccountCountAfterBlock = [int]$AuditSummary.distinctHealthyAccountCountAfterBlock
     requiredDistinctHealthyAccounts = [int]$RequiredDistinctHealthyAccounts
-    distinctHealthyAccountHashesAfterFallback = @($AuditSummary.distinctHealthyAccountHashesAfterFallback)
+    distinctHealthyAccountHashesAfterBlock = @($AuditSummary.distinctHealthyAccountHashesAfterBlock)
   }
   if ($RequiredFallbackCycles -le 1 -and $RequiredDistinctHealthyAccounts -le 1) {
-    $results += Set-MonitorStatus $multi "skipped" "未要求多账号 fallback 计数；仅记录多账号观察结果" $multiEvidence
-  } elseif ($AuditSummary.fallbackCycleCount -ge $RequiredFallbackCycles -and $AuditSummary.distinctHealthyAccountCountAfterFallback -ge $RequiredDistinctHealthyAccounts) {
+    $results += Set-MonitorStatus $multi "skipped" "未要求多账号 quota recovery 计数；仅记录多账号观察结果" $multiEvidence
+  } elseif ($AuditSummary.sameTaskAffinityLocalCompletionCount -ge $RequiredFallbackCycles -and $AuditSummary.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts) {
     $results += Set-MonitorStatus $multi "pass" $null $multiEvidence
   } else {
-    $results += Set-MonitorStatus $multi "blocked" "未观察到足够的多账号 fallback cycle" $multiEvidence
+    $results += Set-MonitorStatus $multi "blocked" "未观察到足够的同任务 hard-affinity block 与后续健康账号接管" $multiEvidence
   }
 
   $stream = New-MonitorResult "accepted_stream_continuity"
@@ -898,6 +1049,67 @@ function New-AcceptanceResults {
   $results
 }
 
+function New-ContinuitySummary {
+  param([System.Collections.IDictionary]$AuditSummary)
+
+  $currentEvidence = [ordered]@{
+    has429 = [bool]$AuditSummary.has429
+    hasUsageLimitReached = [bool]$AuditSummary.hasUsageLimitReached
+    hasModelCooldownApplied = [bool]$AuditSummary.hasModelCooldownApplied
+    hasFallbackBlocked = [bool]$AuditSummary.hasFallbackBlocked
+    hasHardAffinityFallbackBlocked = [bool]$AuditSummary.hasHardAffinityFallbackBlocked
+    sameTaskAffinityFallbackBlockedCount = [int]$AuditSummary.sameTaskAffinityFallbackBlockedCount
+    sameTaskAffinityLocalCompletionCount = [int]$AuditSummary.sameTaskAffinityLocalCompletionCount
+    sameTaskAffinityFallbackBlockedRequestIds = @($AuditSummary.sameTaskAffinityFallbackBlockedRequestIds)
+    requiredFallbackCycles = [int]$RequiredFallbackCycles
+    retryLimitErrorFound = [bool]$AuditSummary.retryLimitErrorFound
+    first429AccountHash = $AuditSummary.first429AccountHash
+  }
+  $currentStatus = "blocked"
+  $currentReason = "未在监测窗口内观察到同任务 429 -> cooldown -> fallback_blocked(hard_affinity) -> 本地 completed 闭合"
+  if ($AuditSummary.retryLimitErrorFound) {
+    $currentStatus = "fail"
+    $currentReason = "hard-affinity block 后仍出现 retry-limit/final 429"
+  } elseif ($AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.sameTaskAffinityFallbackBlockedCount -ge $RequiredFallbackCycles -and $AuditSummary.sameTaskAffinityLocalCompletionCount -ge $RequiredFallbackCycles) {
+    $currentStatus = "pass"
+    $currentReason = $null
+  }
+
+  $newRequestEvidence = [ordered]@{
+    blockedAccountCount = [int]$AuditSummary.blockedAccountCount
+    blockedAccountHashes = @($AuditSummary.blockedAccountHashes)
+    newRequestAvoidanceCount = [int]$AuditSummary.newRequestAvoidanceCount
+    newRequestAvoidanceRequestIds = @($AuditSummary.newRequestAvoidanceRequestIds)
+    newRequestBlockedReuseCount = [int]$AuditSummary.newRequestBlockedReuseCount
+    newRequestBlockedReuseRequestIds = @($AuditSummary.newRequestBlockedReuseRequestIds)
+  }
+  $newRequestStatus = "blocked"
+  $newRequestReason = "未观察到后续新请求避开 exhausted/cooldown 账号"
+  if ($AuditSummary.newRequestBlockedReuseCount -gt 0) {
+    $newRequestStatus = "fail"
+    $newRequestReason = "后续新请求仍命中过已 exhausted/cooldown 的账号"
+  } elseif ($AuditSummary.newRequestAvoidanceCount -gt 0) {
+    $newRequestStatus = "pass"
+    $newRequestReason = $null
+  } elseif (-not $RequireQuotaFallback) {
+    $newRequestStatus = "skipped"
+    $newRequestReason = "未要求观察新请求避开 exhausted/cooldown 账号"
+  }
+
+  [ordered]@{
+    sameTaskAffinityFallbackBlocked = [ordered]@{
+      status = $currentStatus
+      reason = $currentReason
+      evidence = $currentEvidence
+    }
+    newRequestAvoidsExhaustedCooldown = [ordered]@{
+      status = $newRequestStatus
+      reason = $newRequestReason
+      evidence = $newRequestEvidence
+    }
+  }
+}
+
 if (-not $AuditPath) {
   $AuditPath = Join-Path $DataRoot "codex_local_access_audit.jsonl"
 }
@@ -920,13 +1132,13 @@ do {
     $events += @($lines | ForEach-Object { Convert-AuditLine $_ })
     if (-not $Quiet) {
       $summary = Get-AuditAcceptanceSummary $events
-      Write-Host ("events={0}; has429={1}; fallback={2}; has200After429={3}; fallbackCycles={4}; healthyAccounts={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; localCompletionPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}" -f $summary.eventCount, $summary.has429, $summary.hasFallbackSelected, $summary.has200After429, $summary.fallbackCycleCount, $summary.distinctHealthyAccountCountAfterFallback, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.responsesLocalCompletionPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount)
+      Write-Host ("events={0}; has429={1}; fallbackBlocked={2}; sameTaskLocalCompletion={3}; newRequestAvoidance={4}; healthyAccountsAfterBlock={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; localCompletionPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}" -f $summary.eventCount, $summary.has429, $summary.sameTaskAffinityFallbackBlockedCount, $summary.sameTaskAffinityLocalCompletionCount, $summary.newRequestAvoidanceCount, $summary.distinctHealthyAccountCountAfterBlock, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.responsesLocalCompletionPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount)
     }
   }
 
   if ($StopWhenSatisfied) {
     $summaryNow = Get-AuditAcceptanceSummary $events
-    $quotaSatisfied = (-not $RequireQuotaFallback) -or ($summaryNow.has429 -and $summaryNow.hasUsageLimitReached -and $summaryNow.hasModelCooldownApplied -and $summaryNow.hasFallbackSelected -and $summaryNow.has200After429 -and $summaryNow.fallbackCycleCount -ge $RequiredFallbackCycles -and $summaryNow.distinctHealthyAccountCountAfterFallback -ge $RequiredDistinctHealthyAccounts)
+    $quotaSatisfied = (-not $RequireQuotaFallback) -or ($summaryNow.has429 -and $summaryNow.hasUsageLimitReached -and $summaryNow.hasModelCooldownApplied -and $summaryNow.sameTaskAffinityFallbackBlockedCount -ge $RequiredFallbackCycles -and $summaryNow.sameTaskAffinityLocalCompletionCount -ge $RequiredFallbackCycles -and $summaryNow.newRequestAvoidanceCount -gt 0 -and $summaryNow.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts)
     $streamSatisfied = (-not $RequireStreamCompletion) -or ($summaryNow.completedStreamCount -ge $RequiredCompletedStreams)
     $retrySatisfied = (-not $summaryNow.retryLimitErrorFound)
     $responses503Satisfied = (-not $summaryNow.responsesTransport503PoolUnavailableCount)
@@ -952,6 +1164,7 @@ $cliComparison = Compare-FileGuardState $cliBefore $cliAfter
 $appComparison = Compare-CodexAppProcessState $appBefore $appAfter
 $auditSummary = Get-AuditAcceptanceSummary $events
 $results = New-AcceptanceResults -AuditSummary $auditSummary -CliComparison $cliComparison -AppComparison $appComparison
+$continuitySummary = New-ContinuitySummary $auditSummary
 
 $overall = if ($results | Where-Object { $_.status -eq "fail" }) {
   "fail"
@@ -1000,6 +1213,7 @@ $report = [ordered]@{
     comparison = $appComparison
   }
   audit = $auditSummary
+  continuitySummary = $continuitySummary
   results = $results
   safetyNotes = @(
     "this live monitor is read-only",

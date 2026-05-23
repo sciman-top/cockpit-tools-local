@@ -1928,9 +1928,9 @@
         "maximumSafety": "最高安全",
         "maximumSafetyDesc": "1 并发 · 60s · 2账号",
         "balancedSelfUse": "自用均衡",
-        "balancedSelfUseDesc": "1 并发 · 20s · 2账号",
+        "balancedSelfUseDesc": "1 并发 · 20s · 2账号 · 手动 opt-in",
         "quotaDrainCareful": "谨慎消耗",
-        "quotaDrainCarefulDesc": "1 并发 · 30s · 2账号"
+        "quotaDrainCarefulDesc": "1 并发 · 30s · 2账号 · 手动 opt-in"
       },
       "stats": {
         "requests": "总请求数",
