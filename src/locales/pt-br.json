@@ -1893,7 +1893,16 @@
       },
       "addMember": "Adicionar ao serviço de API",
       "addSelectedMembers": "Adicionar selecionados ao serviço de API",
-      "removeSelectedMembers": "Remover selecionados do serviço de API"
+      "removeSelectedMembers": "Remover selecionados do serviço de API",
+      "poolUnavailable": {
+        "allExhausted": "Todas as contas do pool do serviço API esgotaram a cota. Atualize cotas, ajuste o pool ou recupere contas antes de tentar novamente.",
+        "blocked": "O pool do serviço API não tem contas agendáveis ({{reasons}}). Atualize cotas, ajuste o pool ou recupere contas antes de tentar novamente.",
+        "exhausted": "{{count}} esgotadas",
+        "cooling": "{{count}} em resfriamento",
+        "manualRequired": "{{count}} exigem ação manual",
+        "disabled": "{{count}} desativadas",
+        "unknown": "estado desconhecido"
+      }
     },
     "local": {
       "desc": "Importe a conta atual de ~/.codex/auth.json",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Falha ao atualizar",
       "generic": "Falha ao atualizar a cota, tente novamente mais tarde",
       "deactivatedWorkspace": "Workspace desativado, troque de conta ou reautorize",
-      "requestFailedManualRetry": "Verifique a rede. A cota mais recente não foi obtida. Atualize para tentar novamente."
+      "requestFailedManualRetry": "Verifique a rede. A cota mais recente não foi obtida. Atualize para tentar novamente.",
+      "limitBadge": "Cota limitada",
+      "limitDetail": "A cota está esgotada ou em resfriamento: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Arraste para ordenar",
       "customMoveUp": "Subir",
       "customMoveDown": "Descer",
-      "customReset": "Redefinir ordem"
+      "customReset": "Redefinir ordem",
+      "customMoveTop": "Mover para o topo",
+      "customMoveBottom": "Mover para o fim"
     },
     "opencodeSwitch": "Alternador do OpenCode",
     "opencodeSwitchDesc": "Sincronizar a troca de conta do Codex no OpenCode",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Adicionar ao grupo"
+      "addToGroup": "Adicionar ao grupo",
+      "reorder": "Reordenar grupo",
+      "orderSaved": "Ordem do grupo salva"
     },
     "subscription": {
       "label": "Fim da assinatura",

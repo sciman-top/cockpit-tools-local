@@ -1964,7 +1964,16 @@
       },
       "addMember": "Add to API service",
       "addSelectedMembers": "Add selected to API service",
-      "removeSelectedMembers": "Remove selected from API service"
+      "removeSelectedMembers": "Remove selected from API service",
+      "poolUnavailable": {
+        "allExhausted": "All API service pool accounts have exhausted quota. Refresh quotas, adjust the pool, or recover accounts before retrying.",
+        "blocked": "The API service pool has no schedulable accounts ({{reasons}}). Refresh quotas, adjust the pool, or recover accounts before retrying.",
+        "exhausted": "{{count}} exhausted",
+        "cooling": "{{count}} cooling",
+        "manualRequired": "{{count}} require manual action",
+        "disabled": "{{count}} disabled",
+        "unknown": "unknown status"
+      }
     },
     "api": {
       "baseUrl": "Base URL",
@@ -2271,7 +2280,9 @@
       "customDragHandle": "Drag to sort",
       "customMoveUp": "Move up",
       "customMoveDown": "Move down",
-      "customReset": "Reset custom order"
+      "customReset": "Reset custom order",
+      "customMoveTop": "Move to top",
+      "customMoveBottom": "Move to bottom"
     },
     "opencodeSwitch": "OpenCode switch toggle",
     "opencodeSwitchDesc": "Sync Codex account info in OpenCode",
@@ -2518,7 +2529,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Add to Group"
+      "addToGroup": "Add to Group",
+      "reorder": "Reorder group",
+      "orderSaved": "Group order saved"
     },
     "speed": {
       "title": "Speed",

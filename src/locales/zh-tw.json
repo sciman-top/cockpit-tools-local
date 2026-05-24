@@ -1893,7 +1893,16 @@
       },
       "addMember": "加入 API 服務",
       "addSelectedMembers": "將選取項加入 API 服務",
-      "removeSelectedMembers": "將選取項移出 API 服務"
+      "removeSelectedMembers": "將選取項移出 API 服務",
+      "poolUnavailable": {
+        "allExhausted": "API 服務號池所有帳號的額度都已用盡。請先重新整理額度、調整號池或恢復帳號後再重試。",
+        "blocked": "API 服務號池沒有可調度帳號（{{reasons}}）。請先重新整理額度、調整號池或恢復帳號後再重試。",
+        "exhausted": "{{count}} 個額度用盡",
+        "cooling": "{{count}} 個冷卻中",
+        "manualRequired": "{{count}} 個需要人工處理",
+        "disabled": "{{count}} 個已停用",
+        "unknown": "未知狀態"
+      }
     },
     "api": {
       "baseUrl": "基礎網址",
@@ -2006,7 +2015,9 @@
       "refreshFailedBadge": "重新整理失敗",
       "generic": "配額重新整理失敗，請稍後再試",
       "deactivatedWorkspace": "工作區已停用，請切換帳號或重新授權",
-      "requestFailedManualRetry": "請檢查網路，未取得最新配額。可重新整理重試。"
+      "requestFailedManualRetry": "請檢查網路，未取得最新配額。可重新整理重試。",
+      "limitBadge": "額度受限",
+      "limitDetail": "額度已用盡或正在冷卻：{{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -2042,7 +2053,9 @@
       "customDragHandle": "拖曳排序",
       "customMoveUp": "上移",
       "customMoveDown": "下移",
-      "customReset": "重設自訂順序"
+      "customReset": "重設自訂順序",
+      "customMoveTop": "移到最上方",
+      "customMoveBottom": "移到最下方"
     },
     "opencodeSwitch": "OpenCode 切換開關",
     "opencodeSwitchDesc": "同步切換 OpenCode 裡的 Codex 帳號資訊",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "加入群組"
+      "addToGroup": "加入群組",
+      "reorder": "調整群組順序",
+      "orderSaved": "群組順序已儲存"
     },
     "subscription": {
       "label": "訂閱到期",

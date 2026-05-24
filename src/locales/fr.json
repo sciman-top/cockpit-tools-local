@@ -1893,7 +1893,16 @@
       },
       "addMember": "Ajouter au service API",
       "addSelectedMembers": "Ajouter la sélection au service API",
-      "removeSelectedMembers": "Retirer la sélection du service API"
+      "removeSelectedMembers": "Retirer la sélection du service API",
+      "poolUnavailable": {
+        "allExhausted": "Tous les comptes du pool du service API ont épuisé leur quota. Actualisez les quotas, ajustez le pool ou restaurez les comptes avant de réessayer.",
+        "blocked": "Le pool du service API ne contient aucun compte planifiable ({{reasons}}). Actualisez les quotas, ajustez le pool ou restaurez les comptes avant de réessayer.",
+        "exhausted": "{{count}} épuisés",
+        "cooling": "{{count}} en refroidissement",
+        "manualRequired": "{{count}} nécessitent une action manuelle",
+        "disabled": "{{count}} désactivés",
+        "unknown": "état inconnu"
+      }
     },
     "local": {
       "desc": "Importer le compte connecté depuis ~/.codex/auth.json",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Échec de l’actualisation",
       "generic": "Échec de l’actualisation du quota, veuillez réessayer plus tard",
       "deactivatedWorkspace": "L’espace de travail est désactivé, changez de compte ou réautorisez",
-      "requestFailedManualRetry": "Vérifiez le réseau. Le quota le plus récent n’a pas été récupéré. Actualisez pour réessayer."
+      "requestFailedManualRetry": "Vérifiez le réseau. Le quota le plus récent n’a pas été récupéré. Actualisez pour réessayer.",
+      "limitBadge": "Quota limité",
+      "limitDetail": "Le quota est épuisé ou en refroidissement : {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Faire glisser",
       "customMoveUp": "Monter",
       "customMoveDown": "Descendre",
-      "customReset": "Réinitialiser l’ordre"
+      "customReset": "Réinitialiser l’ordre",
+      "customMoveTop": "Déplacer en haut",
+      "customMoveBottom": "Déplacer en bas"
     },
     "opencodeSwitch": "Interrupteur OpenCode",
     "opencodeSwitchDesc": "Synchroniser le changement de compte Codex dans OpenCode",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Ajouter au groupe"
+      "addToGroup": "Ajouter au groupe",
+      "reorder": "Réorganiser le groupe",
+      "orderSaved": "Ordre du groupe enregistré"
     },
     "subscription": {
       "label": "Expiration abo",

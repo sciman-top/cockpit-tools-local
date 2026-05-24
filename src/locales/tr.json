@@ -1893,7 +1893,16 @@
       },
       "addMember": "API hizmetine ekle",
       "addSelectedMembers": "Seçilenleri API hizmetine ekle",
-      "removeSelectedMembers": "Seçilenleri API hizmetinden çıkar"
+      "removeSelectedMembers": "Seçilenleri API hizmetinden çıkar",
+      "poolUnavailable": {
+        "allExhausted": "API hizmet havuzundaki tüm hesapların kotası tükendi. Yeniden denemeden önce kotaları yenileyin, havuzu ayarlayın veya hesapları kurtarın.",
+        "blocked": "API hizmet havuzunda zamanlanabilir hesap yok ({{reasons}}). Yeniden denemeden önce kotaları yenileyin, havuzu ayarlayın veya hesapları kurtarın.",
+        "exhausted": "{{count}} tükenmiş",
+        "cooling": "{{count}} beklemede",
+        "manualRequired": "{{count}} manuel işlem gerektiriyor",
+        "disabled": "{{count}} devre dışı",
+        "unknown": "bilinmeyen durum"
+      }
     },
     "local": {
       "desc": "~/.codex/auth.json'dan mevcut hesabı içe aktar",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Yenileme başarısız",
       "generic": "Kota yenileme başarısız, lütfen daha sonra tekrar deneyin",
       "deactivatedWorkspace": "Çalışma alanı devre dışı, hesap değiştirin veya yeniden yetkilendirin",
-      "requestFailedManualRetry": "Ağı kontrol edin. En güncel kota alınamadı. Yenileyip tekrar deneyin."
+      "requestFailedManualRetry": "Ağı kontrol edin. En güncel kota alınamadı. Yenileyip tekrar deneyin.",
+      "limitBadge": "Kota sınırlı",
+      "limitDetail": "Kota tükendi veya bekleme süresinde: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Sürükle",
       "customMoveUp": "Yukarı",
       "customMoveDown": "Aşağı",
-      "customReset": "Sırayı sıfırla"
+      "customReset": "Sırayı sıfırla",
+      "customMoveTop": "En üste taşı",
+      "customMoveBottom": "En alta taşı"
     },
     "opencodeSwitch": "OpenCode geçiş anahtarı",
     "opencodeSwitchDesc": "OpenCode içinde Codex hesap geçişini senkronize et",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Gruba Ekle"
+      "addToGroup": "Gruba Ekle",
+      "reorder": "Grubu yeniden sırala",
+      "orderSaved": "Grup sırası kaydedildi"
     },
     "subscription": {
       "label": "Abonelik bitişi",

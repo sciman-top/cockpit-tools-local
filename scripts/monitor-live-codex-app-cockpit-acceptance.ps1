@@ -418,6 +418,42 @@ function Get-AuditUpstreamResponseIdHash {
   $null
 }
 
+function Get-AuditLineageSource {
+  param([System.Collections.IDictionary]$Event)
+  foreach ($name in @("turn_lineage_source", "request_id_source")) {
+    $value = Get-AuditDetailValue -Event $Event -Name $name
+    if (-not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-") {
+      return $value
+    }
+  }
+
+  $requestId = [string]$Event.requestId
+  if ($requestId -match '^x-codex-turn-state:sha256:') {
+    return "codex_turn_state"
+  }
+  if ($requestId -match '^x-codex-turn-metadata\.turn_id:sha256:') {
+    return "codex_turn_metadata_turn_id"
+  }
+  if ($requestId -match '^x-codex-turn-metadata:sha256:') {
+    return "codex_turn_metadata"
+  }
+  if (-not [string]::IsNullOrWhiteSpace((Get-AuditPreviousResponseIdHash $Event))) {
+    return "previous_response_id"
+  }
+
+  $null
+}
+
+function Test-HardAffinityLineageSource {
+  param([string]$Source)
+  $Source -in @("codex_turn_state", "previous_response_id")
+}
+
+function Test-MetadataLineageSource {
+  param([string]$Source)
+  $Source -in @("codex_turn_metadata", "codex_turn_metadata_turn_id")
+}
+
 function Get-AuditAcceptanceSummary {
   param([object[]]$Events)
   $parsedEvents = @($Events | Where-Object { $_.parsed })
@@ -839,8 +875,11 @@ function Get-AuditAcceptanceSummary {
         eventCount = 0
         requestIds = @()
         gatewayRequestIds = @()
+        lineageSources = @()
         accountHashes = @()
         accountTransitions = @()
+        hardAffinityAccountTransitions = @()
+        metadataAccountTransitions = @()
         previousResponseIdHashes = @()
         upstreamResponseIdHashes = @()
         continuationReroutes = @()
@@ -852,6 +891,10 @@ function Get-AuditAcceptanceSummary {
     $lineage = $lineageGroups[$lineageId]
     $lineage.eventCount++
     $lineage.lastTimestamp = $event.timestamp
+    $lineageSource = Get-AuditLineageSource $event
+    if (-not [string]::IsNullOrWhiteSpace($lineageSource)) {
+      $lineage.lineageSources += $lineageSource
+    }
     if ($event.requestId -and $event.requestId -ne "-") {
       $lineage.requestIds += $event.requestId
     }
@@ -862,16 +905,31 @@ function Get-AuditAcceptanceSummary {
     if (Test-ValidAccountHash $event.accountHash) {
       $lastAccount = if ($lineage.accountHashes.Count -gt 0) { $lineage.accountHashes[-1] } else { $null }
       if ($lastAccount -and $lastAccount -ne $event.accountHash) {
-        $lineage.accountTransitions += [ordered]@{
+        $previousResponseIdHashForTransition = Get-AuditPreviousResponseIdHash $event
+        $isContinuationTransition = [bool](Get-AuditDetailBool -Event $event -Name "is_continuation")
+        $isHardAffinityTransition = [bool](
+          (Test-HardAffinityLineageSource $lineageSource) -or
+          $isContinuationTransition -or
+          (-not [string]::IsNullOrWhiteSpace($previousResponseIdHashForTransition))
+        )
+        $transition = [ordered]@{
           timestamp = $event.timestamp
           fromAccountHash = $lastAccount
           toAccountHash = $event.accountHash
           requestId = $event.requestId
           gatewayRequestId = $gatewayRequestId
           phase = $event.phase
-          isContinuation = [bool](Get-AuditDetailBool -Event $event -Name "is_continuation")
+          lineageSource = $lineageSource
+          isContinuation = $isContinuationTransition
           isAutoCompactCandidate = [bool](Get-AuditDetailBool -Event $event -Name "is_auto_compact_candidate")
-          previousResponseIdHash = Get-AuditPreviousResponseIdHash $event
+          previousResponseIdHash = $previousResponseIdHashForTransition
+          isHardAffinityLineage = $isHardAffinityTransition
+        }
+        $lineage.accountTransitions += $transition
+        if ($isHardAffinityTransition) {
+          $lineage.hardAffinityAccountTransitions += $transition
+        } elseif (Test-MetadataLineageSource $lineageSource) {
+          $lineage.metadataAccountTransitions += $transition
         }
       }
       $lineage.accountHashes += $event.accountHash
@@ -931,9 +989,14 @@ function Get-AuditAcceptanceSummary {
       eventCount = [int]$_.eventCount
       requestIds = @($_.requestIds | Select-Object -Unique)
       gatewayRequestIds = @($_.gatewayRequestIds | Select-Object -Unique)
+      lineageSources = @($_.lineageSources | Select-Object -Unique)
       accountHashes = @($uniqueAccounts)
       accountSwitchCount = [math]::Max(0, $uniqueAccounts.Count - 1)
       accountTransitions = @($_.accountTransitions)
+      hardAffinityAccountSwitchCount = @($_.hardAffinityAccountTransitions).Count
+      hardAffinityAccountTransitions = @($_.hardAffinityAccountTransitions)
+      metadataAccountSwitchCount = @($_.metadataAccountTransitions).Count
+      metadataAccountTransitions = @($_.metadataAccountTransitions)
       previousResponseIdHashes = @($_.previousResponseIdHashes | Select-Object -Unique)
       upstreamResponseIdHashes = @($_.upstreamResponseIdHashes | Select-Object -Unique)
       continuationReroutes = @($_.continuationReroutes)
@@ -943,6 +1006,12 @@ function Get-AuditAcceptanceSummary {
     }
   } | Sort-Object lineageId)
   $lineageAccountSwitches = @($lineageSummaries | Where-Object { $_.accountSwitchCount -gt 0 })
+  $hardAffinityLineageAccountSwitches = @($lineageSummaries | Where-Object { $_.hardAffinityAccountSwitchCount -gt 0 })
+  $metadataOnlyLineageAccountSwitches = @($lineageSummaries | Where-Object {
+    $_.metadataAccountSwitchCount -gt 0 -and
+    $_.hardAffinityAccountSwitchCount -eq 0 -and
+    @($_.continuationReroutes).Count -eq 0
+  })
   $continuationReroutes = @($lineageSummaries | ForEach-Object { $_.continuationReroutes })
   $autoCompactReroutes = @($lineageSummaries | ForEach-Object { $_.autoCompactReroutes })
   $lineageLocalCompletionsAfterHardAffinity = @($lineageSummaries | ForEach-Object { $_.localCompletionAfterHardAffinity })
@@ -1063,6 +1132,10 @@ function Get-AuditAcceptanceSummary {
     lineageCount = $lineageSummaries.Count
     lineageAccountSwitchCount = $lineageAccountSwitches.Count
     lineageAccountSwitches = @($lineageAccountSwitches)
+    hardAffinityLineageAccountSwitchCount = $hardAffinityLineageAccountSwitches.Count
+    hardAffinityLineageAccountSwitches = @($hardAffinityLineageAccountSwitches)
+    metadataOnlyLineageAccountSwitchCount = $metadataOnlyLineageAccountSwitches.Count
+    metadataOnlyLineageAccountSwitches = @($metadataOnlyLineageAccountSwitches)
     continuationReroutedCount = $continuationReroutes.Count
     continuationReroutes = @($continuationReroutes)
     autoCompactReroutedCount = $autoCompactReroutes.Count
@@ -1372,14 +1445,20 @@ function New-AcceptanceResults {
   $lineageSwitch = New-MonitorResult "turn_lineage_account_switch_absent"
   $lineageSwitchEvidence = @{
     lineageAccountSwitchCount = [int]$AuditSummary.lineageAccountSwitchCount
+    hardAffinityLineageAccountSwitchCount = [int]$AuditSummary.hardAffinityLineageAccountSwitchCount
+    metadataOnlyLineageAccountSwitchCount = [int]$AuditSummary.metadataOnlyLineageAccountSwitchCount
     continuationReroutedCount = [int]$AuditSummary.continuationReroutedCount
     autoCompactReroutedCount = [int]$AuditSummary.autoCompactReroutedCount
     lineageAccountSwitches = @($AuditSummary.lineageAccountSwitches)
+    hardAffinityLineageAccountSwitches = @($AuditSummary.hardAffinityLineageAccountSwitches)
+    metadataOnlyLineageAccountSwitches = @($AuditSummary.metadataOnlyLineageAccountSwitches)
     continuationReroutes = @($AuditSummary.continuationReroutes)
     autoCompactReroutes = @($AuditSummary.autoCompactReroutes)
   }
-  if ($AuditSummary.lineageAccountSwitchCount -gt 0 -or $AuditSummary.continuationReroutedCount -gt 0) {
-    $results += Set-MonitorStatus $lineageSwitch "fail" "同一 turn/response lineage 在监测窗口内命中过多个账号；这会消耗后续账号配额，需区分 stream 内切号与 continuation/compact 后重新 admission" $lineageSwitchEvidence
+  if ($AuditSummary.hardAffinityLineageAccountSwitchCount -gt 0 -or $AuditSummary.continuationReroutedCount -gt 0) {
+    $results += Set-MonitorStatus $lineageSwitch "fail" "同一 sticky turn/response lineage 在监测窗口内命中过多个账号；x-codex-turn-state/previous_response_id 必须保持同账号恢复边界" $lineageSwitchEvidence
+  } elseif ($AuditSummary.metadataOnlyLineageAccountSwitchCount -gt 0) {
+    $results += Set-MonitorStatus $lineageSwitch "warn" "观察到 metadata-only lineage fallback 使用了多个账号；这会消耗账号池，但 x-codex-turn-metadata 不是 hard-affinity token" $lineageSwitchEvidence
   } else {
     $results += Set-MonitorStatus $lineageSwitch "pass" $null $lineageSwitchEvidence
   }
@@ -1504,17 +1583,24 @@ function New-ContinuitySummary {
   $lineageEvidence = [ordered]@{
     lineageCount = [int]$AuditSummary.lineageCount
     lineageAccountSwitchCount = [int]$AuditSummary.lineageAccountSwitchCount
+    hardAffinityLineageAccountSwitchCount = [int]$AuditSummary.hardAffinityLineageAccountSwitchCount
+    metadataOnlyLineageAccountSwitchCount = [int]$AuditSummary.metadataOnlyLineageAccountSwitchCount
     continuationReroutedCount = [int]$AuditSummary.continuationReroutedCount
     autoCompactReroutedCount = [int]$AuditSummary.autoCompactReroutedCount
     lineageAccountSwitches = @($AuditSummary.lineageAccountSwitches)
+    hardAffinityLineageAccountSwitches = @($AuditSummary.hardAffinityLineageAccountSwitches)
+    metadataOnlyLineageAccountSwitches = @($AuditSummary.metadataOnlyLineageAccountSwitches)
     continuationReroutes = @($AuditSummary.continuationReroutes)
     autoCompactReroutes = @($AuditSummary.autoCompactReroutes)
   }
   $lineageStatus = "pass"
   $lineageReason = $null
-  if ($AuditSummary.lineageAccountSwitchCount -gt 0 -or $AuditSummary.continuationReroutedCount -gt 0) {
+  if ($AuditSummary.hardAffinityLineageAccountSwitchCount -gt 0 -or $AuditSummary.continuationReroutedCount -gt 0) {
     $lineageStatus = "fail"
-    $lineageReason = "同一 turn/response lineage 使用了多个账号"
+    $lineageReason = "同一 sticky turn/response lineage 使用了多个账号"
+  } elseif ($AuditSummary.metadataOnlyLineageAccountSwitchCount -gt 0) {
+    $lineageStatus = "warn"
+    $lineageReason = "metadata-only lineage fallback 使用了多个账号；不是 hard-affinity 违规"
   } elseif ($AuditSummary.lineageCount -eq 0) {
     $lineageStatus = "blocked"
     $lineageReason = "未观察到 turn lineage 字段；只能给出 request 级结论"

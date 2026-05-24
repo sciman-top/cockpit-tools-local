@@ -1893,7 +1893,16 @@
       },
       "addMember": "Aggiungi al servizio API",
       "addSelectedMembers": "Aggiungi selezionati al servizio API",
-      "removeSelectedMembers": "Rimuovi selezionati dal servizio API"
+      "removeSelectedMembers": "Rimuovi selezionati dal servizio API",
+      "poolUnavailable": {
+        "allExhausted": "Tutti gli account del pool del servizio API hanno esaurito la quota. Aggiorna le quote, modifica il pool o ripristina gli account prima di riprovare.",
+        "blocked": "Il pool del servizio API non ha account pianificabili ({{reasons}}). Aggiorna le quote, modifica il pool o ripristina gli account prima di riprovare.",
+        "exhausted": "{{count}} esauriti",
+        "cooling": "{{count}} in raffreddamento",
+        "manualRequired": "{{count}} richiedono azione manuale",
+        "disabled": "{{count}} disabilitati",
+        "unknown": "stato sconosciuto"
+      }
     },
     "local": {
       "desc": "Importa l'account attuale da ~/.codex/auth.json",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Aggiornamento fallito",
       "generic": "Aggiornamento quota non riuscito, riprova più tardi",
       "deactivatedWorkspace": "Workspace disattivato, cambia account o riautorizza",
-      "requestFailedManualRetry": "Controlla la rete. La quota più recente non è stata recuperata. Aggiorna per riprovare."
+      "requestFailedManualRetry": "Controlla la rete. La quota più recente non è stata recuperata. Aggiorna per riprovare.",
+      "limitBadge": "Quota limitata",
+      "limitDetail": "La quota è esaurita o in raffreddamento: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Trascina per ordinare",
       "customMoveUp": "Su",
       "customMoveDown": "Giù",
-      "customReset": "Reimposta ordine"
+      "customReset": "Reimposta ordine",
+      "customMoveTop": "Sposta in alto",
+      "customMoveBottom": "Sposta in basso"
     },
     "opencodeSwitch": "Interruttore OpenCode",
     "opencodeSwitchDesc": "Sincronizza il cambio dell'account Codex in OpenCode",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Aggiungi al gruppo"
+      "addToGroup": "Aggiungi al gruppo",
+      "reorder": "Riordina gruppo",
+      "orderSaved": "Ordine del gruppo salvato"
     },
     "subscription": {
       "label": "Scadenza abbon.",

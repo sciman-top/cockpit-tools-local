@@ -1893,7 +1893,16 @@
       },
       "addMember": "Zum API-Dienst hinzufügen",
       "addSelectedMembers": "Auswahl zum API-Dienst hinzufügen",
-      "removeSelectedMembers": "Auswahl aus API-Dienst entfernen"
+      "removeSelectedMembers": "Auswahl aus API-Dienst entfernen",
+      "poolUnavailable": {
+        "allExhausted": "Alle Konten im API-Service-Pool haben ihr Kontingent aufgebraucht. Aktualisiere Kontingente, passe den Pool an oder stelle Konten wieder her, bevor du es erneut versuchst.",
+        "blocked": "Der API-Service-Pool hat keine planbaren Konten ({{reasons}}). Aktualisiere Kontingente, passe den Pool an oder stelle Konten wieder her, bevor du es erneut versuchst.",
+        "exhausted": "{{count}} erschöpft",
+        "cooling": "{{count}} in Abkühlung",
+        "manualRequired": "{{count}} erfordern manuelle Aktion",
+        "disabled": "{{count}} deaktiviert",
+        "unknown": "unbekannter Status"
+      }
     },
     "local": {
       "desc": "Aktuell eingeloggtes Konto aus ~/.codex/auth.json importieren",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Aktualisierung fehlgeschlagen",
       "generic": "Kontingent-Aktualisierung fehlgeschlagen, bitte später erneut versuchen",
       "deactivatedWorkspace": "Workspace ist deaktiviert, bitte Konto wechseln oder neu autorisieren",
-      "requestFailedManualRetry": "Netzwerk prüfen. Das neueste Kontingent wurde nicht abgerufen. Zum Wiederholen aktualisieren."
+      "requestFailedManualRetry": "Netzwerk prüfen. Das neueste Kontingent wurde nicht abgerufen. Zum Wiederholen aktualisieren.",
+      "limitBadge": "Kontingent begrenzt",
+      "limitDetail": "Kontingent ist erschöpft oder kühlt ab: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Zum Sortieren ziehen",
       "customMoveUp": "Nach oben",
       "customMoveDown": "Nach unten",
-      "customReset": "Reihenfolge zurücksetzen"
+      "customReset": "Reihenfolge zurücksetzen",
+      "customMoveTop": "Nach oben verschieben",
+      "customMoveBottom": "Nach unten verschieben"
     },
     "opencodeSwitch": "OpenCode-Schalter",
     "opencodeSwitchDesc": "Wechsel des Codex-Kontos in OpenCode synchronisieren",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Zur Gruppe hinzufügen"
+      "addToGroup": "Zur Gruppe hinzufügen",
+      "reorder": "Gruppe neu anordnen",
+      "orderSaved": "Gruppenreihenfolge gespeichert"
     },
     "subscription": {
       "label": "Abo-Ablauf",

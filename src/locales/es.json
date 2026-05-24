@@ -1893,7 +1893,16 @@
       },
       "addMember": "Añadir al servicio API",
       "addSelectedMembers": "Añadir selección al servicio API",
-      "removeSelectedMembers": "Quitar selección del servicio API"
+      "removeSelectedMembers": "Quitar selección del servicio API",
+      "poolUnavailable": {
+        "allExhausted": "Todas las cuentas del grupo del servicio API agotaron su cuota. Actualiza cuotas, ajusta el grupo o recupera cuentas antes de reintentar.",
+        "blocked": "El grupo del servicio API no tiene cuentas programables ({{reasons}}). Actualiza cuotas, ajusta el grupo o recupera cuentas antes de reintentar.",
+        "exhausted": "{{count}} agotadas",
+        "cooling": "{{count}} en enfriamiento",
+        "manualRequired": "{{count}} requieren acción manual",
+        "disabled": "{{count}} deshabilitadas",
+        "unknown": "estado desconocido"
+      }
     },
     "local": {
       "desc": "Importa la cuenta actual desde ~/.codex/auth.json",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Actualización fallida",
       "generic": "No se pudo actualizar la cuota, inténtalo más tarde",
       "deactivatedWorkspace": "El espacio de trabajo está desactivado, cambia de cuenta o vuelve a autorizar",
-      "requestFailedManualRetry": "Comprueba la red. No se obtuvo la cuota más reciente. Actualiza para reintentarlo."
+      "requestFailedManualRetry": "Comprueba la red. No se obtuvo la cuota más reciente. Actualiza para reintentarlo.",
+      "limitBadge": "Cuota limitada",
+      "limitDetail": "La cuota está agotada o en enfriamiento: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Arrastrar para ordenar",
       "customMoveUp": "Subir",
       "customMoveDown": "Bajar",
-      "customReset": "Restablecer orden"
+      "customReset": "Restablecer orden",
+      "customMoveTop": "Mover arriba",
+      "customMoveBottom": "Mover abajo"
     },
     "opencodeSwitch": "Interruptor de OpenCode",
     "opencodeSwitchDesc": "Sincronizar el cambio de cuenta de Codex en OpenCode",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Agregar al grupo"
+      "addToGroup": "Agregar al grupo",
+      "reorder": "Reordenar grupo",
+      "orderSaved": "Orden del grupo guardado"
     },
     "subscription": {
       "label": "Vence suscripción",

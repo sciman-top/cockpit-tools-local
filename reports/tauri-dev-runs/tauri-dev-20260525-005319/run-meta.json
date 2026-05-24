@@ -1,0 +1,10 @@
+{
+  "startedAt": "2026-05-25T00:53:19.1473988+08:00",
+  "pid": 16324,
+  "command": "npm run tauri dev",
+  "cwd": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "stdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\tauri-dev-runs\\tauri-dev-20260525-005319\\stdout.log",
+  "stderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\tauri-dev-runs\\tauri-dev-20260525-005319\\stderr.log",
+  "runDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\tauri-dev-runs\\tauri-dev-20260525-005319",
+  "note": "Full Tauri dev run requested by user; no existing Codex/Cockpit processes killed."
+}

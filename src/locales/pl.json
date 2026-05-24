@@ -1893,7 +1893,16 @@
       },
       "addMember": "Dodaj do usługi API",
       "addSelectedMembers": "Dodaj zaznaczone do usługi API",
-      "removeSelectedMembers": "Usuń zaznaczone z usługi API"
+      "removeSelectedMembers": "Usuń zaznaczone z usługi API",
+      "poolUnavailable": {
+        "allExhausted": "Wszystkie konta puli usługi API wyczerpały limit. Odśwież limity, dostosuj pulę lub przywróć konta przed ponowną próbą.",
+        "blocked": "Pula usługi API nie ma kont możliwych do zaplanowania ({{reasons}}). Odśwież limity, dostosuj pulę lub przywróć konta przed ponowną próbą.",
+        "exhausted": "{{count}} wyczerpane",
+        "cooling": "{{count}} w cooldownie",
+        "manualRequired": "{{count}} wymagają działania ręcznego",
+        "disabled": "{{count}} wyłączone",
+        "unknown": "nieznany stan"
+      }
     },
     "local": {
       "desc": "Importuj bieżące konto z ~/.codex/auth.json",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Odświeżenie nieudane",
       "generic": "Odświeżenie limitu nie powiodło się, spróbuj ponownie później",
       "deactivatedWorkspace": "Obszar roboczy jest wyłączony, przełącz konto lub ponownie autoryzuj",
-      "requestFailedManualRetry": "Sprawdź sieć. Nie pobrano najnowszego limitu. Odśwież i spróbuj ponownie."
+      "requestFailedManualRetry": "Sprawdź sieć. Nie pobrano najnowszego limitu. Odśwież i spróbuj ponownie.",
+      "limitBadge": "Limit ograniczony",
+      "limitDetail": "Limit jest wyczerpany lub w cooldownie: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Przeciągnij",
       "customMoveUp": "W górę",
       "customMoveDown": "W dół",
-      "customReset": "Reset kolejności"
+      "customReset": "Reset kolejności",
+      "customMoveTop": "Przenieś na górę",
+      "customMoveBottom": "Przenieś na dół"
     },
     "opencodeSwitch": "Przełącznik OpenCode",
     "opencodeSwitchDesc": "Synchronizuj przełączenie konta Codex w OpenCode",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Dodaj do grupy"
+      "addToGroup": "Dodaj do grupy",
+      "reorder": "Zmień kolejność grupy",
+      "orderSaved": "Kolejność grupy zapisana"
     },
     "subscription": {
       "label": "Koniec sub.",

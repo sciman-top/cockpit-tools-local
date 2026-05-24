@@ -301,6 +301,38 @@ try {
   Assert-Equal $multiSummary.audit.completedStreamCount 2 "expected two completed streams"
   Assert-Equal (($multiSummary.results | Where-Object name -eq "multi_account_fallback_observed").status) "pass" "expected multi-account fallback result pass"
 
+  $dataRootMetadataFallback = Join-Path $tempRoot "data-metadata-fallback"
+  $auditMetadataFallback = Join-Path $dataRootMetadataFallback "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditMetadataFallback @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-meta"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "auth_projection"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "sha256:old"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-meta"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "sha256:old"; status = 429; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-meta"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ gateway_request_id = "gw-meta"; provider_code = "usage_limit_reached"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded"; detail = [ordered]@{ gateway_request_id = "gw-meta"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "fallback_selected"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "next_account"; detail = [ordered]@{ gateway_request_id = "gw-meta"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "auth_projection"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "sha256:new"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-meta"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "sha256:new"; status = 200; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-meta"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "x-codex-turn-metadata.turn_id:sha256:meta"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.4-mini"; accountHash = "sha256:new"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-meta"; request_id_source = "codex_turn_metadata_turn_id"; turn_lineage_id = "x-codex-turn-metadata.turn_id:sha256:meta"; turn_lineage_source = "codex_turn_metadata_turn_id" } }
+  )
+  $metadataFallbackOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootMetadataFallback `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "metadata-only fallback fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $metadataFallbackSummary = Convert-JsonOutput $metadataFallbackOutput "metadata-only fallback fixture"
+  Assert-Equal $metadataFallbackSummary.overall "pass" "expected metadata-only fallback fixture overall pass"
+  Assert-Equal $metadataFallbackSummary.audit.lineageAccountSwitchCount 1 "expected metadata-only account switch to remain observable"
+  Assert-Equal $metadataFallbackSummary.audit.hardAffinityLineageAccountSwitchCount 0 "metadata-only fallback must not count as hard-affinity account switch"
+  Assert-Equal $metadataFallbackSummary.audit.metadataOnlyLineageAccountSwitchCount 1 "expected metadata-only account switch classification"
+  Assert-Equal (($metadataFallbackSummary.results | Where-Object name -eq "turn_lineage_account_switch_absent").status) "warn" "metadata-only account switch should warn, not fail"
+  Assert-Equal $metadataFallbackSummary.continuitySummary.turnLineageAccountSwitchAbsent.status "warn" "metadata-only account switch should be a continuity warning"
+
   $dataRootLineageSwitch = Join-Path $tempRoot "data-lineage-switch"
   $auditLineageSwitch = Join-Path $dataRootLineageSwitch "codex_local_access_audit.jsonl"
   Write-AuditLines $auditLineageSwitch @(

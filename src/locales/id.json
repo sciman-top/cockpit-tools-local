@@ -1942,7 +1942,16 @@
       },
       "addMember": "Tambahkan ke layanan API",
       "addSelectedMembers": "Tambahkan pilihan ke layanan API",
-      "removeSelectedMembers": "Hapus pilihan dari layanan API"
+      "removeSelectedMembers": "Hapus pilihan dari layanan API",
+      "poolUnavailable": {
+        "allExhausted": "Semua akun pool layanan API telah kehabisan kuota. Segarkan kuota, sesuaikan pool, atau pulihkan akun sebelum mencoba lagi.",
+        "blocked": "Pool layanan API tidak memiliki akun yang dapat dijadwalkan ({{reasons}}). Segarkan kuota, sesuaikan pool, atau pulihkan akun sebelum mencoba lagi.",
+        "exhausted": "{{count}} habis",
+        "cooling": "{{count}} dalam cooldown",
+        "manualRequired": "{{count}} memerlukan tindakan manual",
+        "disabled": "{{count}} dinonaktifkan",
+        "unknown": "status tidak diketahui"
+      }
     },
     "api": {
       "baseUrl": "URL Dasar",
@@ -2063,7 +2072,9 @@
       "refreshFailedBadge": "Gagal menyegarkan",
       "generic": "Penyegaran kuota gagal, silakan coba lagi nanti",
       "deactivatedWorkspace": "Workspace dinonaktifkan, ganti akun atau otorisasi ulang",
-      "requestFailedManualRetry": "Periksa jaringan. Kuota terbaru belum diambil. Segarkan untuk mencoba lagi."
+      "requestFailedManualRetry": "Periksa jaringan. Kuota terbaru belum diambil. Segarkan untuk mencoba lagi.",
+      "limitBadge": "Kuota dibatasi",
+      "limitDetail": "Kuota habis atau sedang cooldown: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -2099,7 +2110,9 @@
       "customDragHandle": "Seret untuk urutkan",
       "customMoveUp": "Naik",
       "customMoveDown": "Turun",
-      "customReset": "Reset urutan"
+      "customReset": "Reset urutan",
+      "customMoveTop": "Pindahkan ke atas",
+      "customMoveBottom": "Pindahkan ke bawah"
     },
     "opencodeSwitch": "Sakelar OpenCode",
     "opencodeSwitchDesc": "Sinkronkan info akun Codex di OpenCode",
@@ -2460,7 +2473,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Tambahkan ke Grup"
+      "addToGroup": "Tambahkan ke Grup",
+      "reorder": "Urutkan ulang grup",
+      "orderSaved": "Urutan grup disimpan"
     },
     "subscription": {
       "label": "Akhir langganan",

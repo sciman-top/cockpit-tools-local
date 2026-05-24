@@ -50,6 +50,7 @@ const LITELLM_GATEWAY_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_HTTP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_INLINE_ACCOUNT_RETRY_WAIT: Duration = Duration::from_secs(3);
+const MAX_HARD_AFFINITY_INLINE_RETRY_WAIT: Duration = Duration::from_secs(60);
 const MAX_POOL_UNAVAILABLE_PRE_ADMISSION_WAIT: Duration = Duration::from_secs(3);
 const UPSTREAM_SEND_RETRY_ATTEMPTS: usize = 3;
 const UPSTREAM_SEND_RETRY_BASE_DELAY: Duration = Duration::from_millis(200);
@@ -105,6 +106,7 @@ const RESPONSES_PATH: &str = "/v1/responses";
 const IMAGES_GENERATIONS_PATH: &str = "/v1/images/generations";
 const IMAGES_EDITS_PATH: &str = "/v1/images/edits";
 const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+const X_CODEX_TURN_METADATA_HEADER: &str = "x-codex-turn-metadata";
 const LOCAL_CODEX_TURN_STATE_PREFIX: &str = "cockpit-turn-";
 static GATEWAY_RUNTIME: OnceLock<TokioMutex<GatewayRuntime>> = OnceLock::new();
 static GATEWAY_ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
@@ -364,6 +366,21 @@ enum GatewayResponseAdapter {
 struct RequestRoutingHint {
     model_key: String,
     previous_response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum OfficialCodexStickyRoutingBoundary {
+    TurnState { affinity_key: String },
+    PreviousResponseId { response_id: String },
+}
+
+impl OfficialCodexStickyRoutingBoundary {
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::TurnState { .. } => "codex_turn_state",
+            Self::PreviousResponseId { .. } => "previous_response_id",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1924,25 +1941,46 @@ fn build_request_routing_hint(request: &ParsedRequest) -> RequestRoutingHint {
     }
 }
 
+fn official_codex_turn_state_affinity_key(request: &ParsedRequest) -> Option<String> {
+    request_header_value(request, X_CODEX_TURN_STATE_HEADER)
+        .and_then(|value| hashed_request_correlation_id(X_CODEX_TURN_STATE_HEADER, value))
+}
+
+fn official_codex_sticky_routing_boundary(
+    request: &ParsedRequest,
+) -> Option<OfficialCodexStickyRoutingBoundary> {
+    // Mirrors openai-codex core semantics:
+    // - x-codex-turn-state is the per-turn sticky routing token.
+    // - previous_response_id binds Responses continuations.
+    // - x-codex-turn-metadata is observability lineage only.
+    if let Some(affinity_key) = official_codex_turn_state_affinity_key(request) {
+        return Some(OfficialCodexStickyRoutingBoundary::TurnState { affinity_key });
+    }
+
+    build_request_routing_hint(request)
+        .previous_response_id
+        .map(|response_id| OfficialCodexStickyRoutingBoundary::PreviousResponseId { response_id })
+}
+
 async fn local_backpressure_bypass_reason(request: &ParsedRequest) -> Option<&'static str> {
     if !is_responses_request(&request.target) {
         return None;
     }
-    if build_request_routing_hint(request)
-        .previous_response_id
-        .is_some()
-    {
-        return Some("previous_response_id");
-    }
-    if resolve_request_affinity_account(request).await.is_some() {
-        if request_header_value(request, "x-codex-turn-state").is_some() {
-            return Some("codex_turn_state");
+
+    if let Some(boundary) = official_codex_sticky_routing_boundary(request) {
+        let reason = boundary.reason();
+        match boundary {
+            OfficialCodexStickyRoutingBoundary::PreviousResponseId { .. } => {
+                return Some(reason);
+            }
+            OfficialCodexStickyRoutingBoundary::TurnState { .. } => {
+                if resolve_request_affinity_account(request).await.is_some() {
+                    return Some(reason);
+                }
+            }
         }
-        if request_header_value(request, "x-codex-turn-metadata").is_some() {
-            return Some("codex_turn_metadata");
-        }
-        return Some("codex_turn_affinity");
     }
+
     None
 }
 
@@ -5905,8 +5943,7 @@ fn generated_codex_turn_state() -> String {
 }
 
 fn codex_turn_state_request_id(request: &ParsedRequest) -> Option<String> {
-    request_header_value(request, X_CODEX_TURN_STATE_HEADER)
-        .and_then(|value| hashed_request_correlation_id(X_CODEX_TURN_STATE_HEADER, value))
+    official_codex_turn_state_affinity_key(request)
 }
 
 fn codex_turn_state_request_id_from_value(value: &str) -> Option<String> {
@@ -5916,7 +5953,7 @@ fn codex_turn_state_request_id_from_value(value: &str) -> Option<String> {
 fn codex_turn_metadata_request_id_with_source(
     request: &ParsedRequest,
 ) -> Option<(String, &'static str)> {
-    let value = request_header_value(request, "x-codex-turn-metadata")?;
+    let value = request_header_value(request, X_CODEX_TURN_METADATA_HEADER)?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return None;
@@ -5934,7 +5971,7 @@ fn codex_turn_metadata_request_id_with_source(
         }
     }
 
-    hashed_request_correlation_id("x-codex-turn-metadata", trimmed)
+    hashed_request_correlation_id(X_CODEX_TURN_METADATA_HEADER, trimmed)
         .map(|request_id| (request_id, "codex_turn_metadata"))
 }
 
@@ -6573,9 +6610,7 @@ async fn resolve_affinity_account(previous_response_id: &str) -> Option<String> 
 }
 
 fn request_affinity_key(request: &ParsedRequest) -> Option<String> {
-    // Official Codex treats x-codex-turn-state as the sticky-routing token;
-    // x-codex-turn-metadata is observability lineage only.
-    codex_turn_state_request_id(request)
+    official_codex_turn_state_affinity_key(request)
 }
 
 async fn resolve_request_affinity_account_from_runtime(request: &ParsedRequest) -> Option<String> {
@@ -10115,6 +10150,24 @@ fn should_retry_single_account_upstream_status(status: StatusCode) -> bool {
     )
 }
 
+fn should_retry_hard_affinity_upstream_failure(
+    hard_affinity_active: bool,
+    classified: &ClassifiedCodexUpstreamError,
+    retry_attempt: usize,
+    max_retry_attempts: usize,
+) -> Option<Duration> {
+    if !hard_affinity_active
+        || retry_attempt >= max_retry_attempts
+        || !classified.safe_for_request_failover()
+    {
+        return None;
+    }
+
+    classified
+        .retry_after
+        .filter(|wait| *wait <= MAX_HARD_AFFINITY_INLINE_RETRY_WAIT)
+}
+
 fn single_account_status_retry_delay(retry_attempt: usize) -> Duration {
     let multiplier = match retry_attempt {
         0 | 1 => 1u32,
@@ -10831,9 +10884,17 @@ async fn proxy_request_with_account_pool(
                         "max_credential_attempts".to_string(),
                         max_credential_attempts.to_string(),
                     );
-                    let hard_affinity_active = hard_affinity_account_id.is_some();
+                    let hard_affinity_bound = hard_affinity_account_id.is_some();
+                    let hard_affinity_active =
+                        hard_affinity_account_id.as_deref() == Some(account.id.as_str());
+                    if hard_affinity_bound {
+                        detail.insert(
+                            "max_hard_affinity_inline_retry_wait_ms".to_string(),
+                            MAX_HARD_AFFINITY_INLINE_RETRY_WAIT.as_millis().to_string(),
+                        );
+                    }
                     let can_try_next_account =
-                        !hard_affinity_active && attempts < max_credential_attempts;
+                        !hard_affinity_bound && attempts < max_credential_attempts;
                     record_audit_event_from_context(
                         &context,
                         if can_try_next_account {
@@ -10846,16 +10907,47 @@ async fn proxy_request_with_account_pool(
                         None,
                         Some(if can_try_next_account {
                             "next_account"
-                        } else if hard_affinity_active {
+                        } else if hard_affinity_bound {
                             "hard_affinity"
                         } else {
                             "attempt_limit"
                         }),
                         detail,
                     );
+                    if let Some(wait) = should_retry_hard_affinity_upstream_failure(
+                        hard_affinity_active,
+                        &classified,
+                        single_account_status_retry_attempt,
+                        max_retry_attempts,
+                    ) {
+                        single_account_status_retry_attempt += 1;
+                        record_hard_affinity_retry_wait_audit(
+                            request,
+                            account.id.as_str(),
+                            status,
+                            &classified,
+                            wait,
+                            "sleeping",
+                        );
+                        tokio::time::sleep(wait).await;
+                        record_hard_affinity_retry_wait_audit(
+                            request,
+                            account.id.as_str(),
+                            status,
+                            &classified,
+                            wait,
+                            "retrying",
+                        );
+                        continue;
+                    }
                     last_status = status.as_u16();
                     last_error = if can_try_next_account {
                         format!("账号 {} 当前不可用，已尝试轮转: {}", account.email, message)
+                    } else if hard_affinity_bound {
+                        format!(
+                            "账号 {} 的 sticky 任务暂不可用，已保持原账号且不切号: {}",
+                            account.email, message
+                        )
                     } else {
                         format!(
                             "账号 {} 当前不可用，已达到本次请求切号上限: {}",
@@ -11007,6 +11099,40 @@ async fn deferred_pool_unavailable_from_snapshot(
         .filter(|error| error.defer_until_pool_available && error.retry_after.is_some())
 }
 
+fn record_hard_affinity_retry_wait_audit(
+    request: &ParsedRequest,
+    account_id: &str,
+    status: StatusCode,
+    classified: &ClassifiedCodexUpstreamError,
+    wait: Duration,
+    outcome: &str,
+) {
+    let context = build_audit_context(request, Some(account_id));
+    record_audit_event_from_context(
+        &context,
+        "pool_wait",
+        Some(status.as_u16()),
+        Some(classified.error_type.as_str()),
+        None,
+        Some(outcome),
+        BTreeMap::from([
+            (
+                "reason".to_string(),
+                "hard_affinity_same_account_retry".to_string(),
+            ),
+            ("retry_after_ms".to_string(), wait.as_millis().to_string()),
+            (
+                "max_inline_wait_ms".to_string(),
+                MAX_HARD_AFFINITY_INLINE_RETRY_WAIT.as_millis().to_string(),
+            ),
+            (
+                "message".to_string(),
+                safe_log_field(Some(classified.safe_message.as_str()), 512),
+            ),
+        ]),
+    );
+}
+
 fn record_pool_wait_audit(
     request: &ParsedRequest,
     error: &ProxyDispatchError,
@@ -11041,6 +11167,10 @@ fn is_pool_unavailable_dispatch_error(error: &ProxyDispatchError) -> bool {
     classify_codex_api_failure(Some(error.status), error.message.as_str()) == "pool_unavailable"
 }
 
+fn request_has_codex_sticky_routing_boundary(request: &ParsedRequest) -> bool {
+    official_codex_sticky_routing_boundary(request).is_some()
+}
+
 fn should_write_in_band_pool_unavailable_response(
     request: &ParsedRequest,
     response_adapter: &GatewayResponseAdapter,
@@ -11049,6 +11179,7 @@ fn should_write_in_band_pool_unavailable_response(
     is_pool_unavailable_dispatch_error(error)
         && is_responses_request(&request.target)
         && matches!(response_adapter, GatewayResponseAdapter::Passthrough { .. })
+        && !request_has_codex_sticky_routing_boundary(request)
 }
 
 fn build_synthetic_pool_unavailable_text(error: &ProxyDispatchError) -> String {
@@ -11906,13 +12037,13 @@ mod tests {
         json_response_with_retry_after, load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
-        now_ms, parse_codex_retry_after, parse_http_request, parse_responses_payload_from_upstream,
-        parse_retry_after_header_value, pause_health_registry_account, pin_process_sticky_account,
-        pool_wait_fits_request_budget, prepare_gateway_request, proxy_request_with_account_pool,
-        prune_process_sticky_binding, record_manual_pause_audit_event,
-        record_manual_recovery_audit_event, recover_health_registry_account,
-        request_affinity_account_from_registry, request_affinity_key,
-        request_lineage_id_with_source, reset_active_stream_leases_for_tests,
+        now_ms, official_codex_sticky_routing_boundary, parse_codex_retry_after,
+        parse_http_request, parse_responses_payload_from_upstream, parse_retry_after_header_value,
+        pause_health_registry_account, pin_process_sticky_account, pool_wait_fits_request_budget,
+        prepare_gateway_request, proxy_request_with_account_pool, prune_process_sticky_binding,
+        record_manual_pause_audit_event, record_manual_recovery_audit_event,
+        recover_health_registry_account, request_affinity_account_from_registry,
+        request_affinity_key, request_lineage_id_with_source, reset_active_stream_leases_for_tests,
         reset_local_api_backpressure_for_tests, resolve_supported_model_alias,
         retry_failover_account_attempt_limit, retry_failover_max_retries,
         save_health_registry_to_path, selector_audit_detail, selector_selected_reason,
@@ -11927,10 +12058,11 @@ mod tests {
         upsert_process_sticky_binding, upsert_request_affinity_binding,
         upsert_successful_account_health, AccountQuotaSortHint, ActiveStreamTerminal, AuditContext,
         AuditTrailStatus, CodexLocalAccessErrorType, GatewayResponseAdapter,
-        LocalApiBackpressureState, ParsedRequest, ProxyDispatchError, ResponseUsageCollector,
-        StreamWriteState, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID,
-        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME, DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES,
-        PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
+        LocalApiBackpressureState, OfficialCodexStickyRoutingBoundary, ParsedRequest,
+        ProxyDispatchError, ResponseUsageCollector, StreamWriteState,
+        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME,
+        DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES, PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
+        X_CODEX_TURN_METADATA_HEADER, X_CODEX_TURN_STATE_HEADER,
     };
     use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexQuota, CodexTokens};
     use crate::models::codex_local_access::{
@@ -14871,6 +15003,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
 
         let seen = upstream_seen.lock().await.clone();
         let seen_text = seen.join("\n--- request ---\n");
+        let audit =
+            fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE)).unwrap_or_default();
         {
             let mut runtime = gateway_runtime().lock().await;
             *runtime = super::GatewayRuntime::default();
@@ -14888,9 +15022,15 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let _ = fs::remove_dir_all(&root);
 
         assert!(
-            second_response_text.contains("resp_cockpit_pool_unavailable_")
-                || second_response_text.contains("usage_limit_reached"),
-            "same-turn followup should stay on original exhausted account instead of succeeding on current account: {}",
+            second_response_text.contains("HTTP/1.1 429 Too Many Requests"),
+            "same-turn followup should surface an upstream-shaped quota error instead of a local completion: {}",
+            second_response_text
+        );
+        assert!(
+            !second_response_text.contains("resp_cockpit_pool_unavailable_")
+                && !second_response_text.contains("response.completed")
+                && !second_response_text.contains("synthetic_pool_unavailable_notice"),
+            "same-turn followup must not be closed by local pool_unavailable completion: {}",
             second_response_text
         );
         assert!(
@@ -14921,8 +15061,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             seen_text
         );
 
-        let audit =
-            fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE)).unwrap_or_default();
+        assert!(audit.contains("\"phase\":\"fallback_blocked\""));
+        assert!(audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
         assert!(
             !audit.contains(turn_state.as_str()),
             "raw generated turn-state must not be written to audit"
@@ -15159,6 +15300,264 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let _ = fs::remove_dir_all(&root);
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn codex_turn_state_short_retry_after_retries_original_account_to_completion() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-turn-state-retry-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_server = tokio::spawn(async move {
+            let mut seen = Vec::new();
+            for attempt in 0..2 {
+                let (mut socket, _) = upstream_listener
+                    .accept()
+                    .await
+                    .expect("fake upstream should accept retry request");
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let read = socket
+                        .read(&mut chunk)
+                        .await
+                        .expect("fake upstream should read request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request_text = String::from_utf8_lossy(&request).to_string();
+                seen.push(request_text);
+
+                if attempt == 0 {
+                    let body =
+                        r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nRetry-After-Ms: 1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.as_bytes().len(),
+                        body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("fake upstream should write retryable 429");
+                } else {
+                    let body = concat!(
+                        "event: response.created\r\n",
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_retry_ok\"}}\r\n\r\n",
+                        "event: response.completed\r\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_retry_ok\",\"usage\":null}}\r\n\r\n",
+                        "data: [DONE]\r\n\r\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.as_bytes().len(),
+                        body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("fake upstream should write completed stream");
+                }
+            }
+            seen
+        });
+
+        let now = now_ms();
+        let registry = empty_health_registry(now);
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": 0,
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 1,
+                "minRequestIntervalSeconds": 1,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 5,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "next_request_only",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-current"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection.clone());
+            runtime.running = true;
+        }
+
+        let old_account = CodexAccount::new_api_key(
+            "api-old".to_string(),
+            "api-old@example.com".to_string(),
+            "sk-local-old".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        let current_account = CodexAccount::new_api_key(
+            "api-current".to_string(),
+            "api-current@example.com".to_string(),
+            "sk-local-current".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        crate::modules::codex_account::save_account(&old_account)
+            .expect("old affinity account should be persisted");
+        crate::modules::codex_account::save_account(&current_account)
+            .expect("current pool account should be persisted");
+        cache_prepared_account(&old_account).await;
+
+        let turn_state = "turn-secret-state";
+        let affinity_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([("x-codex-turn-state".to_string(), turn_state.to_string())]),
+            body: br#"{"model":"gpt-5.5","input":"previous successful turn step"}"#.to_vec(),
+            gateway_request_id: "gw-test-7a".to_string(),
+        };
+        let mut persisted_registry =
+            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
+                .expect("health registry should load from isolated test root");
+        assert!(upsert_request_affinity_binding(
+            &mut persisted_registry,
+            &affinity_request,
+            "api-old",
+            now_ms(),
+        ));
+        save_health_registry_to_path(
+            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
+            &persisted_registry,
+        )
+        .expect("persistent turn-state affinity should be written");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            runtime.request_affinity.clear();
+        }
+
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([
+                ("accept".to_string(), "text/event-stream".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+                ("x-codex-turn-state".to_string(), turn_state.to_string()),
+            ]),
+            body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
+            gateway_request_id: "gw-test-7b".to_string(),
+        };
+
+        let success = proxy_request_with_account_pool(&request, &collection)
+            .await
+            .expect(
+                "turn-state hard affinity should retry the original account after a short reset",
+            );
+        assert_eq!(success.account_id, "api-old");
+        let response_text = success
+            .upstream
+            .text()
+            .await
+            .expect("completed upstream response should be readable");
+        assert!(
+            response_text.contains("response.completed") && response_text.contains("resp_retry_ok"),
+            "short hard-affinity reset should recover to a real upstream completion: {}",
+            response_text
+        );
+
+        let seen = upstream_server
+            .await
+            .expect("fake upstream task should join");
+        let seen_text = seen.join("\n--- request ---\n");
+        assert_eq!(seen.len(), 2);
+        assert!(
+            seen.iter()
+                .all(|request| request.contains("Bearer sk-local-old")),
+            "both attempts must stay on the original account: {}",
+            seen_text
+        );
+        assert!(
+            !seen_text.contains("Bearer sk-local-current"),
+            "hard-affinity retry must not consume the replacement account: {}",
+            seen_text
+        );
+
+        let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
+            .expect("audit should be written to isolated root");
+        assert!(audit.contains("\"phase\":\"fallback_blocked\""));
+        assert!(audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(audit.contains("\"phase\":\"pool_wait\""));
+        assert!(audit.contains("\"reason\":\"hard_affinity_same_account_retry\""));
+        assert!(audit.contains("\"outcome\":\"sleeping\""));
+        assert!(audit.contains("\"outcome\":\"retrying\""));
+        assert!(!audit.contains("\"phase\":\"fallback_selected\""));
+
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        match previous_accounts_root {
+            Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
+            None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn codex_turn_metadata_is_lineage_only_not_hard_affinity() {
         let now = 1_700_000_000_000;
@@ -15217,6 +15616,11 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             None,
             "x-codex-turn-metadata must not block independent account admission"
         );
+        assert_eq!(
+            official_codex_sticky_routing_boundary(&old_turn),
+            None,
+            "official Codex treats metadata as observability lineage, not sticky routing"
+        );
 
         let mut registry = empty_health_registry(now);
         assert!(!upsert_request_affinity_binding(
@@ -15234,6 +15638,65 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             None,
             "Codex metadata-only turns must be admitted independently"
         );
+    }
+
+    #[test]
+    fn official_codex_sticky_boundary_matches_reference_semantics() {
+        let turn_state_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                X_CODEX_TURN_STATE_HEADER.to_string(),
+                "turn-state-token".to_string(),
+            )]),
+            body: br#"{"model":"gpt-5.5","input":"same turn"}"#.to_vec(),
+            gateway_request_id: "gw-test-official-boundary-1".to_string(),
+        };
+        let turn_state_boundary = official_codex_sticky_routing_boundary(&turn_state_request)
+            .expect("x-codex-turn-state should be sticky");
+        assert_eq!(turn_state_boundary.reason(), "codex_turn_state");
+        match turn_state_boundary {
+            OfficialCodexStickyRoutingBoundary::TurnState { affinity_key } => {
+                assert!(affinity_key.starts_with("x-codex-turn-state:sha256:"));
+            }
+            other => panic!("unexpected boundary: {:?}", other),
+        }
+
+        let continuation_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::new(),
+            body: br#"{"model":"gpt-5.5","previous_response_id":"resp-1","input":"continue"}"#
+                .to_vec(),
+            gateway_request_id: "gw-test-official-boundary-2".to_string(),
+        };
+        let continuation_boundary = official_codex_sticky_routing_boundary(&continuation_request)
+            .expect("previous_response_id should bind continuation");
+        assert_eq!(continuation_boundary.reason(), "previous_response_id");
+        match continuation_boundary {
+            OfficialCodexStickyRoutingBoundary::PreviousResponseId { response_id } => {
+                assert_eq!(response_id, "resp-1");
+            }
+            other => panic!("unexpected boundary: {:?}", other),
+        }
+
+        let metadata_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                X_CODEX_TURN_METADATA_HEADER.to_string(),
+                r#"{"turn_id":"turn-1"}"#.to_string(),
+            )]),
+            body: br#"{"model":"gpt-5.5","input":"metadata only"}"#.to_vec(),
+            gateway_request_id: "gw-test-official-boundary-3".to_string(),
+        };
+        assert_eq!(
+            official_codex_sticky_routing_boundary(&metadata_request),
+            None
+        );
+        assert!(request_lineage_id_with_source(&metadata_request)
+            .0
+            .is_some());
     }
 
     #[test]
@@ -15830,6 +16293,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                     "x-codex-turn-metadata".to_string(),
                     r#"{"turn_id":"turn-old-stream"}"#.to_string(),
                 ),
+                (
+                    "x-codex-turn-state".to_string(),
+                    "turn-old-stream-state".to_string(),
+                ),
             ]),
             body: br#"{"model":"gpt-5.5","input":"old stream start"}"#.to_vec(),
             gateway_request_id: "gw-test-12".to_string(),
@@ -15837,7 +16304,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let mut persisted_registry =
             load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
                 .expect("health registry should load from isolated test root");
-        assert!(!upsert_request_affinity_binding(
+        assert!(upsert_request_affinity_binding(
             &mut persisted_registry,
             &old_affinity_request,
             "api-old",
@@ -15869,7 +16336,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 .expect("old client should connect");
             let body = br#"{"model":"gpt-5.5","input":"old stream"}"#;
             let request = format!(
-                "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-request-id\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-old-stream\"}}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-request-id\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-old-stream\"}}\r\nX-Codex-Turn-State: turn-old-stream-state\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                 body.len(),
                 String::from_utf8_lossy(body)
             );
@@ -16425,6 +16892,52 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         };
         assert!(!should_write_in_band_pool_unavailable_response(
             &request,
+            &GatewayResponseAdapter::Passthrough {
+                request_is_stream: false
+            },
+            &error
+        ));
+    }
+
+    #[test]
+    fn pool_unavailable_sticky_responses_keeps_http_error_contract() {
+        let error = ProxyDispatchError {
+            status: StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            message: "API 服务号池暂无可调度账号".to_string(),
+            account_id: None,
+            account_email: None,
+            retry_after: None,
+            defer_until_pool_available: false,
+        };
+
+        let turn_state_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                "x-codex-turn-state".to_string(),
+                "turn-state-token".to_string(),
+            )]),
+            body: br#"{"model":"gpt-5.5","input":"continue"}"#.to_vec(),
+            gateway_request_id: "gw-test-sticky-pool-1".to_string(),
+        };
+        assert!(!should_write_in_band_pool_unavailable_response(
+            &turn_state_request,
+            &GatewayResponseAdapter::Passthrough {
+                request_is_stream: true
+            },
+            &error
+        ));
+
+        let continuation_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::new(),
+            body: br#"{"model":"gpt-5.5","previous_response_id":"resp-1","input":"continue"}"#
+                .to_vec(),
+            gateway_request_id: "gw-test-sticky-pool-2".to_string(),
+        };
+        assert!(!should_write_in_band_pool_unavailable_response(
+            &continuation_request,
             &GatewayResponseAdapter::Passthrough {
                 request_is_stream: false
             },

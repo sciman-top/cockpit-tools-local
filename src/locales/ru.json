@@ -1893,7 +1893,16 @@
       },
       "addMember": "Добавить в API-сервис",
       "addSelectedMembers": "Добавить выбранные в API-сервис",
-      "removeSelectedMembers": "Удалить выбранные из API-сервиса"
+      "removeSelectedMembers": "Удалить выбранные из API-сервиса",
+      "poolUnavailable": {
+        "allExhausted": "Все аккаунты пула API-сервиса исчерпали квоту. Обновите квоты, измените пул или восстановите аккаунты перед повторной попыткой.",
+        "blocked": "В пуле API-сервиса нет доступных для планирования аккаунтов ({{reasons}}). Обновите квоты, измените пул или восстановите аккаунты перед повторной попыткой.",
+        "exhausted": "{{count}} исчерпано",
+        "cooling": "{{count}} в cooldown",
+        "manualRequired": "{{count}} требуют ручного действия",
+        "disabled": "{{count}} отключено",
+        "unknown": "неизвестный статус"
+      }
     },
     "local": {
       "desc": "Импортировать текущий аккаунт из ~/.codex/auth.json",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Сбой обновления",
       "generic": "Не удалось обновить квоту, попробуйте позже",
       "deactivatedWorkspace": "Рабочее пространство деактивировано, переключите аккаунт или авторизуйтесь заново",
-      "requestFailedManualRetry": "Проверьте сеть. Не удалось получить актуальную квоту. Обновите, чтобы повторить попытку."
+      "requestFailedManualRetry": "Проверьте сеть. Не удалось получить актуальную квоту. Обновите, чтобы повторить попытку.",
+      "limitBadge": "Квота ограничена",
+      "limitDetail": "Квота исчерпана или находится в cooldown: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Перетащить",
       "customMoveUp": "Вверх",
       "customMoveDown": "Вниз",
-      "customReset": "Сброс порядка"
+      "customReset": "Сброс порядка",
+      "customMoveTop": "Переместить вверх",
+      "customMoveBottom": "Переместить вниз"
     },
     "opencodeSwitch": "Переключатель OpenCode",
     "opencodeSwitchDesc": "Синхронизировать переключение аккаунта Codex в OpenCode",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Добавить в группу"
+      "addToGroup": "Добавить в группу",
+      "reorder": "Изменить порядок группы",
+      "orderSaved": "Порядок группы сохранён"
     },
     "subscription": {
       "label": "Срок подписки",

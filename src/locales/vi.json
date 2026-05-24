@@ -1893,7 +1893,16 @@
       },
       "addMember": "Thêm vào dịch vụ API",
       "addSelectedMembers": "Thêm mục đã chọn vào dịch vụ API",
-      "removeSelectedMembers": "Xóa mục đã chọn khỏi dịch vụ API"
+      "removeSelectedMembers": "Xóa mục đã chọn khỏi dịch vụ API",
+      "poolUnavailable": {
+        "allExhausted": "Tất cả tài khoản trong nhóm dịch vụ API đã hết hạn mức. Hãy làm mới hạn mức, điều chỉnh nhóm hoặc khôi phục tài khoản trước khi thử lại.",
+        "blocked": "Nhóm dịch vụ API không có tài khoản có thể lập lịch ({{reasons}}). Hãy làm mới hạn mức, điều chỉnh nhóm hoặc khôi phục tài khoản trước khi thử lại.",
+        "exhausted": "{{count}} đã hết",
+        "cooling": "{{count}} đang chờ hồi",
+        "manualRequired": "{{count}} cần thao tác thủ công",
+        "disabled": "{{count}} đã tắt",
+        "unknown": "trạng thái không xác định"
+      }
     },
     "local": {
       "desc": "Nhập tài khoản hiện tại từ ~/.codex/auth.json",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Làm mới thất bại",
       "generic": "Làm mới quota thất bại, vui lòng thử lại sau",
       "deactivatedWorkspace": "Workspace đã bị vô hiệu hoá, hãy đổi tài khoản hoặc cấp quyền lại",
-      "requestFailedManualRetry": "Kiểm tra mạng. Chưa lấy được quota mới nhất. Làm mới để thử lại."
+      "requestFailedManualRetry": "Kiểm tra mạng. Chưa lấy được quota mới nhất. Làm mới để thử lại.",
+      "limitBadge": "Hạn mức bị giới hạn",
+      "limitDetail": "Hạn mức đã hết hoặc đang chờ hồi: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Kéo để sắp xếp",
       "customMoveUp": "Lên",
       "customMoveDown": "Xuống",
-      "customReset": "Đặt lại thứ tự"
+      "customReset": "Đặt lại thứ tự",
+      "customMoveTop": "Chuyển lên đầu",
+      "customMoveBottom": "Chuyển xuống cuối"
     },
     "opencodeSwitch": "Công tắc OpenCode",
     "opencodeSwitchDesc": "Đồng bộ chuyển đổi tài khoản Codex trong OpenCode",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Thêm vào nhóm"
+      "addToGroup": "Thêm vào nhóm",
+      "reorder": "Sắp xếp lại nhóm",
+      "orderSaved": "Đã lưu thứ tự nhóm"
     },
     "subscription": {
       "label": "Hết hạn gói",

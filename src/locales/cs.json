@@ -1893,7 +1893,16 @@
       },
       "addMember": "Přidat do služby API",
       "addSelectedMembers": "Přidat vybrané do služby API",
-      "removeSelectedMembers": "Odebrat vybrané ze služby API"
+      "removeSelectedMembers": "Odebrat vybrané ze služby API",
+      "poolUnavailable": {
+        "allExhausted": "Všechny účty fondu služby API vyčerpaly kvótu. Před opakováním obnovte kvóty, upravte fond nebo obnovte účty.",
+        "blocked": "Fond služby API nemá žádné plánovatelné účty ({{reasons}}). Před opakováním obnovte kvóty, upravte fond nebo obnovte účty.",
+        "exhausted": "{{count}} vyčerpáno",
+        "cooling": "{{count}} v cooldownu",
+        "manualRequired": "{{count}} vyžaduje ruční zásah",
+        "disabled": "{{count}} zakázáno",
+        "unknown": "neznámý stav"
+      }
     },
     "local": {
       "desc": "Importovat aktuální účet z ~/.codex/auth.json",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "Obnovení selhalo",
       "generic": "Obnovení kvóty se nezdařilo, zkuste to prosím později",
       "deactivatedWorkspace": "Pracovní prostor je deaktivovaný, přepněte účet nebo znovu autorizujte",
-      "requestFailedManualRetry": "Zkontrolujte síť. Nejnovější kvóta nebyla načtena. Obnovte a zkuste to znovu."
+      "requestFailedManualRetry": "Zkontrolujte síť. Nejnovější kvóta nebyla načtena. Obnovte a zkuste to znovu.",
+      "limitBadge": "Kvóta omezena",
+      "limitDetail": "Kvóta je vyčerpána nebo v cooldownu: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "Přetáhnout",
       "customMoveUp": "Nahoru",
       "customMoveDown": "Dolů",
-      "customReset": "Reset pořadí"
+      "customReset": "Reset pořadí",
+      "customMoveTop": "Přesunout nahoru",
+      "customMoveBottom": "Přesunout dolů"
     },
     "opencodeSwitch": "Přepínač OpenCode",
     "opencodeSwitchDesc": "Synchronizovat přepnutí účtu Codex v OpenCode",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "Přidat do skupiny"
+      "addToGroup": "Přidat do skupiny",
+      "reorder": "Změnit pořadí skupiny",
+      "orderSaved": "Pořadí skupiny uloženo"
     },
     "subscription": {
       "label": "Konec předpl.",

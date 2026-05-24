@@ -1939,7 +1939,16 @@
       },
       "addMember": "إضافة إلى خدمة API",
       "addSelectedMembers": "إضافة المحدد إلى خدمة API",
-      "removeSelectedMembers": "إزالة المحدد من خدمة API"
+      "removeSelectedMembers": "إزالة المحدد من خدمة API",
+      "poolUnavailable": {
+        "allExhausted": "استنفدت جميع حسابات مجموعة خدمة API حصتها. حدّث الحصص أو عدّل المجموعة أو استعد الحسابات قبل إعادة المحاولة.",
+        "blocked": "لا تحتوي مجموعة خدمة API على حسابات قابلة للجدولة ({{reasons}}). حدّث الحصص أو عدّل المجموعة أو استعد الحسابات قبل إعادة المحاولة.",
+        "exhausted": "{{count}} مستنفد",
+        "cooling": "{{count}} في التهدئة",
+        "manualRequired": "{{count}} يتطلب إجراءً يدويًا",
+        "disabled": "{{count}} معطل",
+        "unknown": "حالة غير معروفة"
+      }
     },
     "local": {
       "desc": "استيراد الحساب الحالي من ~/.codex/auth.json",
@@ -1961,7 +1970,9 @@
       "refreshFailedBadge": "فشل التحديث",
       "generic": "فشل تحديث الحصة، يرجى المحاولة لاحقا",
       "deactivatedWorkspace": "تم تعطيل مساحة العمل، بدّل الحساب أو أعد التفويض",
-      "requestFailedManualRetry": "تحقّق من الشبكة. لم يتم جلب أحدث حصة. حدّث للمحاولة مجددًا."
+      "requestFailedManualRetry": "تحقّق من الشبكة. لم يتم جلب أحدث حصة. حدّث للمحاولة مجددًا.",
+      "limitBadge": "الحصة محدودة",
+      "limitDetail": "الحصة مستنفدة أو في فترة تهدئة: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1997,7 +2008,9 @@
       "customDragHandle": "اسحب للترتيب",
       "customMoveUp": "أعلى",
       "customMoveDown": "أسفل",
-      "customReset": "إعادة ضبط الترتيب"
+      "customReset": "إعادة ضبط الترتيب",
+      "customMoveTop": "نقل إلى الأعلى",
+      "customMoveBottom": "نقل إلى الأسفل"
     },
     "opencodeSwitch": "مفتاح تبديل OpenCode",
     "opencodeSwitchDesc": "مزامنة تبديل معلومات حساب Codex في OpenCode",
@@ -2460,7 +2473,9 @@
       }
     },
     "groups": {
-      "addToGroup": "إضافة إلى المجموعة"
+      "addToGroup": "إضافة إلى المجموعة",
+      "reorder": "إعادة ترتيب المجموعة",
+      "orderSaved": "تم حفظ ترتيب المجموعة"
     },
     "subscription": {
       "label": "انتهاء الاشتراك",

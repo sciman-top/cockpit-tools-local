@@ -1893,7 +1893,16 @@
       },
       "addMember": "API 서비스에 추가",
       "addSelectedMembers": "선택 항목을 API 서비스에 추가",
-      "removeSelectedMembers": "선택 항목을 API 서비스에서 제거"
+      "removeSelectedMembers": "선택 항목을 API 서비스에서 제거",
+      "poolUnavailable": {
+        "allExhausted": "API 서비스 풀의 모든 계정이 할당량을 소진했습니다. 다시 시도하기 전에 할당량을 새로고침하거나 풀을 조정하거나 계정을 복구하세요.",
+        "blocked": "API 서비스 풀에 예약 가능한 계정이 없습니다({{reasons}}). 다시 시도하기 전에 할당량을 새로고침하거나 풀을 조정하거나 계정을 복구하세요.",
+        "exhausted": "{{count}}개 소진됨",
+        "cooling": "{{count}}개 쿨다운 중",
+        "manualRequired": "{{count}}개 수동 조치 필요",
+        "disabled": "{{count}}개 비활성화됨",
+        "unknown": "알 수 없는 상태"
+      }
     },
     "local": {
       "desc": "~/.codex/auth.json에서 현재 로그인된 계정 가져오기",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "새로고침 실패",
       "generic": "할당량 새로고침에 실패했습니다. 나중에 다시 시도하세요",
       "deactivatedWorkspace": "워크스페이스가 비활성화되었습니다. 계정을 전환하거나 다시 인증하세요",
-      "requestFailedManualRetry": "네트워크를 확인하세요. 최신 할당량을 가져오지 못했습니다. 새로고침해 다시 시도하세요."
+      "requestFailedManualRetry": "네트워크를 확인하세요. 최신 할당량을 가져오지 못했습니다. 새로고침해 다시 시도하세요.",
+      "limitBadge": "할당량 제한",
+      "limitDetail": "할당량이 소진되었거나 쿨다운 중입니다: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "끌어서 정렬",
       "customMoveUp": "위로",
       "customMoveDown": "아래로",
-      "customReset": "순서 초기화"
+      "customReset": "순서 초기화",
+      "customMoveTop": "맨 위로 이동",
+      "customMoveBottom": "맨 아래로 이동"
     },
     "opencodeSwitch": "OpenCode 전환 스위치",
     "opencodeSwitchDesc": "OpenCode에서 Codex 계정 정보를 동기화하여 전환",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "그룹에 추가"
+      "addToGroup": "그룹에 추가",
+      "reorder": "그룹 순서 변경",
+      "orderSaved": "그룹 순서가 저장됨"
     },
     "subscription": {
       "label": "구독 만료",

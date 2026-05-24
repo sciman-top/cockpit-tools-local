@@ -1893,7 +1893,16 @@
       },
       "addMember": "API サービスに追加",
       "addSelectedMembers": "選択項目を API サービスに追加",
-      "removeSelectedMembers": "選択項目を API サービスから削除"
+      "removeSelectedMembers": "選択項目を API サービスから削除",
+      "poolUnavailable": {
+        "allExhausted": "API サービスプール内のすべてのアカウントのクォータが上限に達しました。再試行する前にクォータを更新するか、プールを調整するか、アカウントを復旧してください。",
+        "blocked": "API サービスプールにスケジュール可能なアカウントがありません（{{reasons}}）。再試行する前にクォータを更新するか、プールを調整するか、アカウントを復旧してください。",
+        "exhausted": "{{count}} 件が上限到達",
+        "cooling": "{{count}} 件がクールダウン中",
+        "manualRequired": "{{count}} 件は手動対応が必要",
+        "disabled": "{{count}} 件が無効",
+        "unknown": "不明な状態"
+      }
     },
     "local": {
       "desc": "~/.codex/auth.json から現在ログイン中のアカウントをインポート",
@@ -1915,7 +1924,9 @@
       "refreshFailedBadge": "更新失敗",
       "generic": "クォータの更新に失敗しました。後でもう一度お試しください",
       "deactivatedWorkspace": "ワークスペースが無効です。アカウントを切り替えるか再認証してください",
-      "requestFailedManualRetry": "ネットワークを確認してください。最新のクォータを取得できませんでした。更新して再試行できます。"
+      "requestFailedManualRetry": "ネットワークを確認してください。最新のクォータを取得できませんでした。更新して再試行できます。",
+      "limitBadge": "クォータ制限",
+      "limitDetail": "クォータが上限に達しているかクールダウン中です: {{code}}"
     },
     "plan": {
       "free": "FREE",
@@ -1951,7 +1962,9 @@
       "customDragHandle": "ドラッグして並べ替え",
       "customMoveUp": "上へ",
       "customMoveDown": "下へ",
-      "customReset": "順序をリセット"
+      "customReset": "順序をリセット",
+      "customMoveTop": "一番上へ移動",
+      "customMoveBottom": "一番下へ移動"
     },
     "opencodeSwitch": "OpenCode 切り替えスイッチ",
     "opencodeSwitchDesc": "OpenCode 内の Codex アカウント情報を同期して切り替え",
@@ -2414,7 +2427,9 @@
       }
     },
     "groups": {
-      "addToGroup": "グループに追加"
+      "addToGroup": "グループに追加",
+      "reorder": "グループを並べ替え",
+      "orderSaved": "グループの順序を保存しました"
     },
     "subscription": {
       "label": "契約期限",
