@@ -431,6 +431,52 @@ export function sortCodexLocalAccessAccountIdsForScheduling(
   return [...sortedKnownIds, ...missingIds];
 }
 
+function isCodexLocalAccessCurrentAccountUnavailable(
+  account: CodexAccount,
+): boolean {
+  if (account.requires_reauth) return true;
+  if (isCodexQuotaLimitError(account.quota_error)) return true;
+  return getCodexAccountQuotaAvailabilityScore(account) === 0;
+}
+
+export function sortCodexLocalAccessAccountsForStableDisplay(
+  accounts: CodexAccount[],
+  currentAccountId: string | null | undefined,
+): CodexAccount[] {
+  const normalizedCurrentId = currentAccountId?.trim();
+  if (!normalizedCurrentId) return [...accounts];
+
+  const currentAccount = accounts.find(
+    (account) => account.id === normalizedCurrentId,
+  );
+  if (!currentAccount) return [...accounts];
+
+  const otherAccounts = accounts.filter(
+    (account) => account.id !== normalizedCurrentId,
+  );
+  if (isCodexLocalAccessCurrentAccountUnavailable(currentAccount)) {
+    return [...otherAccounts, currentAccount];
+  }
+  return [currentAccount, ...otherAccounts];
+}
+
+export function sortCodexLocalAccessAccountIdsForStableDisplay(
+  accountIds: string[],
+  accounts: CodexAccount[],
+  currentAccountId: string | null | undefined,
+): string[] {
+  const accountById = new Map(accounts.map((account) => [account.id, account]));
+  const knownAccounts = accountIds
+    .map((accountId) => accountById.get(accountId))
+    .filter((account): account is CodexAccount => Boolean(account));
+  const knownIds = sortCodexLocalAccessAccountsForStableDisplay(
+    knownAccounts,
+    currentAccountId,
+  ).map((account) => account.id);
+  const missingIds = accountIds.filter((accountId) => !accountById.has(accountId));
+  return [...knownIds, ...missingIds];
+}
+
 export function sortCodexLocalAccessAccountsForRefresh(
   accounts: CodexAccount[],
   options: CodexLocalAccessRefreshSortOptions = {},

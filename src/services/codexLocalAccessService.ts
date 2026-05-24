@@ -75,12 +75,6 @@ export async function applyCodexLocalAccessSafetyPreset(
   return await invoke('codex_local_access_apply_safety_preset', { preset });
 }
 
-export async function setCodexLocalAccessFollowCurrentAccount(
-  enabled: boolean,
-): Promise<CodexLocalAccessState> {
-  return await invoke('codex_local_access_set_follow_current_account', { enabled });
-}
-
 export async function setCodexLocalAccessEnabled(
   enabled: boolean,
 ): Promise<CodexLocalAccessState> {

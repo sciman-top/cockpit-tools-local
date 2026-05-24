@@ -1,10 +1,10 @@
 # Cockpit API 服务号池调度专项计划
 
-更新时间：2026-05-23
+更新时间：2026-05-24
 
 ## 目标与裁决边界
 
-本专项承接 `docs/LOCAL_HARDENED_API.md`、`docs/LOCAL_HARDENED_API_ROADMAP.md`、`docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md` 和 `docs/reference-gateway-best-practices.md`。当前落点是 Cockpit 本机 API service 的多账号号池调度；目标归宿是高连续性、低并发、低刷新、可解释、可手动恢复的自用调度系统。
+本专项承接 `docs/LOCAL_HARDENED_API.md`、`docs/LOCAL_HARDENED_API_ROADMAP.md`、`docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md` 和 `docs/reference-gateway-best-practices.md`。当前落点是 Cockpit 本机 API service 的多账号号池调度；目标归宿是高连续性、低并发、低刷新、可解释、可手动恢复的自用调度系统。Codex-facing 行为优先复刻官方 `openai-codex` 源码；参考项目和社区最佳实践只用于 Cockpit 内部调度、排序、cooldown、限流和风控降噪结构。
 
 本专项不追求把 500+ free 账号做成高频吞吐池，也不把随机轮换、全池扫射或风控规避作为优化目标。高效调度的定义是：
 
@@ -16,13 +16,20 @@
 
 ## 官方与本地证据分层
 
-官方文档用于确认限流和错误语义；社区优秀项目只作为结构参考。
+官方源码和官方文档用于确认 Codex-facing、限流和错误语义；社区优秀项目只作为结构参考。调度、排序、风控降噪的实现和验收必须按下列顺序取证：
 
+- 官方 `openai-codex` 源码是 Codex-facing `/v1/responses`、turn metadata、stream terminal、同 turn 禁止静默跨账号重放、`previous_response_id` continuation 和本地 completed Responses 闭合的最高参考源。参考路径：`D:\CODE\external\_reference_gateway_sources\openai-codex`。
 - OpenAI 官方限流文档说明 rate limits 按 RPM/RPD/TPM 等维度生效，且可在 organization 和 project 层定义；失败重试仍会消耗 per-minute limit，所以不能连续重发。参考：<https://developers.openai.com/api/docs/guides/rate-limits>
 - OpenAI 官方错误码文档将 429 区分为 request rate limit 和 quota/billing limit，将 503 slow down 解释为突增流量导致的临时节流；建议 pacing、backoff、尊重 response headers，并保持稳定速率后逐步恢复。参考：<https://developers.openai.com/api/docs/guides/error-codes>
 - Gemini API 官方 rate limits 明确限制按 project 统计，不按 API key 统计；多个 key 不应被假设为多个独立额度池。参考：<https://ai.google.dev/gemini-api/docs/rate-limits>
 - Anthropic 官方 rate limits 文档说明限制按 organization/workspace/model class 管理，并通过 `retry-after` header 表达等待窗口。参考：<https://docs.anthropic.com/en/api/rate-limits>
 - 本地参考源仍优先使用 `D:\CODE\external\_reference_gateway_sources` 和 `docs/reference-gateway-best-practices.md`，只吸收 `IsSchedulable()`、persistent cooldown、fill-first/session affinity、pre-call rate checks、首字节后不重试等可本地文件化的模式。
+
+变更准入要求：
+
+- 修改 `src-tauri/src/modules/codex_local_access.rs` 中 admission、stream、fallback、`previous_response_id` 或 turn-affinity 逻辑前，必须先比对本地 `openai-codex` 源码和本仓现有 HLA-11 tests/report。
+- 修改号池调度、排序或刷新优先级前，必须先比对 `docs/reference-gateway-best-practices.md` 的当前快照、Sub2API/CLIProxyAPI/LiteLLM/New API 对应源码，以及本文件的 bucket/tie-break 合同。
+- 如果参考仓库更新，先 `git fetch --prune` / `pull --ff-only` 刷新本地参考，再更新 `docs/reference-gateway-best-practices.md` 的 Source Snapshot；不能拿过期 SHA 继续论证新改动。
 
 ## 默认策略
 
@@ -51,6 +58,12 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 - cooldown 期间通过高频 `wham/usage` 或上游小请求探测恢复。
 - 自动扫描 `codex_accounts.json` 后挑账号写入临时号池。
 - 为规避平台识别而设计 UA/IP/指纹伪装逻辑。
+
+风控降噪口径：
+
+- 抗风控风险的主手段是低并发、低刷新、sticky/fill-first、persistent cooldown、手动恢复和脱敏 audit，不是伪装 UA/IP/指纹。
+- 新账号作为 reserve，不因显示 100% 周额度而自动压过已用且已恢复的老账号；同一出口 IP 下减少账号/IP 组合变化优先于表面额度最大化。
+- 未知 429、503、网络抖动或 model capacity 只能进入短冷却或本地 backpressure 分层，不能直接触发全池扫射。
 
 ## 排序与轮换策略
 
@@ -92,7 +105,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 卡片主页、Codex 分组和 API 服务号池视图应使用同一套状态 bucket，但展示目标和调度目标不同：
 
-1. API 服务号池成员置顶，但成员内部显示上述调度 bucket。
+1. API 服务号池成员置顶；成员内部展示保留用户保存顺序，只在当前账号可用时置顶、当前账号耗尽时置末，刷新 quota 不重排其它成员。
 2. 当前账号/本次已启用账号保留明显标记，避免用户误以为系统会频繁换号。
 3. 分组内默认保留用户手动顺序；选择“推荐排序”时才按 API service scheduling score 排。
 4. 曾用且已重置的账号应排在新账号前面；新账号用“备用”语义展示，不应因为 100% 周额度排到最前。

@@ -823,13 +823,6 @@ pub async fn codex_local_access_apply_safety_preset(
 }
 
 #[tauri::command]
-pub async fn codex_local_access_set_follow_current_account(
-    enabled: bool,
-) -> Result<CodexLocalAccessState, String> {
-    codex_local_access::set_local_access_follow_current_account(enabled).await
-}
-
-#[tauri::command]
 pub async fn codex_local_access_set_enabled(
     enabled: bool,
 ) -> Result<CodexLocalAccessState, String> {

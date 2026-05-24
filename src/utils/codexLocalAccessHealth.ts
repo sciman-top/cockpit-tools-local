@@ -1,8 +1,13 @@
-import type { CodexLocalAccessHealthSummary } from "../types/codexLocalAccess";
+import type {
+  CodexLocalAccessAccountHealthView,
+  CodexLocalAccessHealthSummary,
+} from "../types/codexLocalAccess";
 
 const QUOTA_SNAPSHOT_ERROR_TYPES = new Set([
   "usage_limit_reached",
   "insufficient_quota",
+  "quota_exhausted",
+  "upstream_rate_limit",
 ]);
 
 function normalizeErrorType(value: string | null | undefined): string {
@@ -35,4 +40,17 @@ export function getCodexLocalAccessQuotaAccountRefreshKey(
     health.activeModelCooldownCount,
     health.nearestCooldownUntilMs ?? "",
   ].join("|");
+}
+
+export function isCodexLocalAccessQuotaHealthIssue(
+  health: Pick<
+    CodexLocalAccessAccountHealthView,
+    "lastStatus" | "lastErrorType"
+  > | null | undefined,
+): boolean {
+  if (!health) return false;
+  return (
+    health.lastStatus === 429 ||
+    QUOTA_SNAPSHOT_ERROR_TYPES.has(normalizeErrorType(health.lastErrorType))
+  );
 }

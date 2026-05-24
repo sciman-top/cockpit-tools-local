@@ -2220,6 +2220,8 @@
     },
     "quotaError": {
       "badge": "配额异常",
+      "limitBadge": "额度用尽",
+      "limitDetail": "额度已用尽或正在冷却：{{code}}",
       "refreshFailedBadge": "刷新失败",
       "generic": "配额刷新失败，请稍后重试",
       "deactivatedWorkspace": "工作区已停用，请切换账号或重新授权",

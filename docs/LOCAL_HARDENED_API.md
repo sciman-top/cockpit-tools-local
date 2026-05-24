@@ -4,11 +4,14 @@
 
 账号池调度专项见 `docs/LOCAL_HARDENED_API_ACCOUNT_POOL_SCHEDULING_PLAN.md`。该专项固定默认策略为 `sticky_process + fill_first + capped fallback`，并明确禁止随机扫号、高频 live probe 和风控规避型逻辑。
 
+Codex-facing 行为优先参考官方 `openai-codex` 源码：`D:\CODE\external\_reference_gateway_sources\openai-codex`。社区网关项目可以提供号池调度、cooldown、pre-call limiter 和 stream guard 的结构参考，但不能覆盖官方 Codex turn/stream/Responses terminal 语义。
+
 ## 目标
 
 - 只监听 `127.0.0.1`，不提供 LAN/public 入口。
 - 单账号先跑通；多账号池只在 health registry、stream guard、backpressure 和 audit trail 均可用后启用。
 - 当前请求一旦开始写出，后续不换账号；额度耗尽只影响下一个请求的选择。
+- 号池调度、排序和风控降噪必须保持低并发、低刷新、sticky/fill-first、persistent cooldown、手动恢复和脱敏 audit，不使用随机轮换、全池扫射或 UA/IP/指纹伪装作为默认策略。
 - 429/401/5xx 只通过真实业务请求被动写入健康状态，不用高频刷新探测恢复。
 - 日志和 UI 只展示结构化脱敏字段，不记录 prompt、response、token、cookie、Authorization header 或完整邮箱。
 
@@ -77,7 +80,7 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 - 同一出口 IP 下尽量少切换不同账号；曾经被 API service 成功使用过、且一周重置后恢复的账号，应优先于从未使用过的新账号。新账号作为 reserve 展示和调度，不因为显示 100% 周额度就默认排到最前。
 - 健康状态、cooldown、exhausted、manual-required 只影响运行时是否可调度，不应把账号从配置号池或 UI 有效号池里隐式移除。
 - API 服务面板和 smoke report 默认展示当前配置号池作用域的 health summary；历史 `codex_local_access_health.json` 仍保留旧账号记录，但只能作为 `healthRegistry` 历史证据，不能污染当前号池健康判断。
-- 在账号卡片或分组内点击普通“切换”只切换当前 Codex 账号，不清空、不替换 API 服务号池；只有显式开启“跟随当前账号”时才同步号池，且同步方式是把当前账号置前并保留原成员。
+- 在账号卡片或分组内点击普通“切换”只切换当前 Codex 账号，不清空、不替换 API 服务号池；API 服务号池只由显式成员管理维护，旧版 `followCurrentAccount` 配置会被忽略。
 - 在账号卡片主页点击“API 服务”卡片本体进入服务面板；卡片内“添加账号”按钮进入号池成员选择。
 - 当号池成员全部不可调度时，普通 HTTP 客户端会收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`；卡片根据 health summary 显示“额度均已耗尽”或“暂无可调度账号”的原因摘要，不能伪装成 upstream `429/rate_limited`。
 - Codex-facing `/v1/responses` 是例外：`429 retry-limit`、静默 SSE、transport `503/pool_unavailable`、`response.failed`、heartbeat-only open wait 都会破坏当前 Codex turn。全池不可调度时，只允许短等待恢复，且等待必须落在本次请求超时预算内；若不能在短等待内恢复，必须返回 `200` completed Responses 形态：streaming 使用完整 `response.created -> ... -> response.completed -> [DONE]`，non-stream 使用 `status=completed` JSON，并在 assistant text 中说明 `Cockpit API Service pool_unavailable`。该本地响应不打上游、不释放无关 active stream。
@@ -116,6 +119,7 @@ API 服务面板的“策略预设”按钮会调用 `codex_local_access_apply_s
 
 Hardened API Mode 的目标是接近 Direct OAuth 的稳定体验，但不伪造上游 quota grace：
 
+- 这些边界按官方 `openai-codex` 源码和本仓 HLA-11 实跑合同解释；社区网关的重试/fallback 经验只能用于内部调度，不得把同一 Codex turn 静默重放到新账号。
 - 已被上游接纳的当前 stream/response 应继续 pipe 到完成、上游 terminal error、客户端断开或 transport fatal error。
 - 本地 cooldown、exhausted、health registry 或 `selection_eligible=false` 只影响新的 admission，不 retroactively cancel active stream。
 - Codex turn affinity 按官方当前语义优先使用 `x-codex-turn-state`，其次使用 `x-codex-turn-metadata.turn_id`；`x-client-request-id` 是 thread 级 legacy fallback，不能在有 turn metadata 时把同一 thread 的新 turn 误判为旧任务。

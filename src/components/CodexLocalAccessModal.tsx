@@ -35,7 +35,7 @@ import {
 } from 'lucide-react';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { useTranslation } from 'react-i18next';
-import type { CodexAccount, CodexQuotaErrorInfo } from '../types/codex';
+import type { CodexAccount } from '../types/codex';
 import type { CodexAccountGroup } from '../services/codexAccountGroupService';
 import type {
   CodexLocalAccessAccountHealthView,
@@ -50,8 +50,8 @@ import type {
 } from '../types/codexLocalAccess';
 import {
   getCodexPlanFilterKey,
+  getCodexQuotaIssueInfo,
   isCodexAccountErrorState,
-  isCodexQuotaLimitError,
   isCodexExplicitFreePlanType,
   isCodexApiKeyAccount,
 } from '../types/codex';
@@ -80,10 +80,10 @@ import {
   type AccountOrderMove,
 } from '../utils/accountOrder';
 import {
-  compareCodexAccountTieBreak,
-  compareCodexAccountsByLocalAccessSchedule,
+  sortCodexLocalAccessAccountsForStableDisplay,
   sortCodexLocalAccessAccountsForScheduling,
 } from '../utils/codexAccountSort';
+import { isCodexLocalAccessQuotaHealthIssue } from '../utils/codexLocalAccessHealth';
 import './GroupAccountPickerModal.css';
 import './CodexLocalAccessModal.css';
 
@@ -124,7 +124,6 @@ interface CodexLocalAccessModalProps {
   onApplySafetyPreset: (
     preset: CodexLocalApiSafetyPresetId,
   ) => Promise<unknown> | unknown;
-  onSetFollowCurrentAccount: (enabled: boolean) => Promise<unknown> | unknown;
   onSetRuntimeMode: (mode: CodexRuntimeIntegrationMode) => Promise<unknown> | unknown;
   onRotateApiKey: () => Promise<unknown> | unknown;
   onKillPort: () => Promise<unknown> | unknown;
@@ -176,26 +175,6 @@ function moveIdAroundTarget(
 }
 const CODEX_LOCAL_ACCESS_STATS_RANGE_STORAGE_KEY =
   'agtools.codex.local_access.stats_range.v1';
-
-function extractLocalAccessErrorStatusCode(message: string): string {
-  return (
-    message.match(/API 返回错误\s+(\d{3})/i)?.[1] ||
-    message.match(/status[=: ]+(\d{3})/i)?.[1] ||
-    ''
-  );
-}
-
-function extractLocalAccessErrorCode(message: string): string {
-  return (
-    message.match(/\[error_code:([^\]]+)\]/)?.[1] ||
-    message.match(/error_code[=:]\s*([^,\]\s]+)/i)?.[1] ||
-    ''
-  );
-}
-
-function isLocalAccessRefreshRequestFailure(message: string): boolean {
-  return message.trim().toLowerCase().includes('error sending request');
-}
 
 function isLocalAccessAuthHealthIssue(
   health?: CodexLocalAccessAccountHealthView | null,
@@ -337,7 +316,6 @@ export function CodexLocalAccessModal({
   onUpdatePort,
   onUpdateRoutingStrategy,
   onApplySafetyPreset,
-  onSetFollowCurrentAccount,
   onSetRuntimeMode,
   onRotateApiKey,
   onKillPort,
@@ -418,7 +396,6 @@ export function CodexLocalAccessModal({
     return next;
   }, [health?.accounts]);
   const routingStrategy = collection?.routingStrategy ?? 'auto';
-  const followCurrentAccount = collection?.followCurrentAccount ?? false;
   const safetyPresetId = resolveSafetyPresetId(collection?.safetyConfig);
   const maxRetryAccountsManualOptIn =
     (collection?.safetyConfig.maxRetryAccounts ?? 2) > 2;
@@ -894,11 +871,11 @@ export function CodexLocalAccessModal({
   }, [stats?.accounts]);
 
   const selectedMemberAccounts = useMemo(() => {
-    const accountsForScheduling = selectedOrderForSave
+    const accountsForDisplay = selectedOrderForSave
       .map((accountId) => accountById.get(accountId))
       .filter((account): account is CodexAccount => Boolean(account));
-    return sortCodexLocalAccessAccountsForScheduling(
-      accountsForScheduling,
+    return sortCodexLocalAccessAccountsForStableDisplay(
+      accountsForDisplay,
       currentAccountId,
     );
   }, [accountById, currentAccountId, selectedOrderForSave]);
@@ -916,10 +893,14 @@ export function CodexLocalAccessModal({
 
   const currentMemberStats = useMemo(() => {
     const currentIds = collection?.accountIds ?? [];
-    return currentIds
-      .map((accountId) => {
-        const account = accountById.get(accountId);
-        if (!account) return null;
+    const memberAccounts = currentIds
+      .map((accountId) => accountById.get(accountId))
+      .filter((account): account is CodexAccount => Boolean(account));
+    return sortCodexLocalAccessAccountsForStableDisplay(
+      memberAccounts,
+      currentAccountId,
+    )
+      .map((account) => {
         const presentation = buildCodexAccountPresentation(account, t);
         const accountStats = windowStatsByAccountId.get(account.id);
         return {
@@ -927,21 +908,6 @@ export function CodexLocalAccessModal({
           presentation,
           stats: accountStats?.usage ?? null,
         };
-      })
-      .filter((item): item is NonNullable<typeof item> => Boolean(item))
-      .sort((left, right) => {
-        const scheduleDiff = compareCodexAccountsByLocalAccessSchedule(
-          left.account,
-          right.account,
-          currentAccountId,
-        );
-        if (scheduleDiff !== 0) return scheduleDiff;
-
-        const requestCountDiff =
-          (right.stats?.requestCount ?? 0) - (left.stats?.requestCount ?? 0);
-        return requestCountDiff !== 0
-          ? requestCountDiff
-          : compareCodexAccountTieBreak(left.account, right.account);
       });
   }, [
     accountById,
@@ -1037,31 +1003,29 @@ export function CodexLocalAccessModal({
       };
     }
 
-    const quotaError: CodexQuotaErrorInfo | undefined = account.quota_error;
-    const rawMessage = quotaError?.message?.trim() || '';
-    if (!rawMessage) {
+    const issueInfo = getCodexQuotaIssueInfo(account.quota_error);
+    if (issueInfo.kind === 'none') {
       return null;
     }
 
-    const statusCode = extractLocalAccessErrorStatusCode(rawMessage);
-    const errorCode = quotaError?.code || extractLocalAccessErrorCode(rawMessage);
-    const isRefreshFailure =
-      isLocalAccessRefreshRequestFailure(rawMessage) && !statusCode && !errorCode;
-    const isQuotaLimit = isCodexQuotaLimitError(quotaError);
-    if (isRefreshFailure) {
+    const detail = issueInfo.rawMessage || issueInfo.displayCode;
+    if (issueInfo.kind === 'refresh') {
       return {
         badge: t('codex.quotaError.refreshFailedBadge', '刷新失败'),
-        detail: rawMessage,
+        detail,
         className: 'quota-refresh',
         icon: 'info',
         blocksSelection: true,
         canPause: false,
       };
     }
-    if (isQuotaLimit) {
+    if (issueInfo.kind === 'limited') {
       return {
         badge: t('codex.quotaError.limitBadge', '额度用尽'),
-        detail: rawMessage,
+        detail: t('codex.quotaError.limitDetail', {
+          code: issueInfo.displayCode || 'usage_limit_reached',
+          defaultValue: '额度已用尽或正在冷却：{{code}}',
+        }),
         className: 'quota-limited',
         icon: 'clock',
         blocksSelection: false,
@@ -1069,8 +1033,8 @@ export function CodexLocalAccessModal({
       };
     }
     return {
-      badge: statusCode || t('codex.quotaError.badge', '配额异常'),
-      detail: rawMessage,
+      badge: issueInfo.statusCode || t('codex.quotaError.badge', '配额异常'),
+      detail,
       className: 'quota-error',
       icon: 'alert',
       blocksSelection: true,
@@ -1132,6 +1096,23 @@ export function CodexLocalAccessModal({
       return {
         badge: t('codex.localAccess.accountIssue.cooling', '冷却中'),
         detail: t('codex.localAccess.accountIssue.coolingDetail', 'API 服务健康状态：等待冷却结束'),
+        className: 'quota-limited',
+        icon: 'clock',
+        blocksSelection: false,
+        canPause: true,
+      };
+    }
+    if (isCodexLocalAccessQuotaHealthIssue(healthView)) {
+      const detailParts = [
+        t('codex.localAccess.accountIssue.coolingDetail', 'API 服务健康状态：等待冷却结束'),
+        healthView.lastStatus ? `HTTP ${healthView.lastStatus}` : '',
+        healthView.lastProviderCode
+          ? `${t('codex.localAccess.accountIssue.providerCode', '供应商代码')} ${healthView.lastProviderCode}`
+          : '',
+      ].filter(Boolean);
+      return {
+        badge: t('codex.quotaError.limitBadge', '额度用尽'),
+        detail: detailParts.join(' · '),
         className: 'quota-limited',
         icon: 'clock',
         blocksSelection: false,
@@ -1664,20 +1645,6 @@ export function CodexLocalAccessModal({
         await onApplySafetyPreset(preset);
       },
       t('codex.localAccess.safetyPresetSaveSuccess', 'API 服务策略预设已恢复'),
-    );
-  };
-
-  const handleToggleFollowCurrentAccount = async () => {
-    if (!collection) return;
-    const nextEnabled = !followCurrentAccount;
-
-    await runAction(
-      async () => {
-        await onSetFollowCurrentAccount(nextEnabled);
-      },
-      nextEnabled
-        ? t('codex.localAccess.followCurrentEnabled', '已启用跟随当前账号')
-        : t('codex.localAccess.followCurrentDisabled', '已关闭跟随当前账号'),
     );
   };
 
@@ -2522,20 +2489,6 @@ export function CodexLocalAccessModal({
                     {t(
                       'codex.localAccess.modal.restrictFreeToggle',
                       '限制 Free 账号使用',
-                    )}
-                  </span>
-                </label>
-                <label className="codex-local-access-free-toggle">
-                  <input
-                    type="checkbox"
-                    checked={followCurrentAccount}
-                    onChange={() => void handleToggleFollowCurrentAccount()}
-                    disabled={actionBusy || !collection}
-                  />
-                  <span>
-                    {t(
-                      'codex.localAccess.modal.followCurrentToggle',
-                      '跟随当前手动切号',
                     )}
                   </span>
                 </label>

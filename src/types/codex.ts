@@ -60,21 +60,77 @@ const CODEX_QUOTA_LIMIT_ERROR_CODES = new Set([
   "rate_limit_reached",
   "model_cap_reached",
   "model_cap_exceeded",
+  "quota_exhausted",
+  "upstream_rate_limit",
 ]);
 
-function normalizeCodexQuotaErrorCode(value?: string | null): string {
+export type CodexQuotaIssueKind = "none" | "refresh" | "limited" | "error";
+
+export interface CodexQuotaIssueInfo {
+  kind: CodexQuotaIssueKind;
+  statusCode: string;
+  errorCode: string;
+  displayCode: string;
+  rawMessage: string;
+  isRefreshRequestFailure: boolean;
+  isQuotaLimitError: boolean;
+}
+
+export function normalizeCodexQuotaErrorCode(value?: string | null): string {
   return (value || "").trim().toLowerCase();
 }
 
-function extractCodexQuotaErrorCode(message: string): string {
+function readCodexQuotaErrorCodeFromJson(message: string): string {
+  const trimmed = message.trim();
+  if (!trimmed.startsWith("{")) return "";
+
+  const root = toJsonRecord(parseJsonValue(trimmed));
+  if (!root) return "";
+
+  const candidates = [
+    toJsonRecord(root.error)?.type,
+    toJsonRecord(root.error)?.code,
+    toJsonRecord(root.detail)?.type,
+    toJsonRecord(root.detail)?.code,
+    root.type,
+    root.code,
+  ];
+  for (const candidate of candidates) {
+    if (typeof candidate === "string" && candidate.trim()) {
+      return candidate.trim();
+    }
+  }
+  return "";
+}
+
+function parseJsonValue(value: string): unknown {
+  try {
+    return JSON.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+export function extractCodexQuotaErrorCode(message: string): string {
+  const rawMessage = message.trim();
+  const jsonCode = readCodexQuotaErrorCodeFromJson(rawMessage);
+  if (jsonCode) return jsonCode;
+
+  const normalizedRawMessage = normalizeCodexQuotaErrorCode(rawMessage);
+  if (CODEX_QUOTA_LIMIT_ERROR_CODES.has(normalizedRawMessage)) {
+    return normalizedRawMessage;
+  }
+
   return (
-    message.match(/\[error_code:([^\]]+)\]/)?.[1] ||
-    message.match(/error_code[=:]\s*([^,\]\s]+)/i)?.[1] ||
+    rawMessage.match(/\[error_code:([^\]]+)\]/)?.[1] ||
+    rawMessage.match(/error_code[=:]\s*([^,\]\s]+)/i)?.[1] ||
+    rawMessage.match(/error_type[=:]\s*([^,\]\s]+)/i)?.[1] ||
+    rawMessage.match(/provider_code[=:]\s*([^,\]\s]+)/i)?.[1] ||
     ""
   );
 }
 
-function extractCodexQuotaErrorStatusCode(message: string): string {
+export function extractCodexQuotaErrorStatusCode(message: string): string {
   return (
     message.match(/API 返回错误\s+(\d{3})/i)?.[1] ||
     message.match(/status[=: ]+(\d{3})/i)?.[1] ||
@@ -85,17 +141,19 @@ function extractCodexQuotaErrorStatusCode(message: string): string {
 export function isCodexQuotaLimitError(
   error?: CodexQuotaErrorInfo | null,
 ): boolean {
-  if (!error?.message) return false;
-  const rawMessage = error.message.trim();
+  if (!error) return false;
+  const rawMessage = (error.message || "").trim();
   const lowerMessage = rawMessage.toLowerCase();
   const statusCode = extractCodexQuotaErrorStatusCode(rawMessage);
   const errorCode = normalizeCodexQuotaErrorCode(
     error.code || extractCodexQuotaErrorCode(rawMessage),
   );
 
+  if (CODEX_QUOTA_LIMIT_ERROR_CODES.has(errorCode)) return true;
+  if (!rawMessage) return false;
+
   return (
     statusCode === "429" ||
-    CODEX_QUOTA_LIMIT_ERROR_CODES.has(errorCode) ||
     lowerMessage.includes("too many requests") ||
     lowerMessage.includes("rate_limit") ||
     lowerMessage.includes("rate limit") ||
@@ -108,6 +166,42 @@ export function isCodexQuotaLimitError(
         lowerMessage.includes("limit") ||
         lowerMessage.includes("exhaust")))
   );
+}
+
+export function getCodexQuotaIssueInfo(
+  error?: CodexQuotaErrorInfo | null,
+): CodexQuotaIssueInfo {
+  const rawMessage = (error?.message || "").trim();
+  const statusCode = rawMessage
+    ? extractCodexQuotaErrorStatusCode(rawMessage)
+    : "";
+  const errorCode = normalizeCodexQuotaErrorCode(
+    error?.code || (rawMessage ? extractCodexQuotaErrorCode(rawMessage) : ""),
+  );
+  const displayCode = errorCode || statusCode;
+  const isRefreshRequestFailure =
+    rawMessage.toLowerCase().includes("error sending request") &&
+    !statusCode &&
+    !errorCode;
+  const isQuotaLimitError = isCodexQuotaLimitError(error);
+  const kind: CodexQuotaIssueKind =
+    !rawMessage && !errorCode
+      ? "none"
+      : isRefreshRequestFailure
+        ? "refresh"
+        : isQuotaLimitError
+          ? "limited"
+          : "error";
+
+  return {
+    kind,
+    statusCode,
+    errorCode,
+    displayCode,
+    rawMessage,
+    isRefreshRequestFailure,
+    isQuotaLimitError,
+  };
 }
 
 export function isCodexAccountErrorState(account: CodexAccount): boolean {

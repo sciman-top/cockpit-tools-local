@@ -74,6 +74,24 @@ assert.match(
   'quota exhaustion snapshots should refresh account files even when represented as a model cooldown',
 );
 
+assert.equal(
+  health.isCodexLocalAccessQuotaHealthIssue({
+    lastStatus: 429,
+    lastErrorType: 'usage_limit_reached',
+  }),
+  true,
+  'account health with 429 usage_limit_reached should render as quota-limited instead of an account error',
+);
+
+assert.equal(
+  health.isCodexLocalAccessQuotaHealthIssue({
+    lastStatus: 401,
+    lastErrorType: 'auth_error',
+  }),
+  false,
+  'auth health issues must stay out of the quota-limited rendering path',
+);
+
 assert.match(
   health.getCodexLocalAccessQuotaAccountRefreshKey(
     summary({

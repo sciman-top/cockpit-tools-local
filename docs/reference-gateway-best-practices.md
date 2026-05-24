@@ -1,20 +1,48 @@
 # Reference Gateway Best Practices Review
 
-审查时间：2026-05-17
+审查时间：2026-05-24
 
-审查目标：为 Cockpit Tools Local 的个人本机 API service / Hardened Local API Mode 提炼可借鉴实践。本文只作为设计参考，不把社区项目的策略直接等同于本仓应启用的默认行为。
+审查目标：为 Cockpit Tools Local 的个人本机 API service / Hardened Local API Mode 提炼可借鉴实践。本文只作为设计参考，不把社区项目的策略直接等同于本仓应启用的默认行为。Codex-facing 行为以官方 `openai-codex` 源码和本仓实测为最高语义锚点，社区项目只用于调度结构、cooldown、限流和可观测性启发。
 
 ## Source Snapshot
 
 | Project | Local path | Revision | Role |
 | --- | --- | --- | --- |
-| New API | `D:\CODE\external\_reference_gateway_sources\new-api` | `5dd0d3b` | 渠道网关、渠道禁用、重试、限流 |
-| Sub2API | `D:\CODE\external\_reference_gateway_sources\sub2api` | `f5bd25b` | 账号健康、调度、临时不可调度、粘性会话 |
-| CLIProxyAPI | `D:\CODE\external\_reference_gateway_sources\CLIProxyAPI` | `26d13af` | CLI/OAuth 代理、凭据选择、模型冷却、流式重试边界 |
-| LiteLLM | `D:\CODE\external\_reference_gateway_sources\litellm` | `cf9b5e4` | 通用 router、cooldown、pre-call rate checks、proxy limits |
+| OpenAI Codex | `D:\CODE\external\_reference_gateway_sources\openai-codex` | `7d47056` | 官方 Codex 源码；Codex-facing `/v1/responses`、stream terminal、turn metadata、重放/连续性语义 |
+| New API | `D:\CODE\external\_reference_gateway_sources\new-api` | `49bc3a1` | 渠道网关、渠道禁用、重试、限流 |
+| Sub2API | `D:\CODE\external\_reference_gateway_sources\sub2api` | `63b0631a` | 账号健康、调度、临时不可调度、粘性会话 |
+| CLIProxyAPI | `D:\CODE\external\_reference_gateway_sources\CLIProxyAPI` | `50d19e20` | CLI/OAuth 代理、凭据选择、模型冷却、流式重试边界 |
+| LiteLLM | `D:\CODE\external\_reference_gateway_sources\litellm` | `4148667` | 通用 router、cooldown、pre-call rate checks、proxy limits |
+
+## Evidence Precedence
+
+后续修改 API service、号池调度、排序、风控降噪或 Codex-facing fallback 时，证据优先级固定如下：
+
+1. 本仓运行事实、focused tests、smoke/acceptance report。
+2. 官方 `openai-codex` 源码：Codex 请求形态、turn metadata、Responses SSE terminal、同 turn 是否可重放、`previous_response_id` 语义、失败/完成事件处理。
+3. OpenAI 官方 API 文档：公开错误码、rate limit、`Retry-After`/backoff 语义。
+4. 本地参考项目源码：Sub2API 的 `IsSchedulable()`/persistent cooldown，CLIProxyAPI 的 fill-first/session affinity/首字节后不重试，LiteLLM 的 pre-call rate checks/cooldown matrix，New API 的 retry/disable framework。
+5. 社区文章或 issue 只能作为待核线索，不能覆盖官方源码、本仓实测和项目合同。
+
+如果官方 Codex 源码与社区网关实践冲突，Codex-facing 行为优先复刻官方 Codex 源码；社区网关只能影响 Cockpit 内部调度实现形状。
+
+## Official Codex Anchors
+
+这些锚点是后续修改 `src-tauri/src/modules/codex_local_access.rs` admission/stream/fallback/turn-affinity 逻辑前必须复核的最小集合：
+
+- `codex-rs/codex-api/src/sse/responses.rs`：`response.failed` 被转成 terminal `ApiError`，`response.completed` 才产出 `ResponseEvent::Completed`，SSE 结束但没有 `response.completed` 会报 `stream closed before response.completed`。这对应本仓“已接纳 stream 继续在原账号跑到 terminal”的 terminal 判定。
+- `codex-rs/app-server-protocol/src/protocol/v2/shared.rs` 和 `codex-rs/app-server/README.md`：官方区分 `ResponseStreamConnectionFailed` 与 `ResponseStreamDisconnected`，后者表示 turn 中途 SSE 断开。Cockpit 不应把中途断开静默解释成可跨账号续接。
+- `codex-rs/core/src/client.rs`：`ModelClientSession` 是 per-turn 状态，缓存 `x-codex-turn-state` 并复用 `previous_response_id`；`ResponseEvent::Completed` 后才保存 `LastResponse.response_id` 供后续 continuation。跨账号 fallback 不得伪造同一个 `previous_response_id`。
+- `codex-rs/app-server-protocol/src/protocol/thread_history.rs`：`TurnContext.turn_id` 是 canonical turn id；晚到的 turn-scoped item 按原 `turn_id` 路由，未知 `turn_id` 被 drop，`late_turn_complete_does_not_close_active_turn` 固化了旧 turn terminal 不能关闭新 turn。
+
+对应官方 API 文档锚点：
+
+- Error codes 文档的 `previous_response_not_found` 要求使用完整 input context 并把 `previous_response_id` 置空重试；这与本仓“同 turn 不跨账号伪造 continuation”一致。
+- 429/503 文档要求 pacing、backoff、尊重 response headers、稳定速率后逐步恢复；这与本仓低并发、低刷新、persistent cooldown 和手动恢复策略一致。
 
 ## Executive Conclusions
 
+0. Codex-facing `/v1/responses` 不是普通 OpenAI-compatible HTTP 客户端。当前 turn、stream terminal、`previous_response_id`、本地 completed Responses 闭合和同 turn 禁止静默跨账号重放，必须优先对齐官方 `openai-codex` 源码，再参考社区网关策略。
 1. `429` 必须拦截，但不应理解为“马上扫下一个账号”。社区成熟做法更接近：分类错误、读取 `Retry-After` 或 provider reset 字段、把当前账号/模型放入 cooldown，再由健康选择器决定是否可 fallback。
 2. Hardened Local API Mode 的默认路由应是 `sticky_process` 或 `fill_first`，不是 request-level random / round-robin。多账号池可以支持排序和健康 fallback，但默认不做每请求轮询。
 3. 当前任务能否“额度耗完仍继续”取决于上游连接是否已经建立、是否已经开始流式输出、以及服务端是否还能继续发送。网关只能保证本地不因自己的重试/切号策略中断；不能把上游已经返回的 `429` 变成继续执行。

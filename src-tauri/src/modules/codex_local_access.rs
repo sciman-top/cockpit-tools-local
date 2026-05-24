@@ -104,6 +104,8 @@ const CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const RESPONSES_PATH: &str = "/v1/responses";
 const IMAGES_GENERATIONS_PATH: &str = "/v1/images/generations";
 const IMAGES_EDITS_PATH: &str = "/v1/images/edits";
+const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
+const LOCAL_CODEX_TURN_STATE_PREFIX: &str = "cockpit-turn-";
 static GATEWAY_RUNTIME: OnceLock<TokioMutex<GatewayRuntime>> = OnceLock::new();
 static GATEWAY_ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
 static UPSTREAM_HTTP_CLIENT: OnceLock<Mutex<Option<CachedUpstreamHttpClient>>> = OnceLock::new();
@@ -144,6 +146,12 @@ struct UsageCapture {
 struct ResponseCapture {
     usage: Option<UsageCapture>,
     response_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResponseHeaderValue {
+    name: &'static str,
+    value: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -299,6 +307,7 @@ struct ParsedRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AuditContext {
     request_id: String,
+    request_id_source: String,
     route: String,
     model: String,
     account_hash: String,
@@ -924,28 +933,13 @@ fn save_runtime_mode_state(state: &CodexRuntimeModeState) -> Result<(), String> 
 
 fn should_sync_local_access_collection_on_account_switch(
     _mode: CodexRuntimeIntegrationMode,
-    collection: &CodexLocalAccessCollection,
+    _collection: &CodexLocalAccessCollection,
 ) -> bool {
-    collection.follow_current_account
+    false
 }
 
 fn should_restore_direct_projection_before_app_exit(mode: CodexRuntimeIntegrationMode) -> bool {
     mode == CodexRuntimeIntegrationMode::CockpitApiService
-}
-
-fn build_follow_current_local_access_account_ids(
-    account_id: &str,
-    collection: &CodexLocalAccessCollection,
-) -> Vec<String> {
-    let mut account_ids = vec![account_id.to_string()];
-    account_ids.extend(
-        collection
-            .account_ids
-            .iter()
-            .filter(|existing_id| existing_id.as_str() != account_id)
-            .cloned(),
-    );
-    account_ids
 }
 
 fn build_projection_seed_local_access_account_ids(
@@ -1020,7 +1014,6 @@ async fn materialize_cockpit_api_service_projection() -> Result<(), String> {
         .as_ref()
         .ok_or_else(|| "API 服务集合尚未创建，无法写入 API 服务投影".to_string())?;
     let projection_account = resolve_local_access_projection_account(collection)?;
-    let _ = set_local_access_follow_current_account(false).await?;
     let enabled_state = set_local_access_enabled(true).await?;
     let enabled_collection = enabled_state
         .collection
@@ -5687,13 +5680,26 @@ fn upsert_request_affinity_binding(
     let Some(request_id) = request_affinity_key(request) else {
         return false;
     };
+    upsert_request_affinity_binding_key(registry, &request_id, account_id, now)
+}
+
+fn upsert_request_affinity_binding_key(
+    registry: &mut CodexLocalAccessHealthRegistry,
+    request_id: &str,
+    account_id: &str,
+    now: i64,
+) -> bool {
+    let request_id = request_id.trim();
+    if request_id.is_empty() {
+        return false;
+    }
     let account_id = account_id.trim();
     if account_id.is_empty() {
         return false;
     }
 
     let binding = CodexLocalAccessStickyBinding {
-        binding_key: request_id.clone(),
+        binding_key: request_id.to_string(),
         account_id: account_id.to_string(),
         reason: REQUEST_AFFINITY_BINDING_REASON.to_string(),
         expires_at_ms: now.saturating_add(REQUEST_AFFINITY_TTL_MS),
@@ -5701,13 +5707,15 @@ fn upsert_request_affinity_binding(
     };
     let changed = registry
         .request_affinity
-        .get(&request_id)
+        .get(request_id)
         .map(|current| current != &binding)
         .unwrap_or(true);
     if changed {
         registry.schema_version = CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION;
         registry.updated_at = now;
-        registry.request_affinity.insert(request_id, binding);
+        registry
+            .request_affinity
+            .insert(request_id.to_string(), binding);
     }
     prune_persisted_request_affinity_bindings(registry, None, now) || changed
 }
@@ -5829,6 +5837,38 @@ fn persist_successful_routing_state(
     );
 }
 
+fn persist_request_affinity_key(account_id: &str, request: &ParsedRequest, request_id: &str) {
+    let mut registry = match load_health_registry_from_disk() {
+        Ok(registry) => registry,
+        Err(err) => {
+            log_health_registry_update_error(&err);
+            return;
+        }
+    };
+    let now = now_ms();
+    if !upsert_request_affinity_binding_key(&mut registry, request_id, account_id, now) {
+        return;
+    }
+    if let Err(err) = save_health_registry_to_disk(&registry) {
+        log_health_registry_update_error(&err);
+        return;
+    }
+
+    let context = build_audit_context(request, Some(account_id));
+    record_audit_event_from_context(
+        &context,
+        "selector",
+        None,
+        None,
+        None,
+        Some("request_affinity_bound"),
+        BTreeMap::from([
+            ("binding_key".to_string(), request_id.to_string()),
+            ("source".to_string(), "response_turn_state".to_string()),
+        ]),
+    );
+}
+
 fn hashed_request_correlation_id(prefix: &str, value: &str) -> Option<String> {
     let value = value.trim();
     if value.is_empty() {
@@ -5840,12 +5880,27 @@ fn hashed_request_correlation_id(prefix: &str, value: &str) -> Option<String> {
     Some(format!("{}:sha256:{}", prefix, &hex[..12]))
 }
 
-fn codex_turn_state_request_id(request: &ParsedRequest) -> Option<String> {
-    request_header_value(request, "x-codex-turn-state")
-        .and_then(|value| hashed_request_correlation_id("x-codex-turn-state", value))
+fn generated_codex_turn_state() -> String {
+    let suffix: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(32)
+        .map(char::from)
+        .collect();
+    format!("{}{}", LOCAL_CODEX_TURN_STATE_PREFIX, suffix)
 }
 
-fn codex_turn_metadata_request_id(request: &ParsedRequest) -> Option<String> {
+fn codex_turn_state_request_id(request: &ParsedRequest) -> Option<String> {
+    request_header_value(request, X_CODEX_TURN_STATE_HEADER)
+        .and_then(|value| hashed_request_correlation_id(X_CODEX_TURN_STATE_HEADER, value))
+}
+
+fn codex_turn_state_request_id_from_value(value: &str) -> Option<String> {
+    hashed_request_correlation_id(X_CODEX_TURN_STATE_HEADER, value)
+}
+
+fn codex_turn_metadata_request_id_with_source(
+    request: &ParsedRequest,
+) -> Option<(String, &'static str)> {
     let value = request_header_value(request, "x-codex-turn-metadata")?;
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -5859,11 +5914,17 @@ fn codex_turn_metadata_request_id(request: &ParsedRequest) -> Option<String> {
             .map(str::trim)
             .filter(|turn_id| !turn_id.is_empty())
         {
-            return hashed_request_correlation_id("x-codex-turn-metadata.turn_id", turn_id);
+            return hashed_request_correlation_id("x-codex-turn-metadata.turn_id", turn_id)
+                .map(|request_id| (request_id, "codex_turn_metadata_turn_id"));
         }
     }
 
     hashed_request_correlation_id("x-codex-turn-metadata", trimmed)
+        .map(|request_id| (request_id, "codex_turn_metadata"))
+}
+
+fn codex_turn_metadata_request_id(request: &ParsedRequest) -> Option<String> {
+    codex_turn_metadata_request_id_with_source(request).map(|(request_id, _)| request_id)
 }
 
 fn health_registry_request_id_from_request(request: &ParsedRequest) -> Option<String> {
@@ -6498,6 +6559,10 @@ async fn bind_request_affinity(request: &ParsedRequest, account_id: &str) {
     let Some(request_id) = request_affinity_key(request) else {
         return;
     };
+    bind_request_affinity_key(request_id, account_id).await;
+}
+
+async fn bind_request_affinity_key(request_id: String, account_id: &str) {
     let account_id = account_id.trim();
     if account_id.is_empty() {
         return;
@@ -6834,6 +6899,10 @@ fn sanitize_collection(
     }
     if collection.updated_at <= 0 {
         collection.updated_at = now_ms();
+        changed = true;
+    }
+    if collection.follow_current_account {
+        collection.follow_current_account = false;
         changed = true;
     }
 
@@ -7321,39 +7390,8 @@ pub async fn save_local_access_accounts(
     snapshot_state().await
 }
 
-pub async fn set_local_access_follow_current_account(
-    enabled: bool,
-) -> Result<CodexLocalAccessState, String> {
-    ensure_runtime_loaded().await?;
-
-    let maybe_collection = {
-        let runtime = gateway_runtime().lock().await;
-        runtime.collection.clone()
-    };
-
-    let Some(mut collection) = maybe_collection else {
-        return Err("本地接入集合尚未创建".to_string());
-    };
-
-    if collection.follow_current_account == enabled {
-        return snapshot_state().await;
-    }
-
-    collection.follow_current_account = enabled;
-    collection.updated_at = now_ms();
-    save_collection_to_disk(&collection)?;
-
-    {
-        let mut runtime = gateway_runtime().lock().await;
-        sync_runtime_collection(&mut runtime, collection);
-    }
-
-    ensure_gateway_matches_runtime().await?;
-    snapshot_state().await
-}
-
 pub async fn sync_local_access_to_current_account_on_switch(
-    account_id: &str,
+    _account_id: &str,
 ) -> Result<(), String> {
     ensure_runtime_loaded_without_start().await?;
 
@@ -7371,21 +7409,6 @@ pub async fn sync_local_access_to_current_account_on_switch(
         .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
     if !should_sync_local_access_collection_on_account_switch(mode, &collection) {
         return Ok(());
-    }
-
-    let restrict_free_accounts = collection.restrict_free_accounts;
-    let state = save_local_access_accounts(
-        build_follow_current_local_access_account_ids(account_id, &collection),
-        restrict_free_accounts,
-    )
-    .await?;
-    let member_count = state
-        .collection
-        .as_ref()
-        .map(|collection| collection.account_ids.len())
-        .unwrap_or(0);
-    if member_count == 0 {
-        return Err("当前 Codex 账号不满足 API 服务集合条件，已按限制保存为空集合".to_string());
     }
 
     Ok(())
@@ -8240,6 +8263,55 @@ fn json_response_with_retry_after(
     )
 }
 
+fn sanitize_response_header_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value
+        .bytes()
+        .any(|byte| matches!(byte, b'\r' | b'\n') || byte.is_ascii_control())
+    {
+        return None;
+    }
+    Some(value.to_string())
+}
+
+fn upstream_response_header_value(
+    headers: &reqwest::header::HeaderMap,
+    header_name: &str,
+) -> Option<String> {
+    headers
+        .get(header_name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(sanitize_response_header_value)
+}
+
+fn should_emit_codex_turn_state_for_response(request: &ParsedRequest, status: StatusCode) -> bool {
+    status.is_success() && is_responses_request(&request.target)
+}
+
+fn codex_turn_state_response_header(
+    request: &ParsedRequest,
+    upstream_headers: &reqwest::header::HeaderMap,
+    status: StatusCode,
+) -> Option<ResponseHeaderValue> {
+    if !should_emit_codex_turn_state_for_response(request, status) {
+        return None;
+    }
+
+    let value = upstream_response_header_value(upstream_headers, X_CODEX_TURN_STATE_HEADER)
+        .or_else(|| {
+            request_header_value(request, X_CODEX_TURN_STATE_HEADER)
+                .and_then(sanitize_response_header_value)
+        })
+        .unwrap_or_else(generated_codex_turn_state);
+    Some(ResponseHeaderValue {
+        name: X_CODEX_TURN_STATE_HEADER,
+        value,
+    })
+}
+
 fn options_response() -> Vec<u8> {
     let headers = format!(
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: 0\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: {}\r\n\r\n",
@@ -8304,16 +8376,16 @@ fn failure_log_route(request: Option<&ParsedRequest>) -> String {
     safe_log_field(route, 128)
 }
 
-fn failure_log_request_id(request: Option<&ParsedRequest>) -> String {
+fn failure_log_request_id_with_source(request: Option<&ParsedRequest>) -> (String, &'static str) {
     let Some(request) = request else {
-        return "-".to_string();
+        return ("-".to_string(), "none");
     };
 
     if let Some(value) = codex_turn_state_request_id(request) {
-        return value;
+        return (value, "codex_turn_state");
     }
-    if let Some(value) = codex_turn_metadata_request_id(request) {
-        return value;
+    if let Some((value, source)) = codex_turn_metadata_request_id_with_source(request) {
+        return (value, source);
     }
 
     for header_name in [
@@ -8323,11 +8395,22 @@ fn failure_log_request_id(request: Option<&ParsedRequest>) -> String {
         "openai-request-id",
     ] {
         if let Some(value) = request_header_value(request, header_name) {
-            return safe_log_field(Some(value), 96);
+            let source = match header_name {
+                "x-client-request-id" => "client_request_id",
+                "x-request-id" => "x_request_id",
+                "request-id" => "request_id_header",
+                "openai-request-id" => "openai_request_id",
+                _ => "header_request_id",
+            };
+            return (safe_log_field(Some(value), 96), source);
         }
     }
 
-    "-".to_string()
+    ("-".to_string(), "none")
+}
+
+fn failure_log_request_id(request: Option<&ParsedRequest>) -> String {
+    failure_log_request_id_with_source(request).0
 }
 
 fn failure_log_model(request: Option<&ParsedRequest>) -> String {
@@ -8350,8 +8433,10 @@ fn failure_log_account_hash(account_id: Option<&str>) -> String {
 }
 
 fn build_audit_context(request: &ParsedRequest, account_id: Option<&str>) -> AuditContext {
+    let (request_id, request_id_source) = failure_log_request_id_with_source(Some(request));
     AuditContext {
-        request_id: failure_log_request_id(Some(request)),
+        request_id,
+        request_id_source: request_id_source.to_string(),
         route: failure_log_route(Some(request)),
         model: failure_log_model(Some(request)),
         account_hash: failure_log_account_hash(account_id),
@@ -8420,7 +8505,7 @@ fn build_audit_event(
     outcome: Option<&str>,
     detail: BTreeMap<String, String>,
 ) -> CodexLocalAccessAuditEvent {
-    let detail = detail
+    let mut detail: BTreeMap<String, String> = detail
         .into_iter()
         .filter_map(|(key, value)| {
             let key = safe_log_field(Some(&key), 64);
@@ -8430,6 +8515,12 @@ fn build_audit_event(
             safe_audit_detail_value(&key, &value).map(|value| (key, value))
         })
         .collect();
+    let request_id_source = safe_log_field(Some(&context.request_id_source), 64);
+    if request_id_source != "-" {
+        detail
+            .entry("request_id_source".to_string())
+            .or_insert(request_id_source);
+    }
 
     CodexLocalAccessAuditEvent {
         schema_version: CODEX_LOCAL_ACCESS_AUDIT_SCHEMA_VERSION,
@@ -8565,6 +8656,7 @@ fn record_manual_recovery_audit_event(account_id: &str, model: Option<&str>, cha
     let model = model.map(str::trim).filter(|value| !value.is_empty());
     let context = AuditContext {
         request_id: "manual_recovery".to_string(),
+        request_id_source: "manual".to_string(),
         route: "manual_recovery".to_string(),
         model: safe_log_field(model, 96),
         account_hash: failure_log_account_hash(Some(account_id)),
@@ -8589,6 +8681,7 @@ fn record_manual_recovery_audit_event(account_id: &str, model: Option<&str>, cha
 fn record_manual_pause_audit_event(account_id: &str, changed: bool) {
     let context = AuditContext {
         request_id: "manual_pause".to_string(),
+        request_id_source: "manual".to_string(),
         route: "manual_pause".to_string(),
         model: "-".to_string(),
         account_hash: failure_log_account_hash(Some(account_id)),
@@ -8875,14 +8968,35 @@ async fn write_http_response(
     content_type: &str,
     body: &[u8],
 ) -> Result<(), String> {
-    let headers = format!(
-        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: {}\r\n\r\n",
+    write_http_response_with_extra_headers(stream, status, status_text, content_type, body, &[])
+        .await
+}
+
+async fn write_http_response_with_extra_headers(
+    stream: &mut TcpStream,
+    status: u16,
+    status_text: &str,
+    content_type: &str,
+    body: &[u8],
+    extra_headers: &[ResponseHeaderValue],
+) -> Result<(), String> {
+    let mut headers = format!(
+        "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: {}\r\n",
         status,
         status_text,
         content_type,
         body.len(),
         CORS_ALLOW_HEADERS
     );
+    for header in extra_headers {
+        if let Some(value) = sanitize_response_header_value(&header.value) {
+            headers.push_str(header.name);
+            headers.push_str(": ");
+            headers.push_str(&value);
+            headers.push_str("\r\n");
+        }
+    }
+    headers.push_str("\r\n");
     stream
         .write_all(headers.as_bytes())
         .await
@@ -8900,6 +9014,7 @@ async fn write_chunked_response_headers(
     status_text: &str,
     content_type: &str,
     upstream_headers: &reqwest::header::HeaderMap,
+    extra_headers: &[ResponseHeaderValue],
 ) -> Result<(), String> {
     let mut response_headers = format!(
         "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nTransfer-Encoding: chunked\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: {}\r\n",
@@ -8915,6 +9030,14 @@ async fn write_chunked_response_headers(
             .and_then(|item| item.to_str().ok())
         {
             response_headers.push_str(&format!("{}: {}\r\n", header_name, value));
+        }
+    }
+    for header in extra_headers {
+        if let Some(value) = sanitize_response_header_value(&header.value) {
+            response_headers.push_str(header.name);
+            response_headers.push_str(": ");
+            response_headers.push_str(&value);
+            response_headers.push_str("\r\n");
         }
     }
 
@@ -9434,6 +9557,7 @@ async fn write_chat_completions_compatible_response(
     stream_mode: bool,
     requested_model: &str,
     original_request_body: &[u8],
+    response_headers: &[ResponseHeaderValue],
     audit_context: Option<&AuditContext>,
 ) -> Result<ResponseCapture, String> {
     let status = upstream.status();
@@ -9448,6 +9572,7 @@ async fn write_chat_completions_compatible_response(
             status_text,
             "text/event-stream; charset=utf-8",
             &upstream_headers,
+            response_headers,
         )
         .await?;
         write_state.mark_headers_written();
@@ -9530,12 +9655,13 @@ async fn write_chat_completions_compatible_response(
 
     let payload_bytes = serde_json::to_vec(&chat_payload)
         .map_err(|e| format!("序列化 chat/completions 响应失败: {}", e))?;
-    write_http_response(
+    write_http_response_with_extra_headers(
         stream,
         status.as_u16(),
         status_text,
         "application/json; charset=utf-8",
         &payload_bytes,
+        response_headers,
     )
     .await?;
     if let Some(context) = audit_context {
@@ -9562,6 +9688,7 @@ async fn write_images_compatible_response(
     stream_mode: bool,
     response_format: &str,
     stream_prefix: &str,
+    response_headers: &[ResponseHeaderValue],
     audit_context: Option<&AuditContext>,
 ) -> Result<ResponseCapture, String> {
     let status = upstream.status();
@@ -9576,6 +9703,7 @@ async fn write_images_compatible_response(
             status_text,
             "text/event-stream; charset=utf-8",
             &upstream_headers,
+            response_headers,
         )
         .await?;
         write_state.mark_headers_written();
@@ -9656,12 +9784,13 @@ async fn write_images_compatible_response(
     let payload_bytes = serde_json::to_vec(&images_payload)
         .map_err(|e| format!("序列化 images 响应失败: {}", e))?;
 
-    write_http_response(
+    write_http_response_with_extra_headers(
         stream,
         status.as_u16(),
         status_text,
         "application/json; charset=utf-8",
         &payload_bytes,
+        response_headers,
     )
     .await?;
     if let Some(context) = audit_context {
@@ -9686,11 +9815,19 @@ async fn write_gateway_response(
     stream: &mut TcpStream,
     upstream: reqwest::Response,
     response_adapter: GatewayResponseAdapter,
+    response_headers: &[ResponseHeaderValue],
     audit_context: Option<&AuditContext>,
 ) -> Result<ResponseCapture, String> {
     match response_adapter {
         GatewayResponseAdapter::Passthrough { request_is_stream } => {
-            write_upstream_response(stream, upstream, request_is_stream, audit_context).await
+            write_upstream_response(
+                stream,
+                upstream,
+                request_is_stream,
+                response_headers,
+                audit_context,
+            )
+            .await
         }
         GatewayResponseAdapter::ChatCompletions {
             stream: stream_mode,
@@ -9703,6 +9840,7 @@ async fn write_gateway_response(
                 stream_mode,
                 requested_model.as_str(),
                 original_request_body.as_slice(),
+                response_headers,
                 audit_context,
             )
             .await
@@ -9718,6 +9856,7 @@ async fn write_gateway_response(
                 stream_mode,
                 response_format.as_str(),
                 stream_prefix.as_str(),
+                response_headers,
                 audit_context,
             )
             .await
@@ -9729,6 +9868,7 @@ async fn write_upstream_response(
     stream: &mut TcpStream,
     upstream: reqwest::Response,
     request_is_stream: bool,
+    response_headers: &[ResponseHeaderValue],
     audit_context: Option<&AuditContext>,
 ) -> Result<ResponseCapture, String> {
     let status = upstream.status();
@@ -9738,7 +9878,15 @@ async fn write_upstream_response(
         .get(CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("application/json; charset=utf-8");
-    write_chunked_response_headers(stream, status, status_text, content_type, &headers).await?;
+    write_chunked_response_headers(
+        stream,
+        status,
+        status_text,
+        content_type,
+        &headers,
+        response_headers,
+    )
+    .await?;
     write_upstream_response_body_chunks(stream, upstream, request_is_stream, audit_context).await
 }
 
@@ -11059,6 +11207,7 @@ async fn write_in_band_pool_unavailable_response(
                 "OK",
                 "text/event-stream; charset=utf-8",
                 &HeaderMap::new(),
+                &[],
             )
             .await?;
             write_chunked_response_chunk(stream, &build_completed_pool_unavailable_sse(&payload))
@@ -11493,6 +11642,25 @@ async fn handle_connection(
         Ok(success) => {
             let response_audit_context =
                 build_audit_context(&prepared_request, Some(success.account_id.as_str()));
+            let response_turn_state = codex_turn_state_response_header(
+                &prepared_request,
+                success.upstream.headers(),
+                success.upstream.status(),
+            );
+            if let Some(header) = response_turn_state.as_ref() {
+                if let Some(request_id) = codex_turn_state_request_id_from_value(&header.value) {
+                    bind_request_affinity_key(request_id.clone(), &success.account_id).await;
+                    persist_request_affinity_key(
+                        &success.account_id,
+                        &prepared_request,
+                        &request_id,
+                    );
+                }
+            }
+            let mut response_headers = Vec::new();
+            if let Some(header) = response_turn_state {
+                response_headers.push(header);
+            }
             let mut active_lease = grant_active_stream_lease_for_request(
                 &response_audit_context,
                 &success.account_id,
@@ -11502,6 +11670,7 @@ async fn handle_connection(
                 &mut stream,
                 success.upstream,
                 response_adapter,
+                &response_headers,
                 Some(&response_audit_context),
             )
             .await
@@ -11566,8 +11735,7 @@ mod tests {
         backpressure_wait_budget, build_audit_context, build_audit_event,
         build_chat_completion_payload, build_chat_completion_stream_body,
         build_codex_api_failure_log, build_effective_local_access_account_ids,
-        build_effective_local_access_account_ids_from_registry,
-        build_follow_current_local_access_account_ids, build_health_summary_from_registry,
+        build_effective_local_access_account_ids_from_registry, build_health_summary_from_registry,
         build_health_summary_from_registry_for_accounts, build_images_api_payload,
         build_local_models_response, build_ordered_account_ids, build_pool_unavailable_message,
         build_projection_seed_local_access_account_ids, build_request_routing_hint,
@@ -11584,7 +11752,7 @@ mod tests {
         json_response_with_retry_after, load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
-        now_ms, parse_codex_retry_after, parse_responses_payload_from_upstream,
+        now_ms, parse_codex_retry_after, parse_http_request, parse_responses_payload_from_upstream,
         parse_retry_after_header_value, pause_health_registry_account, pin_process_sticky_account,
         pool_wait_fits_request_budget, prepare_gateway_request, proxy_request_with_account_pool,
         prune_process_sticky_binding, record_manual_pause_audit_event,
@@ -13992,6 +14160,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
 
         let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
             .expect("audit should be written to isolated root");
+        assert!(audit.contains("\"request_id_source\":\"client_request_id\""));
         assert!(!audit.contains("\"phase\":\"fallback_blocked\""));
         assert!(!audit.contains("\"outcome\":\"hard_affinity\""));
         assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
@@ -14018,6 +14187,355 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
         }
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn gateway_generates_turn_state_for_responses_and_binds_followup_to_original_account() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-generated-turn-state-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let upstream_seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_seen_task = std::sync::Arc::clone(&upstream_seen);
+        let upstream_server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let (mut socket, _) = upstream_listener
+                    .accept()
+                    .await
+                    .expect("fake upstream should accept");
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let read = socket
+                        .read(&mut chunk)
+                        .await
+                        .expect("fake upstream should read request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request_text = String::from_utf8_lossy(&request).to_string();
+                upstream_seen_task.lock().await.push(request_text.clone());
+
+                if request_text.contains("Bearer sk-local-old") {
+                    if request_text
+                        .to_ascii_lowercase()
+                        .contains("x-codex-turn-state:")
+                    {
+                        let body = r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+                        let response = format!(
+                            "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nRetry-After: 600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            body.as_bytes().len(),
+                            body
+                        );
+                        socket
+                            .write_all(response.as_bytes())
+                            .await
+                            .expect("fake upstream should write old-account followup 429");
+                        continue;
+                    }
+
+                    let body = concat!(
+                        "event: response.created\n",
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_initial_generated_state\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                        "event: response.output_text.delta\n",
+                        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"OLD-INITIAL\"}\n\n",
+                        "event: response.completed\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_initial_generated_state\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.as_bytes().len(),
+                        body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("fake upstream should write initial response without turn-state");
+                    continue;
+                }
+
+                let body = concat!(
+                    "event: response.created\n",
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_current_unexpected\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                    "event: response.output_text.delta\n",
+                    "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"CURRENT\"}\n\n",
+                    "event: response.completed\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_current_unexpected\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                    "data: [DONE]\n\n"
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("fake upstream should write current-account response");
+            }
+        });
+
+        let now = now_ms();
+        let registry = empty_health_registry(now);
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": addr.port(),
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 2,
+                "minRequestIntervalSeconds": 0,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 5,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "next_request_only",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-old"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection);
+            runtime.running = true;
+            runtime.actual_port = Some(addr.port());
+        }
+
+        let old_account = CodexAccount::new_api_key(
+            "api-old".to_string(),
+            "api-old@example.com".to_string(),
+            "sk-local-old".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        let current_account = CodexAccount::new_api_key(
+            "api-current".to_string(),
+            "api-current@example.com".to_string(),
+            "sk-local-current".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        crate::modules::codex_account::save_account(&old_account)
+            .expect("old account should be persisted");
+        crate::modules::codex_account::save_account(&current_account)
+            .expect("current account should be persisted");
+
+        let server = tokio::spawn(async move {
+            let mut handlers = Vec::new();
+            for _ in 0..2 {
+                let (stream, peer) = listener.accept().await.expect("server should accept");
+                handlers.push(tokio::spawn(async move {
+                    handle_connection(stream, peer).await
+                }));
+            }
+            for handler in handlers {
+                handler.await.expect("server connection task should join")?;
+            }
+            Ok::<(), String>(())
+        });
+
+        let mut first_client = TcpStream::connect(addr)
+            .await
+            .expect("first client should connect");
+        let first_body = br#"{"model":"gpt-5.5","input":"start turn"}"#;
+        let first_request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-generated-state\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            first_body.len(),
+            String::from_utf8_lossy(first_body)
+        );
+        first_client
+            .write_all(first_request.as_bytes())
+            .await
+            .expect("first request should be written");
+        let mut first_response = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            first_client.read_to_end(&mut first_response),
+        )
+        .await
+        .expect("first response should finish")
+        .expect("first response read should succeed");
+        let first_response_text = String::from_utf8_lossy(&first_response);
+        assert!(
+            first_response_text.contains("resp_initial_generated_state"),
+            "initial response should be forwarded: {}",
+            first_response_text
+        );
+        let parsed_first = parse_http_request(&first_response)
+            .expect("gateway response headers should parse like an HTTP message");
+        let turn_state = parsed_first
+            .headers
+            .get("x-codex-turn-state")
+            .cloned()
+            .expect("gateway must synthesize x-codex-turn-state for Codex clients");
+        assert!(
+            !turn_state.trim().is_empty(),
+            "generated turn-state must be non-empty"
+        );
+
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            let collection = runtime
+                .collection
+                .as_mut()
+                .expect("runtime collection should still be available");
+            if !collection
+                .account_ids
+                .iter()
+                .any(|account_id| account_id == "api-current")
+            {
+                collection.account_ids.push("api-current".to_string());
+            }
+        }
+
+        let mut second_client = TcpStream::connect(addr)
+            .await
+            .expect("second client should connect");
+        let second_body = br#"{"model":"gpt-5.5","input":"continue same turn"}"#;
+        let second_request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-generated-state\r\nX-Codex-Turn-State: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            turn_state,
+            second_body.len(),
+            String::from_utf8_lossy(second_body)
+        );
+        second_client
+            .write_all(second_request.as_bytes())
+            .await
+            .expect("second request should be written");
+        let mut second_response = Vec::new();
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            second_client.read_to_end(&mut second_response),
+        )
+        .await
+        .expect("second response should finish")
+        .expect("second response read should succeed");
+        let second_response_text = String::from_utf8_lossy(&second_response);
+
+        let server_result = server.await.expect("server task should join");
+        assert!(server_result.is_ok(), "server failed: {:?}", server_result);
+        upstream_server
+            .await
+            .expect("fake upstream task should join");
+
+        let seen = upstream_seen.lock().await.clone();
+        let seen_text = seen.join("\n--- request ---\n");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        match previous_accounts_root {
+            Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
+            None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
+        }
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(
+            second_response_text.contains("resp_cockpit_pool_unavailable_")
+                || second_response_text.contains("usage_limit_reached"),
+            "same-turn followup should stay on original exhausted account instead of succeeding on current account: {}",
+            second_response_text
+        );
+        assert!(
+            !second_response_text.contains("resp_current_unexpected")
+                && !second_response_text.contains("CURRENT"),
+            "same-turn followup must not switch to the replacement account: {}",
+            second_response_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("Bearer sk-local-old")
+                    && !request.to_ascii_lowercase().contains("x-codex-turn-state:")),
+            "initial request should use old account without incoming turn-state: {}",
+            seen_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("Bearer sk-local-old")
+                    && request.to_ascii_lowercase().contains("x-codex-turn-state:")),
+            "followup should use old account with generated turn-state: {}",
+            seen_text
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|request| request.contains("Bearer sk-local-current")),
+            "same-turn followup must not be replayed on current account: {}",
+            seen_text
+        );
+
+        let audit =
+            fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE)).unwrap_or_default();
+        assert!(
+            !audit.contains(turn_state.as_str()),
+            "raw generated turn-state must not be written to audit"
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -14223,6 +14741,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("audit should be written to isolated root");
         assert!(audit.contains("\"phase\":\"fallback_blocked\""));
         assert!(audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(audit.contains("\"request_id_source\":\"codex_turn_state\""));
         assert!(audit.contains("x-codex-turn-state:sha256:"));
         assert!(
             !audit.contains(turn_state),
@@ -16165,6 +16684,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(event.model, "gpt-5.5");
         assert!(event.account_hash.starts_with("sha256:"));
         assert_eq!(
+            event.detail.get("request_id_source").map(String::as_str),
+            Some("client_request_id")
+        );
+        assert_eq!(
             event.detail.get("retry_after_ms").map(String::as_str),
             Some("60000")
         );
@@ -16186,6 +16709,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let path = temp_audit_path("rotate");
         let context = AuditContext {
             request_id: "req-rotate".to_string(),
+            request_id_source: "test".to_string(),
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "sha256:abc123abc123".to_string(),
@@ -16228,6 +16752,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let path = temp_audit_path("rotate-day");
         let context = AuditContext {
             request_id: "req-rotate-day".to_string(),
+            request_id_source: "test".to_string(),
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "sha256:day123day123".to_string(),
@@ -16271,6 +16796,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let path = temp_audit_path("concatenated");
         let context = AuditContext {
             request_id: "req-concat".to_string(),
+            request_id_source: "test".to_string(),
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "sha256:concat123".to_string(),
@@ -16333,6 +16859,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     fn audit_stream_write_events_have_boundary_states() {
         let context = AuditContext {
             request_id: "req-stream".to_string(),
+            request_id_source: "test".to_string(),
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "sha256:stream123456".to_string(),
@@ -16837,6 +17364,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let now = 1_700_000_000_000;
         let context = AuditContext {
             request_id: "req-active".to_string(),
+            request_id_source: "test".to_string(),
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "hash-active".to_string(),
@@ -17560,7 +18088,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn follow_current_account_switch_keeps_existing_pool_members() {
+    fn legacy_follow_current_account_switch_is_ignored() {
         let collection = CodexLocalAccessCollection {
             enabled: true,
             port: 45335,
@@ -17578,13 +18106,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             updated_at: 2,
         };
 
-        assert_eq!(
-            build_follow_current_local_access_account_ids("acc-new", &collection),
-            vec![
-                "acc-new".to_string(),
-                "acc-old".to_string(),
-                "acc-third".to_string()
-            ]
+        assert!(
+            !should_sync_local_access_collection_on_account_switch(
+                CodexRuntimeIntegrationMode::DirectProjection,
+                &collection
+            ),
+            "legacy follow-current flag must not mutate the API service account pool"
         );
     }
 

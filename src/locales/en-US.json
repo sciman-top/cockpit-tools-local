@@ -2211,6 +2211,8 @@
     },
     "quotaError": {
       "badge": "Quota error",
+      "limitBadge": "Quota limited",
+      "limitDetail": "Quota is exhausted or cooling down: {{code}}",
       "refreshFailedBadge": "Refresh failed",
       "generic": "Quota refresh failed, please try again later",
       "deactivatedWorkspace": "Workspace is deactivated, switch account or re-authorize",

@@ -93,12 +93,12 @@ import {
   getCodexAuthMetadata,
   getCodexPlanFilterKey,
   getCodexSubscriptionPresentation,
+  getCodexQuotaIssueInfo,
   hasCodexAccountName,
   isCodexApiKeyAccount,
   isCodexAccountErrorState,
   isCodexExplicitFreePlanType,
   isCodexNewApiAccount,
-  isCodexQuotaLimitError,
   isCodexTeamLikePlan,
   type CodexApiProviderMode,
   type CodexQuotaErrorInfo,
@@ -116,8 +116,8 @@ import {
   compareCodexAccountTieBreak,
   compareCodexAccountsBySort,
   getCodexLocalAccessPrimaryRefreshAccountId,
-  sortCodexLocalAccessAccountIdsForScheduling,
   sortCodexLocalAccessAccountIdsForRefresh,
+  sortCodexLocalAccessAccountIdsForStableDisplay,
   type CodexGroupSortMeta,
 } from "../utils/codexAccountSort";
 import { getCodexLocalAccessQuotaAccountRefreshKey } from "../utils/codexLocalAccessHealth";
@@ -3714,7 +3714,8 @@ export function CodexAccountsPage() {
 
   const resolveQuotaErrorMeta = useCallback(
     (quotaError?: CodexQuotaErrorInfo) => {
-      if (!quotaError?.message) {
+      const issueInfo = getCodexQuotaIssueInfo(quotaError);
+      if (issueInfo.kind === "none") {
         return {
           statusCode: "",
           errorCode: "",
@@ -3724,31 +3725,29 @@ export function CodexAccountsPage() {
           isQuotaLimitError: false,
         };
       }
-      const rawMessage = quotaError.message;
-      const normalizedRawMessage = rawMessage.trim();
+      const rawMessage = issueInfo.rawMessage || issueInfo.displayCode;
+      const normalizedRawMessage = rawMessage;
       const lowerRawMessage = normalizedRawMessage.toLowerCase();
       const requestErrorIndex = lowerRawMessage.indexOf(
         "error sending request",
       );
-      const isRefreshRequestFailure = requestErrorIndex >= 0;
+      const isRefreshRequestFailure = issueInfo.isRefreshRequestFailure;
       const requestErrorMessage = isRefreshRequestFailure
         ? normalizedRawMessage.slice(requestErrorIndex).trim()
         : normalizedRawMessage;
-      const statusCode =
-        rawMessage.match(/API 返回错误\s+(\d{3})/i)?.[1] ||
-        rawMessage.match(/status[=: ]+(\d{3})/i)?.[1] ||
-        "";
-      const errorCode =
-        quotaError.code ||
-        rawMessage.match(/\[error_code:([^\]]+)\]/)?.[1] ||
-        rawMessage.match(/error_code[=:]\s*([^,\]\s]+)/i)?.[1] ||
-        "";
-      const isQuotaLimitError = isCodexQuotaLimitError(quotaError);
+      const statusCode = issueInfo.statusCode;
+      const errorCode = issueInfo.errorCode;
+      const isQuotaLimitError = issueInfo.isQuotaLimitError;
       const authFailureText =
         formatCodexAuthFailureMessage(normalizedRawMessage);
       const displayText =
         authFailureText !== normalizedRawMessage
           ? authFailureText
+          : isQuotaLimitError
+            ? t("codex.quotaError.limitDetail", {
+                code: issueInfo.displayCode || "usage_limit_reached",
+                defaultValue: "额度已用尽或正在冷却：{{code}}",
+              })
           : errorCode ||
             (isRefreshRequestFailure
               ? t("codex.quotaError.requestFailedManualRetry", {
@@ -3965,7 +3964,7 @@ export function CodexAccountsPage() {
   );
   const localAccessDisplayAccountIds = useMemo(
     () =>
-      sortCodexLocalAccessAccountIdsForScheduling(
+      sortCodexLocalAccessAccountIdsForStableDisplay(
         localAccessConfiguredAccountIds,
         accounts,
         overviewCurrentAccountId,
@@ -4883,31 +4882,6 @@ export function CodexAccountsPage() {
                 ),
         });
         console.error("Failed to apply local access safety preset:", error);
-      } finally {
-        setLocalAccessSaving(false);
-      }
-    },
-    [setMessage, t],
-  );
-
-  const handleSetLocalAccessFollowCurrentAccount = useCallback(
-    async (enabled: boolean) => {
-      setLocalAccessSaving(true);
-      try {
-        const nextState =
-          await codexLocalAccessService.setCodexLocalAccessFollowCurrentAccount(
-            enabled,
-          );
-        setLocalAccessState(nextState);
-        setMessage({
-          text: nextState.collection?.followCurrentAccount
-            ? t("codex.localAccess.followCurrentEnabled", "已启用跟随当前账号")
-            : t("codex.localAccess.followCurrentDisabled", "已关闭跟随当前账号"),
-        });
-        return nextState;
-      } catch (error) {
-        console.error("Failed to update local access follow-current mode:", error);
-        throw new Error(String(error).replace(/^Error:\s*/, ""));
       } finally {
         setLocalAccessSaving(false);
       }
@@ -11098,7 +11072,6 @@ export function CodexAccountsPage() {
             onUpdatePort={handleUpdateLocalAccessPort}
             onUpdateRoutingStrategy={handleUpdateLocalAccessRoutingStrategy}
             onApplySafetyPreset={handleApplyLocalAccessSafetyPreset}
-            onSetFollowCurrentAccount={handleSetLocalAccessFollowCurrentAccount}
             onSetRuntimeMode={handleSetCodexRuntimeMode}
             onRotateApiKey={handleRotateLocalAccessApiKey}
             onKillPort={handleKillLocalAccessPort}

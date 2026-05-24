@@ -97,6 +97,9 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $agentsPath = Join-Path $repoRoot "AGENTS.md"
 $agents = if (Test-Path -LiteralPath $agentsPath) { Get-Content -LiteralPath $agentsPath -Raw } else { $null }
 $doc = Get-Content -LiteralPath (Join-Path $repoRoot "docs\LOCAL_HARDENED_API.md") -Raw
+$roadmap = Get-Content -LiteralPath (Join-Path $repoRoot "docs\LOCAL_HARDENED_API_ROADMAP.md") -Raw
+$accountPoolPlan = Get-Content -LiteralPath (Join-Path $repoRoot "docs\LOCAL_HARDENED_API_ACCOUNT_POOL_SCHEDULING_PLAN.md") -Raw
+$referenceReview = Get-Content -LiteralPath (Join-Path $repoRoot "docs\reference-gateway-best-practices.md") -Raw
 $smoke = Get-Content -LiteralPath (Join-Path $PSScriptRoot "smoke-local-hardened-api.ps1") -Raw
 $accept = Get-Content -LiteralPath (Join-Path $PSScriptRoot "accept-local-hardened-api-continuity.ps1") -Raw
 $preflight = Get-Content -LiteralPath (Join-Path $repoRoot "scripts\release\preflight.cjs") -Raw
@@ -110,13 +113,33 @@ if ($agents) {
   Assert-Contains $agents "AcknowledgeLiveUpstreamRisk" "AGENTS.md must require live upstream acknowledgement"
   Assert-Contains $agents "AcknowledgeExpandedLiveUpstreamRisk" "AGENTS.md must require expanded live upstream acknowledgement"
   Assert-Contains $agents "Cooldown recovery must be inferred from stored reset times/health registry" "AGENTS.md must forbid cooldown polling by default"
+  Assert-Contains $agents 'Official `openai-codex` source is the highest reference' "AGENTS.md must preserve official Codex source priority when present"
+  Assert-Contains $agents "pool scheduling, sorting, or risk-reduction changes" "AGENTS.md must cover pool scheduling/sorting/risk-reduction when present"
+  Assert-Contains $agents "git fetch --prune" "AGENTS.md must require refreshing stale local reference sources when present"
   Assert-True ($agents -notmatch "AutoPopulateProbeAccountPool") "AGENTS.md must not document removed auto-populate pool mode"
 }
 
 Assert-Contains $doc "AcknowledgeLiveUpstreamRisk" "LOCAL_HARDENED_API.md must show live upstream acknowledgement"
 Assert-Contains $doc "AcknowledgeExpandedLiveUpstreamRisk" "LOCAL_HARDENED_API.md must show expanded live upstream acknowledgement"
+Assert-Contains $doc '官方 `openai-codex` 源码' "LOCAL_HARDENED_API.md must preserve official Codex source priority"
+Assert-Contains $doc "号池调度、排序和风控降噪" "LOCAL_HARDENED_API.md must cover pool scheduling, sorting, and risk reduction"
 Assert-True ($doc -notmatch "AutoPopulateProbeAccountPool") "LOCAL_HARDENED_API.md must not document removed auto-populate pool mode"
 Assert-True ($doc -notmatch "自动号池") "LOCAL_HARDENED_API.md must not document automatic probe pool population"
+Assert-Contains $roadmap '官方 `openai-codex`' "roadmap must list official Codex source as a local reference"
+Assert-Contains $roadmap "号池调度、排序和抗风控风险" "roadmap must preserve pool scheduling/sorting/risk evidence chain"
+Assert-Contains $accountPoolPlan '官方 `openai-codex` 源码' "account pool plan must prioritize official Codex source"
+Assert-Contains $accountPoolPlan "调度、排序、风控降噪" "account pool plan must explicitly cover scheduling, sorting, and risk reduction"
+Assert-Contains $accountPoolPlan "Sub2API/CLIProxyAPI/LiteLLM/New API" "account pool plan must keep local reference projects in scope"
+Assert-Contains $accountPoolPlan "变更准入要求" "account pool plan must require reference review before changes"
+Assert-Contains $referenceReview "OpenAI Codex" "reference review must include official openai-codex snapshot"
+Assert-Contains $referenceReview "Evidence Precedence" "reference review must define evidence precedence"
+Assert-Contains $referenceReview "如果官方 Codex 源码与社区网关实践冲突" "reference review must resolve official-vs-community conflicts"
+Assert-Contains $referenceReview "Official Codex Anchors" "reference review must pin official Codex source anchors"
+Assert-Contains $referenceReview "codex-rs/codex-api/src/sse/responses.rs" "reference review must pin official Responses SSE terminal handling"
+Assert-Contains $referenceReview "ResponseStreamDisconnected" "reference review must pin official mid-turn stream disconnect semantics"
+Assert-Contains $referenceReview "previous_response_id" "reference review must pin official continuation semantics"
+Assert-Contains $referenceReview "TurnContext.turn_id" "reference review must pin official turn identity semantics"
+Assert-Contains $referenceReview "previous_response_not_found" "reference review must pin official full-context retry guidance"
 Assert-LiveUpstreamDocExamplesRequireAcknowledgement $repoRoot
 
 Assert-Contains $smoke "live_upstream_risk_ack_required" "smoke script must fail closed without live acknowledgement"

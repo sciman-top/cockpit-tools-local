@@ -1,6 +1,6 @@
 # Cockpit-Tools-Local 自用 Hardened API Mode 路线图
 
-更新时间：2026-05-18
+更新时间：2026-05-24
 
 ## 目标归宿
 
@@ -8,7 +8,7 @@
 
 本路线不以公网网关、多用户服务、商业中转或请求级账号扫射为目标。`new-api`、`sub2api`、`CLIProxyAPI`、`LiteLLM` 只作为结构参考，不作为默认架构替代。
 
-本地参考源码优先使用 `D:\CODE\external\_reference_gateway_sources`，其中包含 `CLIProxyAPI`、`litellm`、`new-api`、`sub2api` 快照；参考结论汇总在 `docs/reference-gateway-best-practices.md`。
+本地参考源码优先使用 `D:\CODE\external\_reference_gateway_sources`，其中包含官方 `openai-codex`、`CLIProxyAPI`、`litellm`、`new-api`、`sub2api` 快照；参考结论汇总在 `docs/reference-gateway-best-practices.md`。Codex-facing 行为以官方 `openai-codex` 源码和本仓实测为最高语义锚点，社区项目只作为调度、cooldown、限流和可观测性结构参考。
 
 账号池调度的下一阶段专项计划见 `docs/LOCAL_HARDENED_API_ACCOUNT_POOL_SCHEDULING_PLAN.md`。该文档只负责多账号 API 服务号池调度、风控降噪、可观测性和验收任务清单，不替代本路线图的总体阶段划分。
 
@@ -36,6 +36,7 @@
 - 把当前硬编码常量纳入 P0 设计面：请求体上限、读取超时、上游发送重试、请求级重试等待和 fallback account 上限都要有 hardened 默认、测试和回滚口径。
 - 流式响应必须按“下游已写出 headers 或 payload 后禁止重试/切号”建模；不能只在拿到 upstream response 前做 retry 判断。
 - 额度耗尽后的 Direct OAuth 近似体验不应表述为“绕过 quota”。本地 API service 能做的是：已被上游接纳的 active stream 不被本地 cooldown/health 状态误杀；新的 independent admission 立即避开 cooldown/exhausted 账号；`previous_response_id` continuation 不跨账号伪造。
+- 号池调度、排序和抗风控风险都必须保留证据链：官方 `openai-codex` 源码决定 Codex turn/stream/Responses terminal 语义；OpenAI 官方文档决定 429/503/backoff 公共语义；Sub2API/CLIProxyAPI/LiteLLM/New API 只提供 `IsSchedulable()`、persistent cooldown、fill-first、pre-call limiter、首字节后不重试等可本地化模式。
 - 实施级任务清单已下沉到 `docs/LOCAL_HARDENED_API_IMPLEMENTATION_PLAN.md`，本路线图保持方向、阶段和验收口径。
 
 ## 已知代码事实
@@ -52,7 +53,7 @@
 - 当前 429 cooldown 只解析 body 中的 `usage_limit_reached` reset 字段，未覆盖 `Retry-After` / `Retry-After-Ms` header。
 - 当前 cooldown 保存在运行时内存，重启后会丢失。
 - 当前没有 API service 全局 semaphore 和请求启动 rate limiter。
-- 当前没有 hardened local API 配置结构；Rust model 和 TS type 只有端口、API key、路由策略、free 限制、follow current 和账号列表。
+- 当前没有 hardened local API 配置结构；Rust model 和 TS type 只有端口、API key、路由策略、free 限制、账号列表，以及仅用于兼容旧配置的 legacy `followCurrentAccount` 字段。
 - 当前 401 会尝试刷新并重试，但没有持久化的 `auth_suspect` / `manual_required` 账号状态。
 - 当前成功 upstream response 会交给写出函数流式转发；一旦下游响应头或首个 chunk 已写出，本请求就不再具备安全切号空间。
 - 当前已有 `previous_response_id` affinity，但还需要补 active stream lease，让 health registry/cooldown 变化只影响新 admission，不影响已接纳 stream。
