@@ -29,7 +29,7 @@ use std::io::Write;
 use std::net::{Ipv4Addr, TcpListener as StdTcpListener};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
@@ -108,6 +108,7 @@ const X_CODEX_TURN_STATE_HEADER: &str = "x-codex-turn-state";
 const LOCAL_CODEX_TURN_STATE_PREFIX: &str = "cockpit-turn-";
 static GATEWAY_RUNTIME: OnceLock<TokioMutex<GatewayRuntime>> = OnceLock::new();
 static GATEWAY_ROUND_ROBIN_CURSOR: AtomicUsize = AtomicUsize::new(0);
+static GATEWAY_REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 static UPSTREAM_HTTP_CLIENT: OnceLock<Mutex<Option<CachedUpstreamHttpClient>>> = OnceLock::new();
 static LOCAL_API_BACKPRESSURE_STATE: OnceLock<Mutex<LocalApiBackpressureState>> = OnceLock::new();
 static LOCAL_API_BACKPRESSURE_ADMISSION_QUEUE: OnceLock<TokioMutex<()>> = OnceLock::new();
@@ -302,6 +303,7 @@ struct ParsedRequest {
     target: String,
     headers: HashMap<String, String>,
     body: Vec<u8>,
+    gateway_request_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -311,6 +313,12 @@ struct AuditContext {
     route: String,
     model: String,
     account_hash: String,
+    gateway_request_id: String,
+    turn_lineage_id: Option<String>,
+    turn_lineage_source: Option<String>,
+    previous_response_id_hash: Option<String>,
+    is_continuation: bool,
+    is_auto_compact_candidate: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -878,6 +886,13 @@ fn runtime_mode_file_path() -> Result<PathBuf, String> {
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+fn next_gateway_request_id() -> String {
+    let sequence = GATEWAY_REQUEST_ID_COUNTER
+        .fetch_add(1, Ordering::Relaxed)
+        .saturating_add(1);
+    format!("gw-{}-{}", now_ms(), sequence)
 }
 
 fn runtime_account_identity(account: &CodexAccount) -> (CodexRuntimeAccountKind, Option<String>) {
@@ -5927,6 +5942,58 @@ fn codex_turn_metadata_request_id(request: &ParsedRequest) -> Option<String> {
     codex_turn_metadata_request_id_with_source(request).map(|(request_id, _)| request_id)
 }
 
+fn request_lineage_id_with_source(
+    request: &ParsedRequest,
+) -> (Option<String>, Option<&'static str>) {
+    if let Some(value) = codex_turn_state_request_id(request) {
+        return (Some(value), Some("codex_turn_state"));
+    }
+    if let Some((value, source)) = codex_turn_metadata_request_id_with_source(request) {
+        return (Some(value), Some(source));
+    }
+    if let Some(previous_response_id) = build_request_routing_hint(request).previous_response_id {
+        return (
+            hashed_request_correlation_id("response", &previous_response_id),
+            Some("previous_response_id"),
+        );
+    }
+
+    (None, None)
+}
+
+fn previous_response_id_hash(request: &ParsedRequest) -> Option<String> {
+    build_request_routing_hint(request)
+        .previous_response_id
+        .and_then(|value| hashed_request_correlation_id("response", &value))
+}
+
+fn request_body_value_contains_compaction_trigger(value: &Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            if map
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.eq_ignore_ascii_case("compaction_trigger"))
+            {
+                return true;
+            }
+            map.values()
+                .any(request_body_value_contains_compaction_trigger)
+        }
+        Value::Array(items) => items
+            .iter()
+            .any(request_body_value_contains_compaction_trigger),
+        _ => false,
+    }
+}
+
+fn request_body_is_auto_compact_candidate(request: &ParsedRequest) -> bool {
+    is_responses_request(&request.target)
+        && parse_request_body_json(&request.body)
+            .as_ref()
+            .is_some_and(request_body_value_contains_compaction_trigger)
+}
+
 fn health_registry_request_id_from_request(request: &ParsedRequest) -> Option<String> {
     if let Some(value) = codex_turn_state_request_id(request) {
         return Some(value);
@@ -7817,6 +7884,7 @@ fn parse_http_request(raw: &[u8]) -> Result<ParsedRequest, String> {
         target,
         headers,
         body: raw[header_end..].to_vec(),
+        gateway_request_id: next_gateway_request_id(),
     })
 }
 
@@ -8434,12 +8502,20 @@ fn failure_log_account_hash(account_id: Option<&str>) -> String {
 
 fn build_audit_context(request: &ParsedRequest, account_id: Option<&str>) -> AuditContext {
     let (request_id, request_id_source) = failure_log_request_id_with_source(Some(request));
+    let (turn_lineage_id, turn_lineage_source) = request_lineage_id_with_source(request);
+    let previous_response_id_hash = previous_response_id_hash(request);
     AuditContext {
         request_id,
         request_id_source: request_id_source.to_string(),
         route: failure_log_route(Some(request)),
         model: failure_log_model(Some(request)),
         account_hash: failure_log_account_hash(account_id),
+        gateway_request_id: request.gateway_request_id.clone(),
+        turn_lineage_id,
+        turn_lineage_source: turn_lineage_source.map(str::to_string),
+        is_continuation: previous_response_id_hash.is_some(),
+        is_auto_compact_candidate: request_body_is_auto_compact_candidate(request),
+        previous_response_id_hash,
     }
 }
 
@@ -8520,6 +8596,47 @@ fn build_audit_event(
         detail
             .entry("request_id_source".to_string())
             .or_insert(request_id_source);
+    }
+    let gateway_request_id = safe_log_field(Some(&context.gateway_request_id), 96);
+    if gateway_request_id != "-" {
+        detail
+            .entry("gateway_request_id".to_string())
+            .or_insert(gateway_request_id);
+    }
+    if let Some(value) = context
+        .turn_lineage_id
+        .as_deref()
+        .and_then(|value| safe_audit_label(Some(value), 128))
+    {
+        detail.entry("turn_lineage_id".to_string()).or_insert(value);
+    }
+    if let Some(value) = context
+        .turn_lineage_source
+        .as_deref()
+        .and_then(|value| safe_audit_label(Some(value), 64))
+    {
+        detail
+            .entry("turn_lineage_source".to_string())
+            .or_insert(value);
+    }
+    if let Some(value) = context
+        .previous_response_id_hash
+        .as_deref()
+        .and_then(|value| safe_audit_label(Some(value), 128))
+    {
+        detail
+            .entry("previous_response_id_hash".to_string())
+            .or_insert(value);
+    }
+    if context.is_continuation {
+        detail
+            .entry("is_continuation".to_string())
+            .or_insert("true".to_string());
+    }
+    if context.is_auto_compact_candidate {
+        detail
+            .entry("is_auto_compact_candidate".to_string())
+            .or_insert("true".to_string());
     }
 
     CodexLocalAccessAuditEvent {
@@ -8660,6 +8777,12 @@ fn record_manual_recovery_audit_event(account_id: &str, model: Option<&str>, cha
         route: "manual_recovery".to_string(),
         model: safe_log_field(model, 96),
         account_hash: failure_log_account_hash(Some(account_id)),
+        gateway_request_id: "manual_recovery".to_string(),
+        turn_lineage_id: None,
+        turn_lineage_source: None,
+        previous_response_id_hash: None,
+        is_continuation: false,
+        is_auto_compact_candidate: false,
     };
     record_audit_event_from_context(
         &context,
@@ -8685,6 +8808,12 @@ fn record_manual_pause_audit_event(account_id: &str, changed: bool) {
         route: "manual_pause".to_string(),
         model: "-".to_string(),
         account_hash: failure_log_account_hash(Some(account_id)),
+        gateway_request_id: "manual_pause".to_string(),
+        turn_lineage_id: None,
+        turn_lineage_source: None,
+        previous_response_id_hash: None,
+        is_continuation: false,
+        is_auto_compact_candidate: false,
     };
     record_audit_event_from_context(
         &context,
@@ -11176,8 +11305,11 @@ async fn write_in_band_pool_unavailable_response(
             retry_after.as_millis().to_string(),
         );
     }
-    if let Some(response_id) = response_id.as_deref() {
-        detail.insert("response_id".to_string(), response_id.to_string());
+    if let Some(response_id_hash) = response_id
+        .as_deref()
+        .and_then(|value| hashed_request_correlation_id("response", value))
+    {
+        detail.insert("upstream_response_id_hash".to_string(), response_id_hash);
     }
     record_audit_event_from_context(
         &context,
@@ -11686,6 +11818,22 @@ async fn handle_connection(
             };
             if let Some(response_id) = response_capture.response_id.as_deref() {
                 bind_response_affinity(response_id, &success.account_id).await;
+                if let Some(response_id_hash) =
+                    hashed_request_correlation_id("response", response_id)
+                {
+                    record_audit_event_from_context(
+                        &response_audit_context,
+                        "response_affinity_bound",
+                        None,
+                        None,
+                        None,
+                        Some("bound"),
+                        BTreeMap::from([(
+                            "upstream_response_id_hash".to_string(),
+                            response_id_hash,
+                        )]),
+                    );
+                }
             }
             record_successful_proxy_stats(
                 &success.account_id,
@@ -12998,6 +13146,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/responses".to_string(),
             headers: HashMap::new(),
             body: Vec::new(),
+            gateway_request_id: "gw-test-3".to_string(),
         };
         let active_context = build_audit_context(&active_request, Some("active-a"));
         let mut active_lease = grant_active_stream_lease(&active_context, "active-a");
@@ -13847,6 +13996,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ),
             ]),
             body: br#"{"model":"gpt-5.5","input":"previous successful task step"}"#.to_vec(),
+            gateway_request_id: "gw-test-4".to_string(),
         };
         let mut persisted_registry =
             load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
@@ -14101,6 +14251,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 "req-active-task-fallback".to_string(),
             )]),
             body: br#"{"model":"gpt-5.5","input":"previous successful task step"}"#.to_vec(),
+            gateway_request_id: "gw-test-5".to_string(),
         };
         let mut persisted_registry =
             load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
@@ -14696,6 +14847,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/responses".to_string(),
             headers: HashMap::from([("x-codex-turn-state".to_string(), turn_state.to_string())]),
             body: br#"{"model":"gpt-5.5","input":"previous successful turn step"}"#.to_vec(),
+            gateway_request_id: "gw-test-6".to_string(),
         };
         let mut persisted_registry =
             load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
@@ -14725,6 +14877,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ("x-codex-turn-state".to_string(), turn_state.to_string()),
             ]),
             body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
+            gateway_request_id: "gw-test-7".to_string(),
         };
         let err = proxy_request_with_account_pool(&request, &collection)
             .await
@@ -14783,6 +14936,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ),
             ]),
             body: br#"{"model":"gpt-5.5","input":"old turn"}"#.to_vec(),
+            gateway_request_id: "gw-test-8".to_string(),
         };
         let new_turn = ParsedRequest {
             method: "POST".to_string(),
@@ -14798,6 +14952,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ),
             ]),
             body: br#"{"model":"gpt-5.5","input":"new turn"}"#.to_vec(),
+            gateway_request_id: "gw-test-9".to_string(),
         };
 
         let old_key = request_affinity_key(&old_turn).expect("old turn should have affinity key");
@@ -14856,6 +15011,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ),
             ]),
             body: br#"{"model":"gpt-5.5","input":"active turn"}"#.to_vec(),
+            gateway_request_id: "gw-test-10".to_string(),
         };
         let context = build_audit_context(&request, Some("api-old"));
         let mut lease = grant_active_stream_lease_for_request(&context, "api-old", &request);
@@ -15057,6 +15213,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ),
             ]),
             body: br#"{"model":"gpt-5.5","input":"already running"}"#.to_vec(),
+            gateway_request_id: "gw-test-11".to_string(),
         };
         let active_context = build_audit_context(&active_request, Some("api-old"));
         let mut active_lease =
@@ -15417,6 +15574,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ),
             ]),
             body: br#"{"model":"gpt-5.5","input":"old stream start"}"#.to_vec(),
+            gateway_request_id: "gw-test-12".to_string(),
         };
         let mut persisted_registry =
             load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
@@ -15999,6 +16157,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/models".to_string(),
             headers: HashMap::new(),
             body: Vec::new(),
+            gateway_request_id: "gw-test-13".to_string(),
         };
         assert!(!should_write_in_band_pool_unavailable_response(
             &request,
@@ -16101,6 +16260,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/responses".to_string(),
             headers: HashMap::new(),
             body: Vec::new(),
+            gateway_request_id: "gw-test-14".to_string(),
         };
         assert!(!should_write_in_band_pool_unavailable_response(
             &request,
@@ -16293,6 +16453,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ),
             ]),
             body: Vec::new(),
+            gateway_request_id: "gw-test-15".to_string(),
         };
         assert!(upsert_request_affinity_binding(
             &mut registry,
@@ -16662,6 +16823,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             ]),
             body: br#"{"messages":[{"role":"user","content":"raw prompt"}],"model":"gpt-5.5"}"#
                 .to_vec(),
+            gateway_request_id: "gw-test-16".to_string(),
         };
         let context = build_audit_context(&request, Some("account-secret-user@example.com"));
         let event = build_audit_event(
@@ -16688,6 +16850,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             Some("client_request_id")
         );
         assert_eq!(
+            event.detail.get("gateway_request_id").map(String::as_str),
+            Some("gw-test-16")
+        );
+        assert_eq!(
             event.detail.get("retry_after_ms").map(String::as_str),
             Some("60000")
         );
@@ -16705,6 +16871,64 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn audit_context_marks_turn_lineage_continuation_and_compaction_without_raw_ids() {
+        let metadata = r#"{"turn_id":"turn-compact"}"#;
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([("x-codex-turn-metadata".to_string(), metadata.to_string())]),
+            body: br#"{"model":"gpt-5.5","previous_response_id":"resp_secret_previous","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},{"type":"compaction_trigger"}]}"#.to_vec(),
+            gateway_request_id: "gw-lineage-1".to_string(),
+        };
+
+        let context = build_audit_context(&request, Some("account-lineage@example.com"));
+        let event = build_audit_event(
+            1_700_000_000_001,
+            &context,
+            "listener",
+            None,
+            None,
+            None,
+            Some("accepted"),
+            BTreeMap::new(),
+        );
+
+        assert_eq!(
+            event.detail.get("gateway_request_id").map(String::as_str),
+            Some("gw-lineage-1")
+        );
+        assert_eq!(
+            event.detail.get("turn_lineage_source").map(String::as_str),
+            Some("codex_turn_metadata_turn_id")
+        );
+        assert!(event
+            .detail
+            .get("turn_lineage_id")
+            .is_some_and(|value| value.starts_with("x-codex-turn-metadata.turn_id:sha256:")));
+        assert!(event
+            .detail
+            .get("previous_response_id_hash")
+            .is_some_and(|value| value.starts_with("response:sha256:")));
+        assert_eq!(
+            event.detail.get("is_continuation").map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            event
+                .detail
+                .get("is_auto_compact_candidate")
+                .map(String::as_str),
+            Some("true")
+        );
+
+        let serialized = serde_json::to_string(&event).expect("audit event should serialize");
+        assert!(!serialized.contains("turn-compact"));
+        assert!(!serialized.contains("resp_secret_previous"));
+        assert!(!serialized.contains("hello"));
+        assert!(!serialized.contains("account-lineage@example.com"));
+    }
+
+    #[test]
     fn audit_event_append_writes_jsonl_and_rotates_by_size() {
         let path = temp_audit_path("rotate");
         let context = AuditContext {
@@ -16713,6 +16937,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "sha256:abc123abc123".to_string(),
+            gateway_request_id: "gw-context-test-5".to_string(),
+            turn_lineage_id: None,
+            turn_lineage_source: None,
+            previous_response_id_hash: None,
+            is_continuation: false,
+            is_auto_compact_candidate: false,
         };
         let first = build_audit_event(
             1,
@@ -16756,6 +16986,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "sha256:day123day123".to_string(),
+            gateway_request_id: "gw-context-test-6".to_string(),
+            turn_lineage_id: None,
+            turn_lineage_source: None,
+            previous_response_id_hash: None,
+            is_continuation: false,
+            is_auto_compact_candidate: false,
         };
         let first = build_audit_event(
             DAY_WINDOW_MS,
@@ -16800,6 +17036,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "sha256:concat123".to_string(),
+            gateway_request_id: "gw-context-test-7".to_string(),
+            turn_lineage_id: None,
+            turn_lineage_source: None,
+            previous_response_id_hash: None,
+            is_continuation: false,
+            is_auto_compact_candidate: false,
         };
         let first = build_audit_event(
             DAY_WINDOW_MS,
@@ -16863,6 +17105,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "sha256:stream123456".to_string(),
+            gateway_request_id: "gw-context-test-8".to_string(),
+            turn_lineage_id: None,
+            turn_lineage_source: None,
+            previous_response_id_hash: None,
+            is_continuation: false,
+            is_auto_compact_candidate: false,
         };
         let headers = build_audit_event(
             1,
@@ -16956,6 +17204,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ),
             ]),
             body: br#"{"model":"gpt-5.5","prompt":"raw prompt text","content":"raw response text","access_token":"oauth-token-1234567890"}"#.to_vec(),
+            gateway_request_id: "gw-test-17".to_string(),
         };
 
         let line = build_codex_api_failure_log(
@@ -17368,6 +17617,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             route: "/v1/responses".to_string(),
             model: "gpt-5.5".to_string(),
             account_hash: "hash-active".to_string(),
+            gateway_request_id: "gw-context-test-9".to_string(),
+            turn_lineage_id: None,
+            turn_lineage_source: None,
+            previous_response_id_hash: None,
+            is_continuation: false,
+            is_auto_compact_candidate: false,
         };
         let mut lease = grant_active_stream_lease(&context, "acc-active");
         assert_eq!(active_stream_lease_count_for_account("acc-active"), 1);
@@ -18202,6 +18457,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/responses".to_string(),
             headers: HashMap::new(),
             body: br#"{"model":"GPT-5.4-mini","previous_response_id":"resp_prev"}"#.to_vec(),
+            gateway_request_id: "gw-test-18".to_string(),
         };
 
         let hint = build_request_routing_hint(&request);
@@ -18334,6 +18590,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             headers: HashMap::new(),
             body: br#"{"model":"GPT-5.4","stream":true,"messages":[{"role":"user","content":"hello"}]}"#
                 .to_vec(),
+            gateway_request_id: "gw-test-19".to_string(),
         };
 
         let (prepared, adapter) = prepare_gateway_request(request).expect("request should map");
@@ -18392,6 +18649,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/images/generations".to_string(),
             headers: HashMap::new(),
             body: br#"{"model":"gpt-image-2","prompt":"draw a clean icon","size":"1024x1024","response_format":"b64_json"}"#.to_vec(),
+            gateway_request_id: "gw-test-20".to_string(),
         };
 
         let (prepared, adapter) = prepare_gateway_request(request).expect("request should map");
@@ -18449,6 +18707,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/images/generations".to_string(),
             headers: HashMap::new(),
             body: br#"{"model":"gpt-image-1.5","prompt":"draw"}"#.to_vec(),
+            gateway_request_id: "gw-test-21".to_string(),
         };
 
         let err = prepare_gateway_request(request).expect_err("model should be rejected");
@@ -18482,6 +18741,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/images/edits".to_string(),
             headers,
             body,
+            gateway_request_id: "gw-test-22".to_string(),
         };
 
         let (prepared, adapter) = prepare_gateway_request(request).expect("request should map");
@@ -18574,6 +18834,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/responses".to_string(),
             headers: HashMap::new(),
             body: br#"{"model":"gpt-5.4-2026-03-05","input":"hello"}"#.to_vec(),
+            gateway_request_id: "gw-test-23".to_string(),
         };
 
         let (prepared, adapter) = prepare_gateway_request(request).expect("request should map");
@@ -18599,6 +18860,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/responses".to_string(),
             headers: HashMap::from([("accept".to_string(), "text/event-stream".to_string())]),
             body: br#"{"model":"gpt-5.4","stream":true,"input":"hello"}"#.to_vec(),
+            gateway_request_id: "gw-test-24".to_string(),
         };
 
         let (prepared, adapter) = prepare_gateway_request(request).expect("request should map");
@@ -18623,6 +18885,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 ("sec-websocket-key".to_string(), "test-key".to_string()),
             ]),
             body: Vec::new(),
+            gateway_request_id: "gw-test-25".to_string(),
         };
 
         assert!(is_websocket_upgrade_request(&request.headers));
@@ -18636,6 +18899,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/responses".to_string(),
             headers: HashMap::from([("accept".to_string(), "text/event-stream".to_string())]),
             body: br#"{"model":"gpt-5.4","stream":true,"input":"hello"}"#.to_vec(),
+            gateway_request_id: "gw-test-26".to_string(),
         };
 
         assert!(!is_websocket_upgrade_request(&request.headers));
@@ -18649,6 +18913,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             target: "/v1/responses".to_string(),
             headers: HashMap::new(),
             body: br#"{"model":"gpt-5.4","input":"draw an icon"}"#.to_vec(),
+            gateway_request_id: "gw-test-27".to_string(),
         };
 
         let (prepared, adapter) = prepare_gateway_request(request).expect("request should map");
@@ -18680,6 +18945,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             body:
                 br#"{"model":"gpt-5.4-2026-03-05","messages":[{"role":"user","content":"hello"}]}"#
                     .to_vec(),
+            gateway_request_id: "gw-test-28".to_string(),
         };
 
         let (prepared, adapter) = prepare_gateway_request(request).expect("request should map");
@@ -18708,6 +18974,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             headers: HashMap::new(),
             body: br#"{"model":"gpt-5.4","temperature":0.2,"top_p":0.7,"messages":[{"role":"user","content":"hello"}]}"#
                 .to_vec(),
+            gateway_request_id: "gw-test-29".to_string(),
         };
 
         let (prepared, _) = prepare_gateway_request(request).expect("request should map");
@@ -18725,6 +18992,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             headers: HashMap::new(),
             body: br#"{"model":"gpt-5.4","messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}"#
                 .to_vec(),
+            gateway_request_id: "gw-test-30".to_string(),
         };
 
         let (prepared, _) = prepare_gateway_request(request).expect("request should map");
@@ -18750,6 +19018,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             headers: HashMap::new(),
             body: br#"{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get weather","parameters":{"type":"object","properties":{"location":{"type":"string"}}},"strict":true}}],"tool_choice":{"type":"function","function":{"name":"get_weather"}}}"#
                 .to_vec(),
+            gateway_request_id: "gw-test-31".to_string(),
         };
 
         let (prepared, _) = prepare_gateway_request(request).expect("request should map");
@@ -18790,6 +19059,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             headers: HashMap::new(),
             body: br#"{"model":"gpt-5.4","messages":[{"role":"user","content":"weather?"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Paris\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"{\"temperature_c\":18}"}]}"#
                 .to_vec(),
+            gateway_request_id: "gw-test-32".to_string(),
         };
 
         let (prepared, _) = prepare_gateway_request(request).expect("request should map");
@@ -18824,6 +19094,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             headers: HashMap::new(),
             body: br#"{"model":"gpt-5.4","messages":[{"role":"user","content":"weather?"},{"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"get_weather","arguments":"{\"location\":\"Paris\"}"}}]},{"role":"tool","tool_call_id":"call_1","content":"{\"temperature_c\":18}"}]}"#
                 .to_vec(),
+            gateway_request_id: "gw-test-33".to_string(),
         };
 
         let (prepared, _) = prepare_gateway_request(request).expect("request should map");

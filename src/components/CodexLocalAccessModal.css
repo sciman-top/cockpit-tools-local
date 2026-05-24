@@ -1274,66 +1274,13 @@
     color-mix(in srgb, var(--bg-card) 90%, #fee2e2 10%);
 }
 
-.codex-local-access-current-member.is-dragging {
-  border-color: color-mix(in srgb, var(--primary) 42%, rgba(148, 163, 184, 0.24));
-  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.1);
-  opacity: 0.82;
-}
-
-.codex-local-access-current-member.is-dragging .codex-local-access-member-drag {
-  cursor: grabbing;
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-}
-
-.codex-local-access-current-member.is-drop-target {
-  border-color: color-mix(in srgb, var(--primary) 56%, rgba(148, 163, 184, 0.24));
-  background: color-mix(in srgb, var(--primary) 8%, rgba(255, 255, 255, 0.68));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 30%, transparent);
-}
-
-.codex-local-access-member-drag {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 32px;
-  height: 32px;
-  padding: 0;
-  border: 0;
-  border-radius: 9px;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: grab;
-  flex: 0 0 auto;
-  touch-action: none;
-  -webkit-user-drag: none;
-}
-
-.codex-local-access-member-drag svg {
-  pointer-events: none;
-}
-
-.codex-local-access-member-drag:hover:not(:disabled) {
-  color: var(--text-primary);
-  background: color-mix(in srgb, var(--primary) 8%, transparent);
-}
-
-.codex-local-access-member-drag:active:not(:disabled) {
-  cursor: grabbing;
-}
-
-.codex-local-access-member-order-controls {
+.codex-local-access-member-inline-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   margin-left: auto;
   flex: 0 0 auto;
   flex-wrap: nowrap;
-}
-
-.codex-local-access-member-order-controls
-  .codex-local-access-order-btn:not(.codex-local-access-remove-member-btn) {
-  display: none;
 }
 
 @media (max-width: 760px) {
@@ -1348,12 +1295,12 @@
   }
 }
 
-.codex-local-access-order-btn {
+.codex-local-access-member-icon-btn {
   width: 26px;
   height: 26px;
 }
 
-.codex-local-access-order-btn:disabled {
+.codex-local-access-member-icon-btn:disabled {
   opacity: 0.36;
   cursor: not-allowed;
 }

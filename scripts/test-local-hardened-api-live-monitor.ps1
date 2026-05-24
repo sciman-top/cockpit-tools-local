@@ -220,6 +220,34 @@ try {
   Assert-Equal $multiSummary.audit.completedStreamCount 2 "expected two completed streams"
   Assert-Equal (($multiSummary.results | Where-Object name -eq "multi_account_fallback_observed").status) "pass" "expected multi-account fallback result pass"
 
+  $dataRootLineageSwitch = Join-Path $tempRoot "data-lineage-switch"
+  $auditLineageSwitch = Join-Path $dataRootLineageSwitch "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditLineageSwitch @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:aaa"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ turn_lineage_id = "turn:sha256:aaa"; turn_lineage_source = "codex_turn_metadata_turn_id"; gateway_request_id = "gw-a1" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:aaa"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; outcome = "response_received"; detail = [ordered]@{ turn_lineage_id = "turn:sha256:aaa"; gateway_request_id = "gw-a1"; admission_attempt = "1" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:aaa"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "active"; detail = [ordered]@{ turn_lineage_id = "turn:sha256:aaa"; gateway_request_id = "gw-a1"; lease_id = "11" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:aaa"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "completed"; detail = [ordered]@{ turn_lineage_id = "turn:sha256:aaa"; gateway_request_id = "gw-a1"; upstream_response_id_hash = "response:sha256:r1"; terminal_origin = "upstream_completed"; lease_id = "11" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:aaa"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ turn_lineage_id = "turn:sha256:aaa"; turn_lineage_source = "codex_turn_metadata_turn_id"; gateway_request_id = "gw-a2"; previous_response_id_hash = "response:sha256:r1"; is_continuation = "true"; is_auto_compact_candidate = "true" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:aaa"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:new"; status = 200; outcome = "response_received"; detail = [ordered]@{ turn_lineage_id = "turn:sha256:aaa"; gateway_request_id = "gw-a2"; previous_response_id_hash = "response:sha256:r1"; is_continuation = "true"; is_auto_compact_candidate = "true"; admission_attempt = "1" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:aaa"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:new"; outcome = "completed"; detail = [ordered]@{ turn_lineage_id = "turn:sha256:aaa"; gateway_request_id = "gw-a2"; terminal_origin = "upstream_completed" } }
+  )
+  $lineageSwitchOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootLineageSwitch `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 1) "expected same-turn lineage switch fixture exit code 1"
+  $lineageSwitchSummary = Convert-JsonOutput $lineageSwitchOutput "lineage switch fixture"
+  Assert-Equal $lineageSwitchSummary.overall "fail" "expected same-turn lineage switch fixture overall fail"
+  Assert-Equal $lineageSwitchSummary.audit.lineageAccountSwitchCount 1 "expected one same-turn lineage account switch"
+  Assert-Equal $lineageSwitchSummary.audit.continuationReroutedCount 1 "expected continuation reroute to be counted"
+  Assert-Equal $lineageSwitchSummary.audit.autoCompactReroutedCount 1 "expected auto-compact candidate reroute to be counted"
+  Assert-Equal (($lineageSwitchSummary.results | Where-Object name -eq "turn_lineage_account_switch_absent").status) "fail" "expected lineage switch guard to fail"
+  Assert-Equal $lineageSwitchSummary.continuitySummary.turnLineageAccountSwitchAbsent.status "fail" "expected continuity summary to expose lineage switch"
+
   $dataRootCrossRequest = Join-Path $tempRoot "data-cross-request"
   $auditCrossRequest = Join-Path $dataRootCrossRequest "codex_local_access_audit.jsonl"
   Write-AuditLines $auditCrossRequest @(

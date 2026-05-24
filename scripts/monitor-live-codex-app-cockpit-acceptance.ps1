@@ -28,6 +28,7 @@ param(
   [int]$RequiredDistinctHealthyAccounts = 1,
   [ValidateRange(1, 100)]
   [int]$RequiredCompletedStreams = 1,
+  [string]$StopSignalFile,
   [switch]$StopWhenSatisfied,
   [switch]$WriteReport,
   [switch]$Quiet
@@ -313,6 +314,89 @@ function Test-CodexResponsesRoute {
   param([System.Collections.IDictionary]$Event)
   $route = [string]$Event.route
   $route -eq "/v1/responses" -or $route -eq "/responses" -or $route.EndsWith("/responses")
+}
+
+function Get-AuditDetailValue {
+  param(
+    [System.Collections.IDictionary]$Event,
+    [string]$Name
+  )
+  $detail = $Event.detail
+  if (-not $detail) {
+    return $null
+  }
+  if ($detail -is [System.Collections.IDictionary] -and $detail.Contains($Name)) {
+    return [string]$detail[$Name]
+  }
+  $property = $detail.PSObject.Properties[$Name]
+  if ($property -and $null -ne $property.Value) {
+    return [string]$property.Value
+  }
+  $null
+}
+
+function Get-AuditDetailBool {
+  param(
+    [System.Collections.IDictionary]$Event,
+    [string]$Name
+  )
+  $value = Get-AuditDetailValue -Event $Event -Name $Name
+  if ([string]::IsNullOrWhiteSpace($value)) {
+    return $false
+  }
+  $value -match '^(?i:true|1|yes)$'
+}
+
+function Get-AuditLineageId {
+  param([System.Collections.IDictionary]$Event)
+  $explicit = Get-AuditDetailValue -Event $Event -Name "turn_lineage_id"
+  if (-not [string]::IsNullOrWhiteSpace($explicit) -and $explicit -ne "-") {
+    return $explicit
+  }
+
+  $source = Get-AuditDetailValue -Event $Event -Name "request_id_source"
+  if ($source -in @("codex_turn_state", "codex_turn_metadata", "codex_turn_metadata_turn_id")) {
+    $requestId = [string]$Event.requestId
+    if (-not [string]::IsNullOrWhiteSpace($requestId) -and $requestId -ne "-") {
+      return $requestId
+    }
+  }
+  $null
+}
+
+function Get-AuditGatewayRequestId {
+  param([System.Collections.IDictionary]$Event)
+  $gatewayRequestId = Get-AuditDetailValue -Event $Event -Name "gateway_request_id"
+  if (-not [string]::IsNullOrWhiteSpace($gatewayRequestId) -and $gatewayRequestId -ne "-") {
+    return $gatewayRequestId
+  }
+  $requestId = [string]$Event.requestId
+  if (-not [string]::IsNullOrWhiteSpace($requestId) -and $requestId -ne "-") {
+    return $requestId
+  }
+  $null
+}
+
+function Get-AuditPreviousResponseIdHash {
+  param([System.Collections.IDictionary]$Event)
+  foreach ($name in @("previous_response_id_hash", "previousResponseIdHash")) {
+    $value = Get-AuditDetailValue -Event $Event -Name $name
+    if (-not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-") {
+      return $value
+    }
+  }
+  $null
+}
+
+function Get-AuditUpstreamResponseIdHash {
+  param([System.Collections.IDictionary]$Event)
+  foreach ($name in @("upstream_response_id_hash", "response_id_hash", "upstreamResponseIdHash", "responseIdHash")) {
+    $value = Get-AuditDetailValue -Event $Event -Name $name
+    if (-not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-") {
+      return $value
+    }
+  }
+  $null
 }
 
 function Get-AuditAcceptanceSummary {
@@ -694,6 +778,138 @@ function Get-AuditAcceptanceSummary {
   $completedStreams = @($startedStreams | Where-Object { $_.completed })
   $openStreams = @($startedStreams | Where-Object { -not $_.completed -and -not $_.terminalError })
   $interruptedStreams = @($startedStreams | Where-Object { $_.interruptedByCooldown })
+  $responseAccountBindings = @{}
+  foreach ($event in $parsedEvents) {
+    if (-not (Test-ValidAccountHash $event.accountHash)) {
+      continue
+    }
+    $responseIdHash = Get-AuditUpstreamResponseIdHash $event
+    if (-not [string]::IsNullOrWhiteSpace($responseIdHash)) {
+      $responseAccountBindings[$responseIdHash] = $event.accountHash
+    }
+  }
+
+  $lineageGroups = @{}
+  foreach ($event in $parsedEvents) {
+    $lineageId = Get-AuditLineageId $event
+    if ([string]::IsNullOrWhiteSpace($lineageId)) {
+      continue
+    }
+    if (-not $lineageGroups.ContainsKey($lineageId)) {
+      $lineageGroups[$lineageId] = [ordered]@{
+        lineageId = $lineageId
+        firstTimestamp = $event.timestamp
+        lastTimestamp = $event.timestamp
+        eventCount = 0
+        requestIds = @()
+        gatewayRequestIds = @()
+        accountHashes = @()
+        accountTransitions = @()
+        previousResponseIdHashes = @()
+        upstreamResponseIdHashes = @()
+        continuationReroutes = @()
+        autoCompactReroutes = @()
+        localCompletionAfterHardAffinity = @()
+        terminalOrigins = @()
+      }
+    }
+    $lineage = $lineageGroups[$lineageId]
+    $lineage.eventCount++
+    $lineage.lastTimestamp = $event.timestamp
+    if ($event.requestId -and $event.requestId -ne "-") {
+      $lineage.requestIds += $event.requestId
+    }
+    $gatewayRequestId = Get-AuditGatewayRequestId $event
+    if ($gatewayRequestId) {
+      $lineage.gatewayRequestIds += $gatewayRequestId
+    }
+    if (Test-ValidAccountHash $event.accountHash) {
+      $lastAccount = if ($lineage.accountHashes.Count -gt 0) { $lineage.accountHashes[-1] } else { $null }
+      if ($lastAccount -and $lastAccount -ne $event.accountHash) {
+        $lineage.accountTransitions += [ordered]@{
+          timestamp = $event.timestamp
+          fromAccountHash = $lastAccount
+          toAccountHash = $event.accountHash
+          requestId = $event.requestId
+          gatewayRequestId = $gatewayRequestId
+          phase = $event.phase
+          isContinuation = [bool](Get-AuditDetailBool -Event $event -Name "is_continuation")
+          isAutoCompactCandidate = [bool](Get-AuditDetailBool -Event $event -Name "is_auto_compact_candidate")
+          previousResponseIdHash = Get-AuditPreviousResponseIdHash $event
+        }
+      }
+      $lineage.accountHashes += $event.accountHash
+    }
+    $previousResponseIdHash = Get-AuditPreviousResponseIdHash $event
+    if ($previousResponseIdHash) {
+      $lineage.previousResponseIdHashes += $previousResponseIdHash
+      if ($responseAccountBindings.ContainsKey($previousResponseIdHash) -and (Test-ValidAccountHash $event.accountHash)) {
+        $boundAccountHash = $responseAccountBindings[$previousResponseIdHash]
+        if ($boundAccountHash -ne $event.accountHash) {
+          $reroute = [ordered]@{
+            timestamp = $event.timestamp
+            requestId = $event.requestId
+            gatewayRequestId = $gatewayRequestId
+            previousResponseIdHash = $previousResponseIdHash
+            expectedAccountHash = $boundAccountHash
+            actualAccountHash = $event.accountHash
+            phase = $event.phase
+            isAutoCompactCandidate = [bool](Get-AuditDetailBool -Event $event -Name "is_auto_compact_candidate")
+          }
+          $lineage.continuationReroutes += $reroute
+          if ($reroute.isAutoCompactCandidate) {
+            $lineage.autoCompactReroutes += $reroute
+          }
+        }
+      }
+    }
+    $upstreamResponseIdHash = Get-AuditUpstreamResponseIdHash $event
+    if ($upstreamResponseIdHash) {
+      $lineage.upstreamResponseIdHashes += $upstreamResponseIdHash
+    }
+    $terminalOrigin = Get-AuditDetailValue -Event $event -Name "terminal_origin"
+    if (-not [string]::IsNullOrWhiteSpace($terminalOrigin)) {
+      $lineage.terminalOrigins += $terminalOrigin
+    }
+    if ($event.phase -eq "final_response" -and (Test-LocalPoolUnavailableEvent $event)) {
+      $blocked = @($sameTaskAffinityBlockTransitions | Where-Object { $_.requestId -eq $event.requestId })
+      if ($blocked.Count -gt 0) {
+        $lineage.localCompletionAfterHardAffinity += [ordered]@{
+          timestamp = $event.timestamp
+          requestId = $event.requestId
+          gatewayRequestId = $gatewayRequestId
+          accountHash = $event.accountHash
+          streamState = $event.streamState
+          outcome = $event.outcome
+        }
+      }
+    }
+  }
+
+  $lineageSummaries = @($lineageGroups.Values | ForEach-Object {
+    $uniqueAccounts = @($_.accountHashes | Where-Object { Test-ValidAccountHash $_ } | Select-Object -Unique)
+    [ordered]@{
+      lineageId = $_.lineageId
+      firstTimestamp = $_.firstTimestamp
+      lastTimestamp = $_.lastTimestamp
+      eventCount = [int]$_.eventCount
+      requestIds = @($_.requestIds | Select-Object -Unique)
+      gatewayRequestIds = @($_.gatewayRequestIds | Select-Object -Unique)
+      accountHashes = @($uniqueAccounts)
+      accountSwitchCount = [math]::Max(0, $uniqueAccounts.Count - 1)
+      accountTransitions = @($_.accountTransitions)
+      previousResponseIdHashes = @($_.previousResponseIdHashes | Select-Object -Unique)
+      upstreamResponseIdHashes = @($_.upstreamResponseIdHashes | Select-Object -Unique)
+      continuationReroutes = @($_.continuationReroutes)
+      autoCompactReroutes = @($_.autoCompactReroutes)
+      localCompletionAfterHardAffinity = @($_.localCompletionAfterHardAffinity)
+      terminalOrigins = @($_.terminalOrigins | Select-Object -Unique)
+    }
+  } | Sort-Object lineageId)
+  $lineageAccountSwitches = @($lineageSummaries | Where-Object { $_.accountSwitchCount -gt 0 })
+  $continuationReroutes = @($lineageSummaries | ForEach-Object { $_.continuationReroutes })
+  $autoCompactReroutes = @($lineageSummaries | ForEach-Object { $_.autoCompactReroutes })
+  $lineageLocalCompletionsAfterHardAffinity = @($lineageSummaries | ForEach-Object { $_.localCompletionAfterHardAffinity })
   $completedFallbackTransitions = @($fallbackTransitions | Where-Object { $_.completed -and $_.differentAccount })
   $distinctHealthyAccountHashesAfterFallback = @($healthyAccountHashesAfterFallback | Sort-Object -Unique)
   $completedSameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.completedLocally })
@@ -782,6 +998,16 @@ function Get-AuditAcceptanceSummary {
     responsesTransport503PoolUnavailableAuditCount = $responsesTransport503PoolUnavailableEvents.Count
     responsesTransport503PoolUnavailableTextCount = $responsesTransport503TextEvents.Count
     responsesTransport503PoolUnavailableRequestIds = @($responsesTransport503PoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    lineageCount = $lineageSummaries.Count
+    lineageAccountSwitchCount = $lineageAccountSwitches.Count
+    lineageAccountSwitches = @($lineageAccountSwitches)
+    continuationReroutedCount = $continuationReroutes.Count
+    continuationReroutes = @($continuationReroutes)
+    autoCompactReroutedCount = $autoCompactReroutes.Count
+    autoCompactReroutes = @($autoCompactReroutes)
+    localCompletionAfterHardAffinityLineageCount = $lineageLocalCompletionsAfterHardAffinity.Count
+    localCompletionAfterHardAffinityLineages = @($lineageLocalCompletionsAfterHardAffinity)
+    lineageSummaries = @($lineageSummaries)
     startedStreamCount = $startedStreams.Count
     completedStreamCount = $completedStreams.Count
     openStreamCount = $openStreams.Count
@@ -1019,6 +1245,21 @@ function New-AcceptanceResults {
     $results += Set-MonitorStatus $legacySyntheticTerminal "pass" $null $legacySyntheticTerminalEvidence
   }
 
+  $lineageSwitch = New-MonitorResult "turn_lineage_account_switch_absent"
+  $lineageSwitchEvidence = @{
+    lineageAccountSwitchCount = [int]$AuditSummary.lineageAccountSwitchCount
+    continuationReroutedCount = [int]$AuditSummary.continuationReroutedCount
+    autoCompactReroutedCount = [int]$AuditSummary.autoCompactReroutedCount
+    lineageAccountSwitches = @($AuditSummary.lineageAccountSwitches)
+    continuationReroutes = @($AuditSummary.continuationReroutes)
+    autoCompactReroutes = @($AuditSummary.autoCompactReroutes)
+  }
+  if ($AuditSummary.lineageAccountSwitchCount -gt 0 -or $AuditSummary.continuationReroutedCount -gt 0) {
+    $results += Set-MonitorStatus $lineageSwitch "fail" "同一 turn/response lineage 在监测窗口内命中过多个账号；这会消耗后续账号配额，需区分 stream 内切号与 continuation/compact 后重新 admission" $lineageSwitchEvidence
+  } else {
+    $results += Set-MonitorStatus $lineageSwitch "pass" $null $lineageSwitchEvidence
+  }
+
   $cli = New-MonitorResult "codex_cli_config_auth_untouched"
   $cliEvidence = @{
     unchanged = [bool]$CliComparison.unchanged
@@ -1096,6 +1337,25 @@ function New-ContinuitySummary {
     $newRequestReason = "未要求观察新请求避开 exhausted/cooldown 账号"
   }
 
+  $lineageEvidence = [ordered]@{
+    lineageCount = [int]$AuditSummary.lineageCount
+    lineageAccountSwitchCount = [int]$AuditSummary.lineageAccountSwitchCount
+    continuationReroutedCount = [int]$AuditSummary.continuationReroutedCount
+    autoCompactReroutedCount = [int]$AuditSummary.autoCompactReroutedCount
+    lineageAccountSwitches = @($AuditSummary.lineageAccountSwitches)
+    continuationReroutes = @($AuditSummary.continuationReroutes)
+    autoCompactReroutes = @($AuditSummary.autoCompactReroutes)
+  }
+  $lineageStatus = "pass"
+  $lineageReason = $null
+  if ($AuditSummary.lineageAccountSwitchCount -gt 0 -or $AuditSummary.continuationReroutedCount -gt 0) {
+    $lineageStatus = "fail"
+    $lineageReason = "同一 turn/response lineage 使用了多个账号"
+  } elseif ($AuditSummary.lineageCount -eq 0) {
+    $lineageStatus = "blocked"
+    $lineageReason = "未观察到 turn lineage 字段；只能给出 request 级结论"
+  }
+
   [ordered]@{
     sameTaskAffinityFallbackBlocked = [ordered]@{
       status = $currentStatus
@@ -1106,6 +1366,11 @@ function New-ContinuitySummary {
       status = $newRequestStatus
       reason = $newRequestReason
       evidence = $newRequestEvidence
+    }
+    turnLineageAccountSwitchAbsent = [ordered]@{
+      status = $lineageStatus
+      reason = $lineageReason
+      evidence = $lineageEvidence
     }
   }
 }
@@ -1132,7 +1397,7 @@ do {
     $events += @($lines | ForEach-Object { Convert-AuditLine $_ })
     if (-not $Quiet) {
       $summary = Get-AuditAcceptanceSummary $events
-      Write-Host ("events={0}; has429={1}; fallbackBlocked={2}; sameTaskLocalCompletion={3}; newRequestAvoidance={4}; healthyAccountsAfterBlock={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; localCompletionPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}" -f $summary.eventCount, $summary.has429, $summary.sameTaskAffinityFallbackBlockedCount, $summary.sameTaskAffinityLocalCompletionCount, $summary.newRequestAvoidanceCount, $summary.distinctHealthyAccountCountAfterBlock, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.responsesLocalCompletionPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount)
+      Write-Host ("events={0}; has429={1}; fallbackBlocked={2}; sameTaskLocalCompletion={3}; newRequestAvoidance={4}; healthyAccountsAfterBlock={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; localCompletionPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}; lineageSwitch={19}; continuationReroute={20}; autoCompactReroute={21}" -f $summary.eventCount, $summary.has429, $summary.sameTaskAffinityFallbackBlockedCount, $summary.sameTaskAffinityLocalCompletionCount, $summary.newRequestAvoidanceCount, $summary.distinctHealthyAccountCountAfterBlock, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.responsesLocalCompletionPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount, $summary.lineageAccountSwitchCount, $summary.continuationReroutedCount, $summary.autoCompactReroutedCount)
     }
   }
 
@@ -1152,6 +1417,12 @@ do {
   }
 
   if ($DurationSeconds -le 0) {
+    break
+  }
+  if ($StopSignalFile -and (Test-Path -LiteralPath $StopSignalFile)) {
+    if (-not $Quiet) {
+      Write-Host ("stop_signal_file_detected={0}" -f $StopSignalFile)
+    }
     break
   }
   Start-Sleep -Seconds $PollIntervalSeconds

@@ -3,15 +3,9 @@ import {
   useMemo,
   useRef,
   useState,
-  type DragEvent as ReactDragEvent,
-  type PointerEvent as ReactPointerEvent,
 } from 'react';
 import {
   Activity,
-  ArrowDown,
-  ArrowUp,
-  ChevronsDown,
-  ChevronsUp,
   Check,
   CircleAlert,
   Clock,
@@ -31,7 +25,6 @@ import {
   Trash2,
   Wrench,
   X,
-  GripVertical,
 } from 'lucide-react';
 import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
 import { useTranslation } from 'react-i18next';
@@ -73,11 +66,8 @@ import {
 import { SingleSelectDropdown } from './SingleSelectDropdown';
 import {
   areStringArraysEqual,
-  moveIdInOrder,
-  moveIdsBeforeTarget,
   normalizeAccountOrder,
   normalizeSelectedAccountOrder,
-  type AccountOrderMove,
 } from '../utils/accountOrder';
 import {
   sortCodexLocalAccessAccountsForStableDisplay,
@@ -138,7 +128,6 @@ interface CodexLocalAccessModalProps {
 
 type StatsRangeKey = 'daily' | 'weekly' | 'monthly';
 type CopyableField = 'apiPortUrl' | 'baseUrl' | 'apiKey' | 'modelId';
-type MemberOrderPlacement = 'before' | 'after';
 type LocalAccessAccountIssueIcon = 'alert' | 'clock' | 'info' | 'pause';
 
 interface LocalAccessAccountIssueMeta {
@@ -150,29 +139,6 @@ interface LocalAccessAccountIssueMeta {
   canPause: boolean;
 }
 
-interface MemberPointerDragState {
-  accountId: string;
-  pointerId: number;
-  targetId: string | null;
-  placement: MemberOrderPlacement;
-}
-
-function moveIdAroundTarget(
-  order: string[],
-  sourceAccountId: string,
-  targetAccountId: string,
-  placement: MemberOrderPlacement,
-): string[] {
-  if (sourceAccountId === targetAccountId) return order;
-
-  const remaining = order.filter((accountId) => accountId !== sourceAccountId);
-  const targetIndex = remaining.indexOf(targetAccountId);
-  if (targetIndex < 0) return order;
-
-  const next = [...remaining];
-  next.splice(placement === 'before' ? targetIndex : targetIndex + 1, 0, sourceAccountId);
-  return next;
-}
 const CODEX_LOCAL_ACCESS_STATS_RANGE_STORAGE_KEY =
   'agtools.codex.local_access.stats_range.v1';
 
@@ -332,8 +298,6 @@ export function CodexLocalAccessModal({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [selectedOrder, setSelectedOrder] = useState<string[]>([]);
   const [memberRemovalSelected, setMemberRemovalSelected] = useState<Set<string>>(new Set());
-  const [draggedMemberAccountId, setDraggedMemberAccountId] = useState<string | null>(null);
-  const [memberOrderDropTargetId, setMemberOrderDropTargetId] = useState<string | null>(null);
   const [filterTypes, setFilterTypes] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [groupFilter, setGroupFilter] = useState<string[]>([]);
@@ -348,8 +312,6 @@ export function CodexLocalAccessModal({
   const [statsRefreshing, setStatsRefreshing] = useState(false);
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
-  const memberPointerDragRef = useRef<MemberPointerDragState | null>(null);
-  const selectedOrderForSaveRef = useRef<string[]>([]);
   const draftInitKeyRef = useRef<string | null>(null);
 
   const collection = state?.collection ?? null;
@@ -570,10 +532,6 @@ export function CodexLocalAccessModal({
   }, [selected, selectedOrder, serviceAccountIds]);
 
   useEffect(() => {
-    selectedOrderForSaveRef.current = selectedOrderForSave;
-  }, [selectedOrderForSave]);
-
-  useEffect(() => {
     if (!isOpen) {
       draftInitKeyRef.current = null;
       return;
@@ -584,9 +542,6 @@ export function CodexLocalAccessModal({
     setSelected(new Set(normalizedInitialSelectedIds));
     setSelectedOrder(normalizedInitialSelectedIds);
     setMemberRemovalSelected(new Set());
-    setDraggedMemberAccountId(null);
-    setMemberOrderDropTargetId(null);
-    memberPointerDragRef.current = null;
     setFilterTypes([]);
     setTagFilter([]);
     setGroupFilter([]);
@@ -1234,168 +1189,6 @@ export function CodexLocalAccessModal({
       }
       return next;
     });
-  };
-
-  const moveSelectedMember = (accountId: string, move: AccountOrderMove) => {
-    if (actionBusy) return;
-    setSelectedOrder(moveIdInOrder(selectedOrderForSave, accountId, move));
-  };
-
-  const shouldIgnoreMemberDragStart = (target: EventTarget | null): boolean => {
-    if (!(target instanceof HTMLElement)) return false;
-    if (target.closest('[data-member-drag-handle="true"]')) return false;
-    return Boolean(
-      target.closest(
-        'button, input, select, textarea, a, [role="button"]',
-      ),
-    );
-  };
-
-  const handleMemberDragStart = (
-    event: ReactDragEvent<HTMLElement>,
-    accountId: string,
-  ) => {
-    if (actionBusy || shouldIgnoreMemberDragStart(event.target)) {
-      event.preventDefault();
-      return;
-    }
-    setDraggedMemberAccountId(accountId);
-    setMemberOrderDropTargetId(null);
-    event.dataTransfer.effectAllowed = 'move';
-    event.dataTransfer.setData('text/plain', accountId);
-  };
-
-  const handleMemberDragOver = (
-    event: ReactDragEvent<HTMLElement>,
-    accountId: string,
-  ) => {
-    if (!draggedMemberAccountId || draggedMemberAccountId === accountId) return;
-    event.preventDefault();
-    event.dataTransfer.dropEffect = 'move';
-    setMemberOrderDropTargetId(accountId);
-  };
-
-  const handleMemberDragLeave = (
-    event: ReactDragEvent<HTMLElement>,
-    accountId: string,
-  ) => {
-    const nextTarget = event.relatedTarget;
-    if (
-      nextTarget instanceof Node &&
-      event.currentTarget.contains(nextTarget)
-    ) {
-      return;
-    }
-    setMemberOrderDropTargetId((current) =>
-      current === accountId ? null : current,
-    );
-  };
-
-  const handleMemberDrop = (
-    event: ReactDragEvent<HTMLElement>,
-    accountId: string,
-  ) => {
-    const sourceAccountId =
-      draggedMemberAccountId || event.dataTransfer.getData('text/plain');
-    if (!sourceAccountId || sourceAccountId === accountId) return;
-    event.preventDefault();
-    setSelectedOrder(
-      moveIdsBeforeTarget(selectedOrderForSave, [sourceAccountId], accountId),
-    );
-    setDraggedMemberAccountId(null);
-    setMemberOrderDropTargetId(null);
-  };
-
-  const handleMemberDragEnd = () => {
-    setDraggedMemberAccountId(null);
-    setMemberOrderDropTargetId(null);
-  };
-
-  const resolveMemberPointerTarget = (
-    clientX: number,
-    clientY: number,
-  ): Pick<MemberPointerDragState, 'targetId' | 'placement'> => {
-    const sourceAccountId = memberPointerDragRef.current?.accountId;
-    const element = document.elementFromPoint(clientX, clientY);
-    const row = element?.closest<HTMLElement>('[data-member-account-id]');
-    const targetId = row?.dataset.memberAccountId ?? null;
-    if (!row || !targetId || targetId === sourceAccountId) {
-      return { targetId: null, placement: 'before' };
-    }
-
-    const rect = row.getBoundingClientRect();
-    return {
-      targetId,
-      placement: clientY > rect.top + rect.height / 2 ? 'after' : 'before',
-    };
-  };
-
-  const handleMemberPointerDown = (
-    event: ReactPointerEvent<HTMLButtonElement>,
-    accountId: string,
-  ) => {
-    if (actionBusy || event.button !== 0) return;
-    event.preventDefault();
-    event.stopPropagation();
-
-    memberPointerDragRef.current = {
-      accountId,
-      pointerId: event.pointerId,
-      targetId: null,
-      placement: 'before',
-    };
-    setDraggedMemberAccountId(accountId);
-    setMemberOrderDropTargetId(null);
-    try {
-      event.currentTarget.setPointerCapture(event.pointerId);
-    } catch {
-      // Pointer capture can fail in older WebViews; move/up still work while over the handle.
-    }
-  };
-
-  const handleMemberPointerMove = (
-    event: ReactPointerEvent<HTMLButtonElement>,
-  ) => {
-    const dragState = memberPointerDragRef.current;
-    if (!dragState || dragState.pointerId !== event.pointerId) return;
-    event.preventDefault();
-
-    const target = resolveMemberPointerTarget(event.clientX, event.clientY);
-    dragState.targetId = target.targetId;
-    dragState.placement = target.placement;
-    setMemberOrderDropTargetId(target.targetId);
-  };
-
-  const finishMemberPointerDrag = (
-    event?: ReactPointerEvent<HTMLButtonElement>,
-  ) => {
-    const dragState = memberPointerDragRef.current;
-    if (!dragState) return;
-
-    if (event && dragState.pointerId !== event.pointerId) return;
-    if (event) {
-      event.preventDefault();
-      try {
-        event.currentTarget.releasePointerCapture(event.pointerId);
-      } catch {
-        // Ignore release failures from WebViews that already dropped capture.
-      }
-    }
-
-    if (dragState.targetId) {
-      setSelectedOrder(
-        moveIdAroundTarget(
-          selectedOrderForSaveRef.current,
-          dragState.accountId,
-          dragState.targetId,
-          dragState.placement,
-        ),
-      );
-    }
-
-    memberPointerDragRef.current = null;
-    setDraggedMemberAccountId(null);
-    setMemberOrderDropTargetId(null);
   };
 
   const handleToggleRestrictFreeAccounts = async () => {
@@ -2501,7 +2294,7 @@ export function CodexLocalAccessModal({
                       <span>
                         {t('codex.localAccess.modal.currentPoolMembers', {
                           count: selectedMemberAccounts.length,
-                          defaultValue: '当前号池 / 调度顺序 {{count}} 个',
+                          defaultValue: '当前号池 {{count}} 个',
                         })}
                       </span>
                     </div>
@@ -2550,13 +2343,11 @@ export function CodexLocalAccessModal({
                     </div>
                   </div>
                   <div className="codex-local-access-current-member-list">
-                    {selectedMemberAccounts.map((account, index) => {
+                    {selectedMemberAccounts.map((account) => {
                       const presentation = buildCodexAccountPresentation(account, t);
                       const isCurrentAccount = currentAccountId === account.id;
                       const isRemovalChecked = memberRemovalSelected.has(account.id);
                       const accountStats = allStatsByAccountId.get(account.id)?.usage;
-                      const isFirst = index === 0;
-                      const isLast = index === selectedMemberAccounts.length - 1;
                       const accountIssueMeta = resolveLocalAccessAccountIssueMeta(account);
                       const canPauseAccountIssue =
                         accountIssueMeta?.canPause && accountIssueMeta.className !== 'health-disabled';
@@ -2564,39 +2355,12 @@ export function CodexLocalAccessModal({
                       return (
                         <div
                           key={`pool-member-${account.id}`}
-                          data-member-account-id={account.id}
                           className={`codex-local-access-current-member${
                             isCurrentAccount ? ' is-active-account' : ''
                           }${isRemovalChecked ? ' is-marked' : ''}${
-                            draggedMemberAccountId === account.id ? ' is-dragging' : ''
-                          }${
-                            memberOrderDropTargetId === account.id ? ' is-drop-target' : ''
-                          }${
                             accountIssueMeta?.blocksSelection ? ' is-account-issue' : ''
                           }`}
-                          draggable={false}
-                          onDragEnd={handleMemberDragEnd}
-                          onDragOver={(event) => handleMemberDragOver(event, account.id)}
-                          onDragLeave={(event) => handleMemberDragLeave(event, account.id)}
-                          onDrop={(event) => handleMemberDrop(event, account.id)}
                         >
-                          <button
-                            type="button"
-                            className="codex-local-access-member-drag"
-                            data-member-drag-handle="true"
-                            title={t('codex.sort.customDragHandle', '拖拽排序')}
-                            aria-label={t('codex.sort.customDragHandle', '拖拽排序')}
-                            disabled={actionBusy}
-                            draggable={false}
-                            onPointerDown={(event) => handleMemberPointerDown(event, account.id)}
-                            onPointerMove={handleMemberPointerMove}
-                            onPointerUp={finishMemberPointerDrag}
-                            onPointerCancel={finishMemberPointerDrag}
-                            onDragStart={(event) => handleMemberDragStart(event, account.id)}
-                            onDragEnd={handleMemberDragEnd}
-                          >
-                            <GripVertical size={14} />
-                          </button>
                           <input
                             type="checkbox"
                             checked={isRemovalChecked}
@@ -2625,51 +2389,11 @@ export function CodexLocalAccessModal({
                             })}
                           </span>
                           {renderQuotaPreview(presentation, 1)}
-                          <span className="codex-local-access-member-order-controls">
-                            <button
-                              type="button"
-                              className="folder-icon-btn codex-local-access-order-btn"
-                              onClick={() => moveSelectedMember(account.id, 'first')}
-                              disabled={actionBusy || isFirst}
-                              title={t('codex.sort.customMoveTop', '置顶')}
-                              aria-label={t('codex.sort.customMoveTop', '置顶')}
-                            >
-                              <ChevronsUp size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              className="folder-icon-btn codex-local-access-order-btn"
-                              onClick={() => moveSelectedMember(account.id, 'previous')}
-                              disabled={actionBusy || isFirst}
-                              title={t('codex.sort.customMoveUp', '上移')}
-                              aria-label={t('codex.sort.customMoveUp', '上移')}
-                            >
-                              <ArrowUp size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              className="folder-icon-btn codex-local-access-order-btn"
-                              onClick={() => moveSelectedMember(account.id, 'next')}
-                              disabled={actionBusy || isLast}
-                              title={t('codex.sort.customMoveDown', '下移')}
-                              aria-label={t('codex.sort.customMoveDown', '下移')}
-                            >
-                              <ArrowDown size={14} />
-                            </button>
-                            <button
-                              type="button"
-                              className="folder-icon-btn codex-local-access-order-btn"
-                              onClick={() => moveSelectedMember(account.id, 'last')}
-                              disabled={actionBusy || isLast}
-                              title={t('codex.sort.customMoveBottom', '置底')}
-                              aria-label={t('codex.sort.customMoveBottom', '置底')}
-                            >
-                              <ChevronsDown size={14} />
-                            </button>
+                          <span className="codex-local-access-member-inline-actions">
                             {canPauseAccountIssue && (
                               <button
                                 type="button"
-                                className="folder-icon-btn codex-local-access-order-btn codex-local-access-pause-member-btn"
+                                className="folder-icon-btn codex-local-access-member-icon-btn codex-local-access-pause-member-btn"
                                 onClick={() => void handlePauseHealth(account.id)}
                                 disabled={actionBusy}
                                 title={t('codex.localAccess.pauseAccount', '暂停账号调度')}
@@ -2683,7 +2407,7 @@ export function CodexLocalAccessModal({
                             )}
                             <button
                               type="button"
-                              className="folder-icon-btn codex-local-access-order-btn codex-local-access-remove-member-btn"
+                              className="folder-icon-btn codex-local-access-member-icon-btn codex-local-access-remove-member-btn"
                               onClick={() => void handleRemoveMember(account.id)}
                               disabled={actionBusy}
                               title={t('codex.localAccess.removeMember', '移出 API 服务')}
