@@ -6445,8 +6445,7 @@ async fn resolve_affinity_account(previous_response_id: &str) -> Option<String> 
 }
 
 fn request_affinity_key(request: &ParsedRequest) -> Option<String> {
-    codex_turn_state_request_id(request)
-        .or_else(|| codex_turn_metadata_request_id(request))
+    codex_turn_state_request_id(request).or_else(|| codex_turn_metadata_request_id(request))
 }
 
 async fn resolve_request_affinity_account_from_runtime(request: &ParsedRequest) -> Option<String> {
@@ -13845,7 +13844,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             socket
                 .write_all(response.as_bytes())
                 .await
-                .expect("fake upstream should write 429");
+                .expect("fake upstream should write response");
             seen
         });
 
@@ -14528,14 +14527,21 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let active_request = ParsedRequest {
             method: "POST".to_string(),
             target: "/v1/responses".to_string(),
-            headers: HashMap::from([(
-                "x-client-request-id".to_string(),
-                "req-active-task".to_string(),
-            )]),
+            headers: HashMap::from([
+                (
+                    "x-client-request-id".to_string(),
+                    "thread-request-id".to_string(),
+                ),
+                (
+                    "x-codex-turn-metadata".to_string(),
+                    r#"{"turn_id":"turn-old"}"#.to_string(),
+                ),
+            ]),
             body: br#"{"model":"gpt-5.5","input":"already running"}"#.to_vec(),
         };
         let active_context = build_audit_context(&active_request, Some("api-old"));
-        let mut active_lease = grant_active_stream_lease(&active_context, "api-old");
+        let mut active_lease =
+            grant_active_stream_lease_for_request(&active_context, "api-old", &active_request);
         assert_eq!(active_stream_lease_count_for_account("api-old"), 1);
 
         let mut persisted_registry =
@@ -14572,7 +14578,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("active client should connect");
         let active_body = br#"{"model":"gpt-5.5","input":"continue old task"}"#;
         let active_http = format!(
-            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-active-task\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-request-id\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-old\"}}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             active_body.len(),
             String::from_utf8_lossy(active_body)
         );
@@ -14594,7 +14600,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("new client should connect");
         let new_body = br#"{"model":"gpt-5.5","input":"new task"}"#;
         let new_http = format!(
-            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-new-task\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-request-id\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-new\"}}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             new_body.len(),
             String::from_utf8_lossy(new_body)
         );
@@ -14652,7 +14658,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         );
         assert!(
             seen.iter()
-                .any(|request| request.contains("req-active-task")
+                .any(|request| request.contains("\"turn_id\":\"turn-old\"")
                     && request.contains("Bearer sk-local-old")),
             "active task should reach the old account: {}",
             seen_text
@@ -14660,14 +14666,15 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(
             !seen
                 .iter()
-                .any(|request| request.contains("req-active-task")
+                .any(|request| request.contains("\"turn_id\":\"turn-old\"")
                     && request.contains("Bearer sk-local-current")),
             "active task must not be sent to the replacement account: {}",
             seen_text
         );
         assert!(
-            seen.iter().any(|request| request.contains("req-new-task")
-                && request.contains("Bearer sk-local-current")),
+            seen.iter()
+                .any(|request| request.contains("\"turn_id\":\"turn-new\"")
+                    && request.contains("Bearer sk-local-current")),
             "new task should reach the replacement account: {}",
             seen_text
         );
@@ -14880,10 +14887,16 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let old_affinity_request = ParsedRequest {
             method: "POST".to_string(),
             target: "/v1/responses".to_string(),
-            headers: HashMap::from([(
-                "x-client-request-id".to_string(),
-                "req-inflight-old-stream".to_string(),
-            )]),
+            headers: HashMap::from([
+                (
+                    "x-client-request-id".to_string(),
+                    "thread-request-id".to_string(),
+                ),
+                (
+                    "x-codex-turn-metadata".to_string(),
+                    r#"{"turn_id":"turn-old-stream"}"#.to_string(),
+                ),
+            ]),
             body: br#"{"model":"gpt-5.5","input":"old stream start"}"#.to_vec(),
         };
         let mut persisted_registry =
@@ -14921,7 +14934,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 .expect("old client should connect");
             let body = br#"{"model":"gpt-5.5","input":"old stream"}"#;
             let request = format!(
-                "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-inflight-old-stream\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-request-id\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-old-stream\"}}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
                 body.len(),
                 String::from_utf8_lossy(body)
             );
@@ -14975,7 +14988,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("new client should connect");
         let new_body = br#"{"model":"gpt-5.5","input":"new task after exhaustion"}"#;
         let new_request = format!(
-            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-new-after-exhausted\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-request-id\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-new-after-exhausted\"}}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             new_body.len(),
             String::from_utf8_lossy(new_body)
         );
@@ -15046,24 +15059,26 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             new_response_text
         );
         assert!(
-            seen.iter()
-                .any(|request| request.contains("req-inflight-old-stream")
-                    && request.contains("Bearer sk-local-old")),
+            seen.iter().any(
+                |request| request.contains("\"turn_id\":\"turn-old-stream\"")
+                    && request.contains("Bearer sk-local-old")
+            ),
             "old stream should reach the original account: {}",
             seen_text
         );
         assert!(
-            !seen
-                .iter()
-                .any(|request| request.contains("req-inflight-old-stream")
-                    && request.contains("Bearer sk-local-current")),
+            !seen.iter().any(
+                |request| request.contains("\"turn_id\":\"turn-old-stream\"")
+                    && request.contains("Bearer sk-local-current")
+            ),
             "old stream must never be replayed on the replacement account: {}",
             seen_text
         );
         assert!(
-            seen.iter()
-                .any(|request| request.contains("req-new-after-exhausted")
-                    && request.contains("Bearer sk-local-current")),
+            seen.iter().any(
+                |request| request.contains("\"turn_id\":\"turn-new-after-exhausted\"")
+                    && request.contains("Bearer sk-local-current")
+            ),
             "new task should reach the replacement account: {}",
             seen_text
         );
@@ -15748,10 +15763,16 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let request = ParsedRequest {
             method: "POST".to_string(),
             target: "/v1/responses".to_string(),
-            headers: HashMap::from([(
-                "x-client-request-id".to_string(),
-                "req-manual-pause".to_string(),
-            )]),
+            headers: HashMap::from([
+                (
+                    "x-client-request-id".to_string(),
+                    "thread-request-id".to_string(),
+                ),
+                (
+                    "x-codex-turn-metadata".to_string(),
+                    r#"{"turn_id":"turn-manual-pause"}"#.to_string(),
+                ),
+            ]),
             body: Vec::new(),
         };
         assert!(upsert_request_affinity_binding(

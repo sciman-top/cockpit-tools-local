@@ -58,6 +58,7 @@ import {
   maskSensitiveValue,
   PRIVACY_MODE_CHANGED_EVENT,
 } from '../../utils/privacy';
+import { sortCodexLocalAccessAccountsForScheduling } from '../../utils/codexAccountSort';
 
 interface CodexWakeupGeneralConfig {
   language?: string;
@@ -75,6 +76,7 @@ interface CodexWakeupGeneralConfig {
 
 interface CodexWakeupContentProps {
   accounts: CodexAccount[];
+  currentAccountId?: string | null;
   onRefreshAccounts: () => Promise<void>;
   openPresetManagerSignal?: number;
 }
@@ -814,6 +816,7 @@ function calculatePreviewRuns(taskDraft: TaskDraft, count: number = 5) {
 
 export function CodexWakeupContent({
   accounts,
+  currentAccountId,
   onRefreshAccounts,
   openPresetManagerSignal = 0,
 }: CodexWakeupContentProps) {
@@ -838,8 +841,12 @@ export function CodexWakeupContent({
   } = useCodexWakeupStore();
 
   const oauthAccounts = useMemo(
-    () => accounts.filter((account) => !isCodexApiKeyAccount(account)),
-    [accounts],
+    () =>
+      sortCodexLocalAccessAccountsForScheduling(
+        accounts.filter((account) => !isCodexApiKeyAccount(account)),
+        currentAccountId,
+      ),
+    [accounts, currentAccountId],
   );
   const modelPresetMap = useMemo(
     () => new Map(state.model_presets.map((preset) => [preset.id, preset])),

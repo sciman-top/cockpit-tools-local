@@ -45,6 +45,7 @@ import {
   resolveAccountsOverviewScopeFromQuickSettingsType,
   setAccountsOverviewFilterPersistenceEnabled,
 } from '../utils/accountsOverviewFilterPersistence';
+import { sortCodexLocalAccessAccountsForScheduling } from '../utils/codexAccountSort';
 import './QuickSettingsPopover.css';
 
 /** GeneralConfig from backend */
@@ -335,6 +336,7 @@ export function QuickSettingsPopover({ type }: QuickSettingsPopoverProps) {
   const [antigravityAccounts, setAntigravityAccounts] = useState<Account[]>([]);
   const [antigravityAccountGroups, setAntigravityAccountGroups] = useState<AccountGroup[]>([]);
   const [codexAccounts, setCodexAccounts] = useState<CodexAccount[]>([]);
+  const [codexCurrentAccountId, setCodexCurrentAccountId] = useState<string | null>(null);
   const [codexAccountGroups, setCodexAccountGroups] = useState<CodexAccountGroup[]>([]);
   const [codexShowCodeReviewQuota, setCodexShowCodeReviewQuota] = useState(
     isCodexCodeReviewQuotaVisibleByDefault,
@@ -383,13 +385,15 @@ export function QuickSettingsPopover({ type }: QuickSettingsPopoverProps) {
   );
   const codexScopeAccounts = useMemo<AutoSwitchScopeAccount[]>(
     () =>
-      codexAccounts.map((account) => ({
-        id: account.id,
-        label: account.email,
-        searchableText: account.email,
-        tags: account.tags || [],
-      })),
-    [codexAccounts],
+      sortCodexLocalAccessAccountsForScheduling(codexAccounts, codexCurrentAccountId).map(
+        (account) => ({
+          id: account.id,
+          label: account.email,
+          searchableText: account.email,
+          tags: account.tags || [],
+        }),
+      ),
+    [codexAccounts, codexCurrentAccountId],
   );
   const codexScopeGroups = useMemo(
     () =>
@@ -743,8 +747,22 @@ export function QuickSettingsPopover({ type }: QuickSettingsPopoverProps) {
           ? Promise.all([
               codexService.listCodexAccounts(),
               getCodexAccountGroups(),
-            ]).catch(() => [[] as CodexAccount[], [] as CodexAccountGroup[]] as const)
-          : Promise.resolve([[] as CodexAccount[], [] as CodexAccountGroup[]] as const);
+              codexService.getCurrentCodexAccount(),
+            ]).catch(
+              () =>
+                [
+                  [] as CodexAccount[],
+                  [] as CodexAccountGroup[],
+                  null as CodexAccount | null,
+                ] as const,
+            )
+          : Promise.resolve(
+              [
+                [] as CodexAccount[],
+                [] as CodexAccountGroup[],
+                null as CodexAccount | null,
+              ] as const,
+            );
 
       const [cfg, groups, antigravityScopeData, codexScopeData] = await Promise.all([
         invoke<GeneralConfig>('get_general_config'),
@@ -753,12 +771,13 @@ export function QuickSettingsPopover({ type }: QuickSettingsPopoverProps) {
         codexScopeDataPromise,
       ]);
       const [nextAntigravityAccounts, nextAntigravityGroups] = antigravityScopeData;
-      const [nextCodexAccounts, nextCodexGroups] = codexScopeData;
+      const [nextCodexAccounts, nextCodexGroups, nextCodexCurrentAccount] = codexScopeData;
       setConfig(cfg);
       setAutoSwitchDisplayGroups(groups);
       setAntigravityAccounts(nextAntigravityAccounts || []);
       setAntigravityAccountGroups(nextAntigravityGroups || []);
       setCodexAccounts(nextCodexAccounts || []);
+      setCodexCurrentAccountId(nextCodexCurrentAccount?.id ?? null);
       setCodexAccountGroups(nextCodexGroups || []);
       // 非预设值通过下拉中的动态选项展示，不默认进入输入态
       setRefreshEditing(false);

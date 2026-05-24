@@ -16,6 +16,7 @@ await esbuild.build({
     accountOrder: path.join(root, 'src/utils/accountOrder.ts'),
     floatingCardSelectors: path.join(root, 'src/utils/floatingCardSelectors.ts'),
     codexAccountSort: path.join(root, 'src/utils/codexAccountSort.ts'),
+    codexLocalAccessUiState: path.join(root, 'src/utils/codexLocalAccessUiState.ts'),
     codexTypes: path.join(root, 'src/types/codex.ts'),
   },
   outdir,
@@ -30,6 +31,7 @@ await esbuild.build({
 const accountOrder = await import(pathToFileURL(path.join(outdir, 'accountOrder.mjs')).href);
 const selectors = await import(pathToFileURL(path.join(outdir, 'floatingCardSelectors.mjs')).href);
 const sort = await import(pathToFileURL(path.join(outdir, 'codexAccountSort.mjs')).href);
+const localAccessUiState = await import(pathToFileURL(path.join(outdir, 'codexLocalAccessUiState.mjs')).href);
 const codexTypes = await import(pathToFileURL(path.join(outdir, 'codexTypes.mjs')).href);
 
 function codexAccount(id, quota, extra = {}) {
@@ -191,6 +193,57 @@ assert.deepEqual(
     'weekly-0-fewer-requests',
   ],
   'API service member lists should show usable weekly quota before weekly-exhausted accounts',
+);
+
+assert.equal(
+  sort.getCodexLocalAccessPrimaryRefreshAccountId(
+    ['current-weekly-0', 'quota-error', 'api-key'],
+    [
+      codexAccount('current-weekly-0', quota(31, 0)),
+      codexAccount('quota-error', quota(100, 100), {
+        quota_error: { message: 'quota refresh failed', timestamp: 1 },
+      }),
+      codexAccount('api-key', quota(100, 100), { auth_mode: 'apikey' }),
+    ],
+  ),
+  'current-weekly-0',
+  'API service card refresh must target the first displayed OAuth account, not the stale/error refresh-priority account',
+);
+
+assert.equal(
+  sort.getCodexLocalAccessPrimaryRefreshAccountId(
+    ['api-key', 'oauth-second'],
+    [
+      codexAccount('api-key', quota(100, 100), { auth_mode: 'apikey' }),
+      codexAccount('oauth-second', quota(50, 50)),
+    ],
+  ),
+  'oauth-second',
+  'API service card refresh should skip API-key credentials when resolving the displayed primary account',
+);
+
+assert.equal(
+  localAccessUiState.getCodexLocalAccessPrimaryActionKind(
+    false,
+    { mode: 'direct_projection', accountKind: 'oauth', currentAccountId: 'acc-direct', updatedAt: 1 },
+  ),
+  'activate',
+  'API service card should offer activation while Codex remains in Direct API/OAuth mode',
+);
+
+assert.equal(
+  localAccessUiState.getCodexLocalAccessPrimaryActionKind(
+    false,
+    { mode: 'cockpit_api_service', accountKind: 'oauth', currentAccountId: 'acc-api', updatedAt: 1 },
+  ),
+  'deactivate',
+  'API service card should offer deactivation only when Codex is using Cockpit API Service mode',
+);
+
+assert.equal(
+  localAccessUiState.getCodexLocalAccessPrimaryActionKind(true, null),
+  'deactivate',
+  'API service card should also offer deactivation when the default Codex launch binding is the API service account',
 );
 
 const refreshNowMs = 1_700_000_000_000;

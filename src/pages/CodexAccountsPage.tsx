@@ -121,6 +121,10 @@ import {
   type CodexGroupSortMeta,
 } from "../utils/codexAccountSort";
 import { getCodexLocalAccessQuotaAccountRefreshKey } from "../utils/codexLocalAccessHealth";
+import {
+  getCodexLocalAccessPrimaryActionKind,
+  isCodexLocalAccessRuntimeActive,
+} from "../utils/codexLocalAccessUiState";
 
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
@@ -3947,9 +3951,10 @@ export function CodexAccountsPage() {
       localAccessState?.effectiveAccountIds ?? localAccessConfiguredAccountIds;
     return candidateIds.filter((accountId) => configuredIds.has(accountId));
   }, [localAccessConfiguredAccountIds, localAccessState?.effectiveAccountIds]);
-  const localAccessRuntimeActive =
-    localAccessLaunchCurrent ||
-    codexRuntimeMode?.mode === "cockpit_api_service";
+  const localAccessRuntimeActive = isCodexLocalAccessRuntimeActive(
+    localAccessLaunchCurrent,
+    codexRuntimeMode,
+  );
   const overviewCurrentAccountId =
     localAccessRuntimeActive && localAccessEffectiveAccountIds.length > 0
       ? localAccessEffectiveAccountIds[0]
@@ -6778,8 +6783,10 @@ export function CodexAccountsPage() {
             })
         : null;
     const localAccessPrimaryActionIsDeactivate =
-      localAccessLaunchCurrent ||
-      codexRuntimeMode?.mode === "cockpit_api_service";
+      getCodexLocalAccessPrimaryActionKind(
+        localAccessLaunchCurrent,
+        codexRuntimeMode,
+      ) === "deactivate";
     const localAccessPrimaryActionTitle = localAccessPrimaryActionIsDeactivate
       ? t("codex.localAccess.disableService", "停用服务")
       : t("codex.localAccess.activateAction", "启动 API 服务");
@@ -11151,6 +11158,7 @@ export function CodexAccountsPage() {
       {activeTab === "wakeup" && (
         <CodexWakeupContent
           accounts={accounts}
+          currentAccountId={overviewCurrentAccountId}
           openPresetManagerSignal={wakeupPresetManagerSignal}
           onRefreshAccounts={async () => {
             await fetchAccounts();

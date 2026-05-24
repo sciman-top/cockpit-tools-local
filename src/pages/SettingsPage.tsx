@@ -45,6 +45,7 @@ import {
   loadCurrentAccountRefreshMinutesMap,
   saveCurrentAccountRefreshMinutesMap,
 } from '../utils/currentAccountRefresh';
+import { sortCodexLocalAccessAccountsForScheduling } from '../utils/codexAccountSort';
 import { ALL_PLATFORM_IDS, PlatformId } from '../types/platform';
 import { SettingsAccountTransferSection } from '../components/SettingsAccountTransferSection';
 import './settings/Settings.css';
@@ -476,6 +477,7 @@ export function SettingsPage() {
   const [antigravityAccounts, setAntigravityAccounts] = useState<Account[]>([]);
   const [antigravityAccountGroups, setAntigravityAccountGroups] = useState<AccountGroup[]>([]);
   const [codexAccounts, setCodexAccounts] = useState<CodexAccount[]>([]);
+  const [codexCurrentAccountId, setCodexCurrentAccountId] = useState<string | null>(null);
   const [codexGroups, setCodexGroups] = useState<CodexAccountGroup[]>([]);
 
   const antigravityScopeTypeOptions = useMemo(
@@ -504,30 +506,40 @@ export function SettingsPage() {
   );
   const codexScopeAccounts = useMemo<AutoSwitchScopeAccount[]>(
     () =>
-      codexAccounts.map((account) => ({
-        id: account.id,
-        label: account.email,
-        searchableText: account.email,
-        tags: account.tags || [],
-      })),
-    [codexAccounts],
+      sortCodexLocalAccessAccountsForScheduling(codexAccounts, codexCurrentAccountId).map(
+        (account) => ({
+          id: account.id,
+          label: account.email,
+          searchableText: account.email,
+          tags: account.tags || [],
+        }),
+      ),
+    [codexAccounts, codexCurrentAccountId],
   );
 
   useEffect(() => {
     let mounted = true;
     const loadAutoSwitchScopeData = async () => {
       try {
-        const [nextAntigravityAccounts, nextAntigravityGroups, nextCodexAccounts, nextCodexGroups] =
+        const [
+          nextAntigravityAccounts,
+          nextAntigravityGroups,
+          nextCodexAccounts,
+          nextCodexGroups,
+          nextCodexCurrentAccount,
+        ] =
           await Promise.all([
             accountService.listAccounts(),
             getAccountGroups(),
             codexService.listCodexAccounts(),
             getCodexAccountGroups(),
+            codexService.getCurrentCodexAccount(),
           ]);
         if (!mounted) return;
         setAntigravityAccounts(nextAntigravityAccounts || []);
         setAntigravityAccountGroups(nextAntigravityGroups || []);
         setCodexAccounts(nextCodexAccounts || []);
+        setCodexCurrentAccountId(nextCodexCurrentAccount?.id ?? null);
         setCodexGroups(nextCodexGroups || []);
       } catch (error) {
         console.error('加载自动切号账号范围数据失败:', error);
@@ -535,6 +547,7 @@ export function SettingsPage() {
         setAntigravityAccounts([]);
         setAntigravityAccountGroups([]);
         setCodexAccounts([]);
+        setCodexCurrentAccountId(null);
         setCodexGroups([]);
       }
     };
