@@ -6573,7 +6573,9 @@ async fn resolve_affinity_account(previous_response_id: &str) -> Option<String> 
 }
 
 fn request_affinity_key(request: &ParsedRequest) -> Option<String> {
-    codex_turn_state_request_id(request).or_else(|| codex_turn_metadata_request_id(request))
+    // Official Codex treats x-codex-turn-state as the sticky-routing token;
+    // x-codex-turn-metadata is observability lineage only.
+    codex_turn_state_request_id(request)
 }
 
 async fn resolve_request_affinity_account_from_runtime(request: &ParsedRequest) -> Option<String> {
@@ -11051,7 +11053,7 @@ fn should_write_in_band_pool_unavailable_response(
 
 fn build_synthetic_pool_unavailable_text(error: &ProxyDispatchError) -> String {
     format!(
-        "Cockpit API Service pool_unavailable: {}",
+        "Cockpit API Service pool_unavailable: {}\nrecover_action=retry_after_cooldown_or_start_new_task",
         error.message.trim()
     )
 }
@@ -11124,7 +11126,12 @@ fn build_synthetic_pool_unavailable_responses_payload(
             "total_tokens": 0
         },
         "user": null,
-        "metadata": {}
+        "metadata": {
+            "cockpit_local_closure": "pool_unavailable",
+            "cockpit_completion_mode": "synthetic_pool_unavailable_notice",
+            "cockpit_completion_contract": "openai_codex_response_completed_with_visible_assistant_message",
+            "cockpit_recover_action": "retry_after_cooldown_or_start_new_task"
+        }
     })
 }
 
@@ -11286,8 +11293,7 @@ async fn write_in_band_pool_unavailable_response(
             request_is_stream: true
         }
     );
-    let payload =
-        build_synthetic_pool_unavailable_responses_payload(request, error, !is_stream_response);
+    let payload = build_synthetic_pool_unavailable_responses_payload(request, error, true);
     let response_id = extract_response_id(&payload);
     let context = build_audit_context(request, error.account_id.as_deref());
     let mut detail = BTreeMap::from([
@@ -11906,10 +11912,11 @@ mod tests {
         prune_process_sticky_binding, record_manual_pause_audit_event,
         record_manual_recovery_audit_event, recover_health_registry_account,
         request_affinity_account_from_registry, request_affinity_key,
-        reset_active_stream_leases_for_tests, reset_local_api_backpressure_for_tests,
-        resolve_supported_model_alias, retry_failover_account_attempt_limit,
-        retry_failover_max_retries, save_health_registry_to_path, selector_audit_detail,
-        selector_selected_reason, set_runtime_integration_mode, should_defer_pool_unavailable,
+        request_lineage_id_with_source, reset_active_stream_leases_for_tests,
+        reset_local_api_backpressure_for_tests, resolve_supported_model_alias,
+        retry_failover_account_attempt_limit, retry_failover_max_retries,
+        save_health_registry_to_path, selector_audit_detail, selector_selected_reason,
+        set_runtime_integration_mode, should_defer_pool_unavailable,
         should_restore_direct_projection_before_app_exit,
         should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
@@ -13068,9 +13075,16 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             response_text
         );
         assert!(
-            !response_text.contains("Cockpit API Service pool_unavailable")
-                && !response_text.contains("API 服务号池暂无可调度账号"),
-            "streaming local pool_unavailable completion must stay silent so it does not pollute the active Codex turn: {}",
+            response_text.contains("Cockpit API Service pool_unavailable")
+                && response_text.contains("recover_action=retry_after_cooldown_or_start_new_task"),
+            "streaming local pool_unavailable completion must include visible assistant text so Codex does not treat it as a silent successful turn: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("synthetic_pool_unavailable_notice")
+                && response_text
+                    .contains("openai_codex_response_completed_with_visible_assistant_message"),
+            "expected local completion metadata to explain the Cockpit closure mode, got: {}",
             response_text
         );
         assert!(
@@ -13320,9 +13334,16 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             response_text
         );
         assert!(
-            !response_text.contains("Cockpit API Service pool_unavailable")
-                && !response_text.contains("API 服务号池暂无可调度账号"),
-            "streaming local pool_unavailable completion must not become visible assistant text: {}",
+            response_text.contains("Cockpit API Service pool_unavailable")
+                && response_text.contains("recover_action=retry_after_cooldown_or_start_new_task"),
+            "streaming local pool_unavailable completion must include visible assistant text so Codex does not treat it as a silent successful turn: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("synthetic_pool_unavailable_notice")
+                && response_text
+                    .contains("openai_codex_response_completed_with_visible_assistant_message"),
+            "expected local completion metadata to explain the Cockpit closure mode, got: {}",
             response_text
         );
         assert!(
@@ -13818,7 +13839,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn codex_turn_metadata_continuation_bypasses_pool_snapshot_and_forwards_upstream() {
+    async fn codex_turn_metadata_lineage_does_not_pin_routing_account() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -13849,7 +13870,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             let (mut socket, _) = upstream_listener
                 .accept()
                 .await
-                .expect("fake upstream should accept request-id continuation");
+                .expect("fake upstream should accept metadata-only request");
             let mut request = Vec::new();
             let mut chunk = [0u8; 1024];
             loop {
@@ -13869,19 +13890,19 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             assert!(
                 request_text.contains("X-Client-Request-Id: req-active-task")
                     || request_text.contains("x-client-request-id: req-active-task"),
-                "continuation request should preserve the thread request id: {}",
+                "request should preserve the thread request id: {}",
                 request_text
             );
             assert!(
                 request_text
                     .to_ascii_lowercase()
                     .contains("x-codex-turn-metadata: {\"turn_id\":\"turn-active\"}"),
-                "continuation request should preserve the Codex turn metadata: {}",
+                "request should preserve the Codex turn metadata: {}",
                 request_text
             );
             assert!(
                 !request_text.contains("previous_response_id"),
-                "this regression covers turn metadata continuity without previous_response_id: {}",
+                "this regression covers turn metadata without previous_response_id: {}",
                 request_text
             );
             let body = concat!(
@@ -13905,18 +13926,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         });
 
         let now = now_ms();
-        let mut registry = empty_health_registry(now);
-        registry.model_cooldowns.insert(
-            health_registry_model_key("api-replacement", "gpt-5.5"),
-            CodexLocalAccessModelCooldown {
-                account_id: "api-replacement".to_string(),
-                model: "gpt-5.5".to_string(),
-                cooldown_until_ms: now + (7 * 24 * 60 * 60 * 1000),
-                last_error_type: Some("usage_limit_reached".to_string()),
-                last_request_id: Some("req-other-task".to_string()),
-                updated_at: now,
-            },
-        );
+        let registry = empty_health_registry(now);
         save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
             .expect("health registry should be written to isolated test root");
 
@@ -13970,8 +13980,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         }
 
         let account = CodexAccount::new_api_key(
-            "api-continuation".to_string(),
-            "api-continuation@example.com".to_string(),
+            "api-replacement".to_string(),
+            "api-replacement@example.com".to_string(),
             "sk-local-test".to_string(),
             CodexApiProviderMode::Custom,
             Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
@@ -13979,43 +13989,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             None,
         );
         crate::modules::codex_account::save_account(&account)
-            .expect("affinity account should be persisted outside the active pool");
+            .expect("pool account should be persisted");
         cache_prepared_account(&account).await;
-
-        let affinity_request = ParsedRequest {
-            method: "POST".to_string(),
-            target: "/v1/responses".to_string(),
-            headers: HashMap::from([
-                (
-                    "x-client-request-id".to_string(),
-                    "req-active-task".to_string(),
-                ),
-                (
-                    "x-codex-turn-metadata".to_string(),
-                    r#"{"turn_id":"turn-active"}"#.to_string(),
-                ),
-            ]),
-            body: br#"{"model":"gpt-5.5","input":"previous successful task step"}"#.to_vec(),
-            gateway_request_id: "gw-test-4".to_string(),
-        };
-        let mut persisted_registry =
-            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
-                .expect("health registry should load from isolated test root");
-        assert!(upsert_request_affinity_binding(
-            &mut persisted_registry,
-            &affinity_request,
-            "api-continuation",
-            now_ms(),
-        ));
-        save_health_registry_to_path(
-            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
-            &persisted_registry,
-        )
-        .expect("persistent request affinity should be written");
-        {
-            let mut runtime = gateway_runtime().lock().await;
-            runtime.request_affinity.clear();
-        }
 
         let server = tokio::spawn(async move {
             let (stream, peer) = listener.accept().await.expect("server should accept");
@@ -14038,25 +14013,25 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let mut response = Vec::new();
         tokio::time::timeout(Duration::from_secs(2), client.read_to_end(&mut response))
             .await
-            .expect("request-id continuation stream should finish")
+            .expect("metadata-only request stream should finish")
             .expect("response read should succeed");
         let response_text = String::from_utf8_lossy(&response);
         assert!(
             response_text.contains("resp_request_affinity_ok") && response_text.contains("OK"),
-            "request-id continuation must forward upstream output instead of local pool text: {}",
+            "metadata-only request must forward upstream output instead of local pool text: {}",
             response_text
         );
         assert!(
             !response_text.contains("Cockpit API Service pool_unavailable"),
-            "request-id continuation must not be converted to local pool_unavailable output: {}",
+            "metadata-only request must not be converted to local pool_unavailable output: {}",
             response_text
         );
 
         let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
             .expect("audit should be written to isolated root");
-        assert!(audit.contains("\"phase\":\"local_backpressure\""));
-        assert!(audit.contains("\"reason\":\"codex_turn_metadata\""));
+        assert!(audit.contains("\"request_id_source\":\"codex_turn_metadata_turn_id\""));
         assert!(audit.contains("\"phase\":\"stream_completed\""));
+        assert!(!audit.contains("\"phase\":\"fallback_blocked\""));
         assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
         assert!(!audit.contains("\"errorType\":\"pool_unavailable\""));
 
@@ -14337,6 +14312,271 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
             None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
         }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn codex_turn_metadata_only_request_falls_back_after_old_account_429() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-metadata-fallback-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let upstream_seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_seen_task = std::sync::Arc::clone(&upstream_seen);
+        let upstream_server = tokio::spawn(async move {
+            for _ in 0..2 {
+                let Ok(Ok((mut socket, _))) =
+                    tokio::time::timeout(Duration::from_secs(2), upstream_listener.accept()).await
+                else {
+                    break;
+                };
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let read = socket
+                        .read(&mut chunk)
+                        .await
+                        .expect("fake upstream should read request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request_text = String::from_utf8_lossy(&request).to_string();
+                upstream_seen_task.lock().await.push(request_text.clone());
+
+                assert!(
+                    request_text
+                        .to_ascii_lowercase()
+                        .contains("x-codex-turn-metadata: {\"turn_id\":\"turn-live-metadata\"}"),
+                    "metadata header should be forwarded unchanged: {}",
+                    request_text
+                );
+                assert!(
+                    !request_text
+                        .to_ascii_lowercase()
+                        .contains("x-codex-turn-state:"),
+                    "fixture intentionally has metadata lineage without turn-state: {}",
+                    request_text
+                );
+
+                if request_text.contains("Bearer sk-local-old") {
+                    let body =
+                        r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+                    let response = format!(
+                        "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nRetry-After: 600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.as_bytes().len(),
+                        body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("fake upstream should write old-account 429");
+                    continue;
+                }
+
+                let body = concat!(
+                    "event: response.created\n",
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_metadata_fallback_ok\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                    "event: response.output_text.delta\n",
+                    "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"CURRENT\"}\n\n",
+                    "event: response.completed\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_metadata_fallback_ok\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                    "data: [DONE]\n\n"
+                );
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("fake upstream should write current-account response");
+            }
+        });
+
+        let now = now_ms();
+        let mut registry = empty_health_registry(now);
+        assert!(upsert_process_sticky_binding(&mut registry, "api-old", now));
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": 0,
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 1,
+                "minRequestIntervalSeconds": 0,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 5,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "next_request_only",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-old", "api-current"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection.clone());
+            runtime.running = true;
+        }
+
+        let old_account = CodexAccount::new_api_key(
+            "api-old".to_string(),
+            "api-old@example.com".to_string(),
+            "sk-local-old".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        let current_account = CodexAccount::new_api_key(
+            "api-current".to_string(),
+            "api-current@example.com".to_string(),
+            "sk-local-current".to_string(),
+            CodexApiProviderMode::Custom,
+            Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+            None,
+            None,
+        );
+        crate::modules::codex_account::save_account(&old_account)
+            .expect("old account should be persisted");
+        crate::modules::codex_account::save_account(&current_account)
+            .expect("current account should be persisted");
+
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([
+                ("accept".to_string(), "text/event-stream".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+                (
+                    "x-client-request-id".to_string(),
+                    "thread-request-id".to_string(),
+                ),
+                (
+                    "x-codex-turn-metadata".to_string(),
+                    r#"{"turn_id":"turn-live-metadata"}"#.to_string(),
+                ),
+            ]),
+            body: br#"{"model":"gpt-5.5","input":"metadata-only continuation"}"#.to_vec(),
+            gateway_request_id: "gw-test-5b".to_string(),
+        };
+        assert_eq!(
+            request_affinity_key(&request),
+            None,
+            "metadata-only lineage must not activate hard affinity"
+        );
+
+        let success = proxy_request_with_account_pool(&request, &collection)
+            .await
+            .expect("metadata-only request should fail over to healthy account");
+        assert_eq!(success.account_id, "api-current");
+        let response_text = success
+            .upstream
+            .text()
+            .await
+            .expect("current-account response should be readable");
+
+        let seen = upstream_seen.lock().await.clone();
+        let seen_text = seen.join("\n--- request ---\n");
+        let upstream_result = upstream_server.await;
+        assert!(
+            upstream_result.is_ok(),
+            "fake upstream task should join: {:?}",
+            upstream_result
+        );
+
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        match previous_accounts_root {
+            Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
+            None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
+        }
+
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("Bearer sk-local-old")),
+            "first attempt should hit old account: {}",
+            seen_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("Bearer sk-local-current")),
+            "fallback attempt should hit current account: {}",
+            seen_text
+        );
+        assert!(
+            response_text.contains("resp_metadata_fallback_ok")
+                && response_text.contains("CURRENT"),
+            "metadata-only fallback should return current-account response: {}",
+            response_text
+        );
+
+        let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
+            .expect("audit should be written to isolated root");
+        assert!(audit.contains("\"request_id_source\":\"codex_turn_metadata_turn_id\""));
+        assert!(audit.contains("\"phase\":\"fallback_selected\""));
+        assert!(audit.contains("\"outcome\":\"next_account\""));
+        assert!(!audit.contains("\"phase\":\"fallback_blocked\""));
+        assert!(!audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -14920,7 +15160,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn codex_turn_metadata_is_turn_scoped_even_when_client_request_id_is_thread_scoped() {
+    fn codex_turn_metadata_is_lineage_only_not_hard_affinity() {
         let now = 1_700_000_000_000;
         let old_turn = ParsedRequest {
             method: "POST".to_string(),
@@ -14955,30 +15195,44 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             gateway_request_id: "gw-test-9".to_string(),
         };
 
-        let old_key = request_affinity_key(&old_turn).expect("old turn should have affinity key");
-        let new_key = request_affinity_key(&new_turn).expect("new turn should have affinity key");
-        assert!(old_key.starts_with("x-codex-turn-metadata.turn_id:sha256:"));
-        assert!(new_key.starts_with("x-codex-turn-metadata.turn_id:sha256:"));
+        let (old_lineage, old_lineage_source) = request_lineage_id_with_source(&old_turn);
+        let (new_lineage, new_lineage_source) = request_lineage_id_with_source(&new_turn);
+        let old_lineage = old_lineage.expect("old turn should have audit lineage");
+        let new_lineage = new_lineage.expect("new turn should have audit lineage");
+        assert_eq!(old_lineage_source, Some("codex_turn_metadata_turn_id"));
+        assert_eq!(new_lineage_source, Some("codex_turn_metadata_turn_id"));
+        assert!(old_lineage.starts_with("x-codex-turn-metadata.turn_id:sha256:"));
+        assert!(new_lineage.starts_with("x-codex-turn-metadata.turn_id:sha256:"));
         assert_ne!(
-            old_key, new_key,
-            "Codex x-client-request-id is thread-scoped; turn metadata must reset affinity"
+            old_lineage, new_lineage,
+            "Codex x-client-request-id is thread-scoped; turn metadata should remain useful for audit lineage"
+        );
+        assert_eq!(
+            request_affinity_key(&old_turn),
+            None,
+            "x-codex-turn-metadata is observability metadata, not a hard routing key"
+        );
+        assert_eq!(
+            request_affinity_key(&new_turn),
+            None,
+            "x-codex-turn-metadata must not block independent account admission"
         );
 
         let mut registry = empty_health_registry(now);
-        assert!(upsert_request_affinity_binding(
+        assert!(!upsert_request_affinity_binding(
             &mut registry,
             &old_turn,
             "api-old",
             now,
         ));
         assert_eq!(
-            request_affinity_account_from_registry(&registry, &old_turn, now).as_deref(),
-            Some("api-old")
+            request_affinity_account_from_registry(&registry, &old_turn, now),
+            None
         );
         assert_eq!(
             request_affinity_account_from_registry(&registry, &new_turn, now),
             None,
-            "a new Codex turn in the same thread must be admitted independently"
+            "Codex metadata-only turns must be admitted independently"
         );
     }
 
@@ -15211,6 +15465,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                     "x-codex-turn-metadata".to_string(),
                     r#"{"turn_id":"turn-old"}"#.to_string(),
                 ),
+                (
+                    "x-codex-turn-state".to_string(),
+                    "turn-old-state".to_string(),
+                ),
             ]),
             body: br#"{"model":"gpt-5.5","input":"already running"}"#.to_vec(),
             gateway_request_id: "gw-test-11".to_string(),
@@ -15254,7 +15512,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("active client should connect");
         let active_body = br#"{"model":"gpt-5.5","input":"continue old task"}"#;
         let active_http = format!(
-            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-request-id\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-old\"}}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: thread-request-id\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-old\"}}\r\nX-Codex-Turn-State: turn-old-state\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             active_body.len(),
             String::from_utf8_lossy(active_body)
         );
@@ -15579,7 +15837,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let mut persisted_registry =
             load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
                 .expect("health registry should load from isolated test root");
-        assert!(upsert_request_affinity_binding(
+        assert!(!upsert_request_affinity_binding(
             &mut persisted_registry,
             &old_affinity_request,
             "api-old",
@@ -16105,6 +16363,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             response_text
         );
         assert!(
+            response_text.contains("synthetic_pool_unavailable_notice")
+                && response_text.contains("retry_after_cooldown_or_start_new_task"),
+            "expected local completion metadata to explain the Cockpit closure mode, got: {}",
+            response_text
+        );
+        assert!(
             !response_text.contains("503 Service Unavailable"),
             "Codex-facing exhausted non-stream request must not expose transport 503: {}",
             response_text
@@ -16450,6 +16714,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 (
                     "x-codex-turn-metadata".to_string(),
                     r#"{"turn_id":"turn-manual-pause"}"#.to_string(),
+                ),
+                (
+                    "x-codex-turn-state".to_string(),
+                    "turn-manual-pause-state".to_string(),
                 ),
             ]),
             body: Vec::new(),

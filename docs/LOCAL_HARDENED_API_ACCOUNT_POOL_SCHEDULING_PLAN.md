@@ -18,7 +18,7 @@
 
 官方源码和官方文档用于确认 Codex-facing、限流和错误语义；社区优秀项目只作为结构参考。调度、排序、风控降噪的实现和验收必须按下列顺序取证：
 
-- 官方 `openai-codex` 源码是 Codex-facing `/v1/responses`、turn metadata、stream terminal、同 turn 禁止静默跨账号重放、`previous_response_id` continuation 和本地 completed Responses 闭合的最高参考源。参考路径：`D:\CODE\external\_reference_gateway_sources\openai-codex`。
+- 官方 `openai-codex` 源码是 Codex-facing `/v1/responses`、turn state sticky routing、turn metadata observability、stream terminal、同 turn 禁止静默跨账号重放、`previous_response_id` continuation 和本地 completed Responses 闭合的最高参考源。参考路径：`D:\CODE\external\_reference_gateway_sources\openai-codex`。
 - OpenAI 官方限流文档说明 rate limits 按 RPM/RPD/TPM 等维度生效，且可在 organization 和 project 层定义；失败重试仍会消耗 per-minute limit，所以不能连续重发。参考：<https://developers.openai.com/api/docs/guides/rate-limits>
 - OpenAI 官方错误码文档将 429 区分为 request rate limit 和 quota/billing limit，将 503 slow down 解释为突增流量导致的临时节流；建议 pacing、backoff、尊重 response headers，并保持稳定速率后逐步恢复。参考：<https://developers.openai.com/api/docs/guides/error-codes>
 - Gemini API 官方 rate limits 明确限制按 project 统计，不按 API key 统计；多个 key 不应被假设为多个独立额度池。参考：<https://ai.google.dev/gemini-api/docs/rate-limits>
@@ -154,7 +154,8 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 `pool_unavailable` 不是所有客户端都应收到同一种 transport 响应。
 
 - 普通 HTTP 客户端可以收到本地 `503/pool_unavailable` JSON error 和可解释 `Retry-After`。
-- Codex-facing `/v1/responses` 不能直接暴露 transport `503/pool_unavailable`，也不能把 upstream 429 包装成 retry-limit 终止；全池不可用时不得返回 `response.failed` 或静默断开。等待只能发生在本次请求预算内；超预算必须返回 `200` completed Responses SSE/JSON，streaming 序列必须完整闭合到 `response.completed` + `[DONE]`。
+- Codex hard-affinity 只认 `x-codex-turn-state`；`x-codex-turn-metadata` 只用于 audit lineage，不得把 metadata-only continuation/compact/resume 请求钉在旧账号上。
+- Codex-facing `/v1/responses` 不能直接暴露 transport `503/pool_unavailable`，也不能把 upstream 429 包装成 retry-limit 终止；新 admission 全池不可用时不得返回 `response.failed` 或静默断开。等待只能发生在本次请求预算内；超预算必须返回 `200` completed Responses SSE/JSON，streaming 序列必须完整闭合到 `response.completed` + `[DONE]`，并带可见 assistant text 与本地闭合 metadata，避免空白 completed 被误判为正常完成。同任务 hard-affinity block 后出现该本地闭合不算成功，只能作为提前结束风险进入 monitor fail。
 - Stream 请求遇到全池不可用时，`pool_wait` 必须可观测且最终闭合：请求预算内等待后恢复、或 `final_response` / `streamState=completed` / `outcome=in_band_local_completion` / `errorType=pool_unavailable` 显式闭合。parked pool_wait、SSE idle、heartbeat-only open wait、`response.failed` 和旧 `outcome=in_band_synthetic` 都是连续性回归。
 - Bounded backoff 只约束普通 HTTP 和内联账号重试；Codex-facing 的本地全池不可用只能在请求预算内等待 health/cooldown 恢复并转发真实上游，超预算必须用本地 completed Responses 闭合本轮。
 
@@ -258,13 +259,13 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 任务：
 
 - [x] 保持 `scripts/accept-local-hardened-api-continuity.ps1` 作为最高价值入口。
-- [x] 在 acceptance summary 中同时输出两半结论：同任务是否 `429 -> cooldown -> fallback_blocked(hard_affinity) -> in_band_local_completion`，新请求是否避开 exhausted/cooldown 账号。
+- [x] 在 acceptance summary 中同时输出两半结论：同任务是否 `429 -> cooldown -> fallback_blocked(hard_affinity)` 后真实 terminal，还是被本地 `in_band_local_completion` 提前闭合；新请求是否避开 exhausted/cooldown 账号。
 - [x] 继续要求 `-AppSafeIsolatedProbe` 和 `-AssertCodexAppProcessStable` 覆盖 App 不断线场景。
 - [x] 对没有真实 429 的 run 标记 `blocked`，不能当作 quota exhaustion continuity 通过。
 
 验收：
 
-- [x] `same_task_affinity_fallback_blocked` pass 时必须出现 `usage_limit_reached`、`model_cooldown_applied`、`fallback_blocked` + `outcome=hard_affinity` 和本地 completed Responses 闭合。
+- [x] `same_task_affinity_fallback_blocked` pass 时必须出现 `usage_limit_reached`、`model_cooldown_applied`、`fallback_blocked` + `outcome=hard_affinity` 和同任务真实 upstream terminal；本地 completed Responses 闭合只能作为提前结束风险或新 admission 全池耗尽的显式闭合证据。
 - [x] `codex_exec_task_e2e` pass 时使用临时 `CODEX_HOME`，不修改 live Codex config/auth。
 - [x] report 明确记录 live config/auth hashes untouched。
 

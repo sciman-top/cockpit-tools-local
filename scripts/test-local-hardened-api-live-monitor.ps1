@@ -55,19 +55,20 @@ try {
   $dataRootPass = Join-Path $tempRoot "data-pass"
   $auditPass = Join-Path $dataRootPass "codex_local_access_audit.jsonl"
   Write-AuditLines $auditPass @(
-    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-current"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
-    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-current"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; outcome = "response_received" },
-    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-current"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-current"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
-    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-current"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
-    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-current"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion" },
-    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
-    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-next"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active" },
-    [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "req-next"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok" },
-    [ordered]@{ schemaVersion = 1; timestamp = 10; requestId = "req-next"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed" }
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:current"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-pass-1"; turn_lineage_id = "turn:sha256:current"; turn_lineage_source = "codex_turn_metadata_turn_id"; is_continuation = "false"; is_auto_compact_candidate = "false" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:current"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-pass-1"; turn_lineage_id = "turn:sha256:current" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:current"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ gateway_request_id = "gw-pass-1"; turn_lineage_id = "turn:sha256:current"; provider_code = "usage_limit_reached" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:current"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded"; detail = [ordered]@{ gateway_request_id = "gw-pass-1"; turn_lineage_id = "turn:sha256:current" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:current"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-pass-1"; turn_lineage_id = "turn:sha256:current" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:current"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-pass-1"; turn_lineage_id = "turn:sha256:current"; upstream_response_id_hash = "response:sha256:pass1"; terminal_origin = "upstream_completed" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-pass-2"; turn_lineage_id = "turn:sha256:next"; turn_lineage_source = "codex_turn_metadata_turn_id"; is_continuation = "false"; is_auto_compact_candidate = "false" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:next"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-pass-2"; turn_lineage_id = "turn:sha256:next" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "turn:sha256:next"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-pass-2"; turn_lineage_id = "turn:sha256:next" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 10; requestId = "turn:sha256:next"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-pass-2"; turn_lineage_id = "turn:sha256:next"; upstream_response_id_hash = "response:sha256:pass2"; terminal_origin = "upstream_completed" } }
   )
 
   $reportDir = Join-Path $tempRoot "reports"
+  $passExitCodeFile = Join-Path $tempRoot "pass-exit-code.txt"
   $passOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
     -DurationSeconds 0 `
     -DataRoot $dataRootPass `
@@ -80,11 +81,14 @@ try {
     -RequireAppStable `
     -WriteReport `
     -ReportDir $reportDir `
+    -ExitCodeFile $passExitCodeFile `
     -Quiet 2>$null
 
   if ($LASTEXITCODE -ne 0) {
     throw "live monitor pass fixture failed with exit_code=$LASTEXITCODE"
   }
+  Assert-True (Test-Path -LiteralPath $passExitCodeFile) "expected monitor to write exit code file"
+  Assert-Equal ((Get-Content -LiteralPath $passExitCodeFile -Raw).Trim()) "0" "expected pass fixture exit code file to contain zero"
   $passSummary = Convert-JsonOutput $passOutput "pass fixture"
   Assert-Equal $passSummary.overall "pass" "expected pass fixture overall"
   Assert-True (Test-Path -LiteralPath $passSummary.reportPath) "expected written report path"
@@ -97,6 +101,85 @@ try {
   Assert-Equal $passSummary.audit.newRequestAvoidanceCount 1 "expected one new request to avoid the exhausted account"
   Assert-Equal $passSummary.audit.newRequestBlockedReuseCount 0 "expected no new request to reuse the exhausted account"
   Assert-Equal $passSummary.temporaryConfig.restored "not_applicable" "expected live monitor not to manage temp config"
+  Assert-Equal (($passSummary.results | Where-Object name -eq "audit_lineage_fields_present").status) "pass" "expected lineage field coverage pass"
+
+  $dataRootMissingFields = Join-Path $tempRoot "data-missing-fields"
+  $auditMissingFields = Join-Path $dataRootMissingFields "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditMissingFields @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-current"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-current"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; outcome = "response_received" },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-current"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "completed" }
+  )
+  $missingFieldsOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootMissingFields `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 0) "expected missing-field fixture exit code 0 because field coverage warning must not dominate overall"
+  $missingFieldsSummary = Convert-JsonOutput $missingFieldsOutput "missing-field fixture"
+  Assert-Equal (($missingFieldsSummary.results | Where-Object name -eq "audit_lineage_fields_present").status) "warn" "missing lineage fields should warn about limited root-cause diagnostics"
+  Assert-Equal $missingFieldsSummary.audit.auditFieldCoverage.gatewayRequestIdCount 0 "expected missing gateway_request_id coverage"
+
+  $dataRootSameTaskLocalCompletion = Join-Path $tempRoot "data-same-task-local-completion"
+  $auditSameTaskLocalCompletion = Join-Path $dataRootSameTaskLocalCompletion "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditSameTaskLocalCompletion @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-current"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-current"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; outcome = "response_received" },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-current"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-current"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-current"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-current"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion" },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-next"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active" },
+    [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "req-next"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok" },
+    [ordered]@{ schemaVersion = 1; timestamp = 10; requestId = "req-next"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed" }
+  )
+  $sameTaskLocalCompletionOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootSameTaskLocalCompletion `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireQuotaFallback `
+    -RequireStreamCompletion `
+    -RequireCliConfigUntouched `
+    -RequireAppStable `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 1) "expected same-task local completion fixture exit code 1"
+  $sameTaskLocalCompletionSummary = Convert-JsonOutput $sameTaskLocalCompletionOutput "same-task local completion fixture"
+  Assert-Equal $sameTaskLocalCompletionSummary.overall "fail" "expected same-task local completion fixture overall fail"
+  Assert-Equal (($sameTaskLocalCompletionSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "fail" "same-task local completion must fail hard-affinity guard"
+  Assert-Equal (($sameTaskLocalCompletionSummary.results | Where-Object name -eq "responses_pool_unavailable_local_completion_explicit").status) "fail" "same-task local completion must fail local-completion guard"
+  Assert-Equal $sameTaskLocalCompletionSummary.continuitySummary.sameTaskAffinityFallbackBlocked.status "fail" "expected same-task continuity summary fail"
+
+  $dataRootClientAborted = Join-Path $tempRoot "data-client-aborted"
+  $auditClientAborted = Join-Path $dataRootClientAborted "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditClientAborted @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:abort"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-abort-1"; turn_lineage_id = "turn:sha256:abort"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:abort"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-abort-1"; turn_lineage_id = "turn:sha256:abort"; upstream_response_id_hash = "response:sha256:abort1" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:abort"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-abort-1"; turn_lineage_id = "turn:sha256:abort"; lease_id = "41" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:abort"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; streamState = "first_chunk_written"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-abort-1"; turn_lineage_id = "turn:sha256:abort" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:abort"; phase = "client_aborted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; outcome = "client_aborted"; detail = [ordered]@{ gateway_request_id = "gw-abort-1"; turn_lineage_id = "turn:sha256:abort"; terminal_origin = "client_aborted" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:abort"; phase = "lease_released"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "client_aborted"; detail = [ordered]@{ gateway_request_id = "gw-abort-1"; turn_lineage_id = "turn:sha256:abort"; lease_id = "41" } }
+  )
+  $clientAbortedOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootClientAborted `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 2) "expected client-aborted fixture exit code 2"
+  $clientAbortedSummary = Convert-JsonOutput $clientAbortedOutput "client-aborted fixture"
+  Assert-Equal $clientAbortedSummary.audit.clientAbortedStreamCount 1 "expected one client_aborted stream"
+  Assert-Equal $clientAbortedSummary.audit.clientAbortedAfterFirstChunkCount 1 "expected client_aborted after first chunk classification"
+  Assert-Equal (($clientAbortedSummary.results | Where-Object name -eq "client_aborted_streams_classified").status) "blocked" "client_aborted should be classified but not over-attributed"
+  Assert-Equal (($clientAbortedSummary.results | Where-Object name -eq "audit_lineage_fields_present").status) "pass" "lineage fields should be considered present"
 
   $dataRootNoNewRequest = Join-Path $tempRoot "data-no-new-request"
   $auditNoNewRequest = Join-Path $dataRootNoNewRequest "codex_local_access_audit.jsonl"
@@ -105,8 +188,7 @@ try {
     [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-current"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; outcome = "response_received" },
     [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-current"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-current"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
-    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-current"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
-    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-current"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion" }
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-current"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" }
   )
   $noNewRequestOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
     -DurationSeconds 0 `
@@ -120,9 +202,9 @@ try {
   Assert-True ($LASTEXITCODE -eq 2) "expected missing-new-request fixture exit code 2"
   $noNewRequestSummary = Convert-JsonOutput $noNewRequestOutput "missing-new-request fixture"
   Assert-Equal $noNewRequestSummary.overall "blocked" "expected missing-new-request fixture overall blocked"
-  Assert-Equal (($noNewRequestSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "pass" "expected same-task hard-affinity block pass"
+  Assert-Equal (($noNewRequestSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "blocked" "expected unclosed same-task hard-affinity block"
   Assert-Equal (($noNewRequestSummary.results | Where-Object name -eq "new_request_avoids_exhausted_account").status) "blocked" "expected missing new request to block"
-  Assert-Equal $noNewRequestSummary.continuitySummary.sameTaskAffinityFallbackBlocked.status "pass" "expected same-task continuity summary pass"
+  Assert-Equal $noNewRequestSummary.continuitySummary.sameTaskAffinityFallbackBlocked.status "blocked" "expected unclosed same-task continuity summary blocked"
   Assert-Equal $noNewRequestSummary.continuitySummary.newRequestAvoidsExhaustedCooldown.status "blocked" "expected new request summary blocked"
 
   $dataRootNewRequestReuse = Join-Path $tempRoot "data-new-request-reuse"
@@ -133,7 +215,6 @@ try {
     [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-current"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-current"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
     [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-current"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
-    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-current"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion" },
     [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
     [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-next"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 200; outcome = "response_received" }
   )
@@ -176,26 +257,26 @@ try {
   $dataRootMulti = Join-Path $tempRoot "data-multi-account"
   $auditMulti = Join-Path $dataRootMulti "codex_local_access_audit.jsonl"
   Write-AuditLines $auditMulti @(
-    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-a"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-a"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-multi-a"; turn_lineage_id = "turn:sha256:multi-a" } },
     [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-a"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; outcome = "response_received" },
     [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-a"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-a"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
-    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-a"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
-    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-a"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion" },
-    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-a-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-a"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-multi-a"; turn_lineage_id = "turn:sha256:multi-a" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-a"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-multi-a"; turn_lineage_id = "turn:sha256:multi-a"; upstream_response_id_hash = "response:sha256:multi-a" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-a-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-multi-a-next"; turn_lineage_id = "turn:sha256:multi-a-next"; is_continuation = "false"; is_auto_compact_candidate = "false" } },
     [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-a-next"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-a"; outcome = "active" },
     [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "req-a-next"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-a"; status = 200; streamState = "first_chunk_written"; outcome = "ok" },
-    [ordered]@{ schemaVersion = 1; timestamp = 10; requestId = "req-a-next"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-a"; outcome = "completed" },
-    [ordered]@{ schemaVersion = 1; timestamp = 11; requestId = "req-b"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 10; requestId = "req-a-next"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-a"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-multi-a-next"; turn_lineage_id = "turn:sha256:multi-a-next"; upstream_response_id_hash = "response:sha256:multi-a-next" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 11; requestId = "req-b"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-multi-b"; turn_lineage_id = "turn:sha256:multi-b" } },
     [ordered]@{ schemaVersion = 1; timestamp = 12; requestId = "req-b"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-b"; status = 429; outcome = "response_received" },
     [ordered]@{ schemaVersion = 1; timestamp = 13; requestId = "req-b"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-b"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
     [ordered]@{ schemaVersion = 1; timestamp = 14; requestId = "req-b"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-b"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
-    [ordered]@{ schemaVersion = 1; timestamp = 15; requestId = "req-b"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-b"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
-    [ordered]@{ schemaVersion = 1; timestamp = 16; requestId = "req-b"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-b"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion" },
-    [ordered]@{ schemaVersion = 1; timestamp = 17; requestId = "req-b-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 15; requestId = "req-b"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-b"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-multi-b"; turn_lineage_id = "turn:sha256:multi-b" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 16; requestId = "req-b"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-b"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-multi-b"; turn_lineage_id = "turn:sha256:multi-b"; upstream_response_id_hash = "response:sha256:multi-b" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 17; requestId = "req-b-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-multi-b-next"; turn_lineage_id = "turn:sha256:multi-b-next"; is_continuation = "false"; is_auto_compact_candidate = "false" } },
     [ordered]@{ schemaVersion = 1; timestamp = 18; requestId = "req-b-next"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-b"; outcome = "active" },
     [ordered]@{ schemaVersion = 1; timestamp = 19; requestId = "req-b-next"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-b"; status = 200; streamState = "first_chunk_written"; outcome = "ok" },
-    [ordered]@{ schemaVersion = 1; timestamp = 20; requestId = "req-b-next"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-b"; outcome = "completed" }
+    [ordered]@{ schemaVersion = 1; timestamp = 20; requestId = "req-b-next"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-b"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-multi-b-next"; turn_lineage_id = "turn:sha256:multi-b-next"; upstream_response_id_hash = "response:sha256:multi-b-next" } }
   )
   $multiOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
     -DurationSeconds 0 `
@@ -215,7 +296,7 @@ try {
   }
   $multiSummary = Convert-JsonOutput $multiOutput "multi-account fixture"
   Assert-Equal $multiSummary.overall "pass" "expected multi-account fixture overall"
-  Assert-Equal $multiSummary.audit.sameTaskAffinityLocalCompletionCount 2 "expected two same-task local completions"
+  Assert-Equal $multiSummary.audit.sameTaskAffinityLocalCompletionCount 0 "same-task local completions must not be counted as success"
   Assert-Equal $multiSummary.audit.distinctHealthyAccountCountAfterBlock 2 "expected two healthy replacement accounts after blocks"
   Assert-Equal $multiSummary.audit.completedStreamCount 2 "expected two completed streams"
   Assert-Equal (($multiSummary.results | Where-Object name -eq "multi_account_fallback_observed").status) "pass" "expected multi-account fallback result pass"
@@ -278,7 +359,7 @@ try {
   Assert-Equal $crossRequestSummary.overall "fail" "expected cross-request fallback fixture overall fail"
   Assert-Equal $crossRequestSummary.audit.sameTaskAffinityLocalCompletionCount 0 "cross-request 200 must not count as same-task local completion"
   Assert-Equal $crossRequestSummary.audit.retryLimitErrorFound $true "hard-affinity final 429 must count as retry-limit regression"
-  Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "blocked" "expected missing local completion to block same-task contract"
+  Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "fail" "expected unrecovered same-task hard-affinity 429 to fail same-task contract"
   Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "retry_limit_regression_absent").status) "fail" "expected unrecovered hard-affinity 429 to fail retry-limit regression"
 
   $dataRootBlocked = Join-Path $tempRoot "data-blocked"
@@ -304,13 +385,13 @@ try {
   $dataRootRequestReuse = Join-Path $tempRoot "data-request-reuse"
   $auditRequestReuse = Join-Path $dataRootRequestReuse "codex_local_access_audit.jsonl"
   Write-AuditLines $auditRequestReuse @(
-    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-reused"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-reused"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-reused-1"; turn_lineage_id = "turn:sha256:reused-1" } },
     [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-reused"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; outcome = "response_received" },
     [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-reused"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active" },
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-reused"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok" },
     [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-reused"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed" },
     [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-reused"; phase = "lease_released"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed" },
-    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-reused"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-reused"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-reused-2"; turn_lineage_id = "turn:sha256:reused-2" } },
     [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-reused"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion"; detail = [ordered]@{ message = "模型 gpt-5.5 的API 服务号池账号额度均已耗尽，请 1 小时后重试" } }
   )
   $requestReuseOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `

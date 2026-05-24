@@ -6,6 +6,7 @@ param(
   [string]$CodexHome = (Join-Path $HOME ".codex"),
   [string]$AuditPath,
   [string]$ReportDir = (Join-Path (Get-Location) "reports\local-hardened-api-live-monitor"),
+  [string]$ExitCodeFile,
   [string[]]$CodexAppProcessNames = @("Codex"),
   [string[]]$CodexAppPathIncludePatterns = @(
     "*\WindowsApps\OpenAI.Codex_*\app\Codex.exe",
@@ -59,6 +60,21 @@ function Set-MonitorStatus {
     $Result.evidence[$key] = $Evidence[$key]
   }
   $Result
+}
+
+function Write-MonitorExitCode {
+  param(
+    [string]$Path,
+    [int]$Code
+  )
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return
+  }
+  $dir = Split-Path -Parent $Path
+  if (-not [string]::IsNullOrWhiteSpace($dir)) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  }
+  Set-Content -LiteralPath $Path -Encoding ASCII -Value ([string]$Code)
 }
 
 function Get-FileGuardState {
@@ -354,12 +370,15 @@ function Get-AuditLineageId {
     return $explicit
   }
 
+  $requestId = [string]$Event.requestId
   $source = Get-AuditDetailValue -Event $Event -Name "request_id_source"
   if ($source -in @("codex_turn_state", "codex_turn_metadata", "codex_turn_metadata_turn_id")) {
-    $requestId = [string]$Event.requestId
     if (-not [string]::IsNullOrWhiteSpace($requestId) -and $requestId -ne "-") {
       return $requestId
     }
+  }
+  if ($requestId -match '^(x-codex-turn-state|x-codex-turn-metadata|x-codex-turn-metadata\.turn_id|turn):sha256:') {
+    return $requestId
   }
   $null
 }
@@ -538,6 +557,7 @@ function Get-AuditAcceptanceSummary {
 
     if ($event.phase -eq "fallback_blocked" -and $event.outcome -eq "hard_affinity") {
       $localCompletion = $null
+      $terminalCompletion = $null
       $terminal429 = $null
       for ($j = $i + 1; $j -lt $parsedEvents.Count; $j++) {
         $candidate = $parsedEvents[$j]
@@ -556,6 +576,14 @@ function Get-AuditAcceptanceSummary {
           $localCompletion = $candidate
           break
         }
+        if (
+          $candidate.phase -eq "stream_completed" -or
+          ($candidate.phase -eq "lease_released" -and $candidate.outcome -eq "completed") -or
+          ($candidate.phase -eq "final_response" -and $candidate.status -eq 200 -and -not (Test-LocalPoolUnavailableEvent $candidate))
+        ) {
+          $terminalCompletion = $candidate
+          break
+        }
         if ($candidate.phase -eq "final_response" -and $candidate.status -eq 429 -and -not (Test-LocalPoolUnavailableEvent $candidate)) {
           $terminal429 = $candidate
           break
@@ -572,8 +600,12 @@ function Get-AuditAcceptanceSummary {
         blockedTimestamp = $event.timestamp
         localCompletionTimestamp = if ($localCompletion) { $localCompletion.timestamp } else { $null }
         localCompletionAccountHash = if ($localCompletion) { $localCompletion.accountHash } else { $null }
+        terminalCompletionTimestamp = if ($terminalCompletion) { $terminalCompletion.timestamp } else { $null }
+        terminalCompletionAccountHash = if ($terminalCompletion) { $terminalCompletion.accountHash } else { $null }
         terminal429Timestamp = if ($terminal429) { $terminal429.timestamp } else { $null }
         completedLocally = [bool]($null -ne $localCompletion)
+        completedByUpstream = [bool]($null -ne $terminalCompletion)
+        unrecoveredTerminal429 = [bool]($null -ne $terminal429)
       }
     }
   }
@@ -778,6 +810,10 @@ function Get-AuditAcceptanceSummary {
   $completedStreams = @($startedStreams | Where-Object { $_.completed })
   $openStreams = @($startedStreams | Where-Object { -not $_.completed -and -not $_.terminalError })
   $interruptedStreams = @($startedStreams | Where-Object { $_.interruptedByCooldown })
+  $clientAbortedStreams = @($startedStreams | Where-Object { $_.phases -contains "client_aborted" })
+  $clientAbortedBeforeFirstChunk = @($clientAbortedStreams | Where-Object { $_.phases -notcontains "stream_write" })
+  $clientAbortedAfterFirstChunk = @($clientAbortedStreams | Where-Object { $_.phases -contains "stream_write" })
+  $unclosedHardAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { -not $_.completedLocally -and -not $_.completedByUpstream -and -not $_.unrecoveredTerminal429 })
   $responseAccountBindings = @{}
   foreach ($event in $parsedEvents) {
     if (-not (Test-ValidAccountHash $event.accountHash)) {
@@ -910,9 +946,29 @@ function Get-AuditAcceptanceSummary {
   $continuationReroutes = @($lineageSummaries | ForEach-Object { $_.continuationReroutes })
   $autoCompactReroutes = @($lineageSummaries | ForEach-Object { $_.autoCompactReroutes })
   $lineageLocalCompletionsAfterHardAffinity = @($lineageSummaries | ForEach-Object { $_.localCompletionAfterHardAffinity })
+  $detailEvents = @($parsedEvents | Where-Object { $_.detail })
+  $eventsWithGatewayRequestId = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditDetailValue -Event $_ -Name "gateway_request_id")) })
+  $eventsWithTurnLineageId = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditLineageId $_)) })
+  $eventsWithExplicitTurnLineageId = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditDetailValue -Event $_ -Name "turn_lineage_id")) })
+  $eventsWithPreviousResponseIdHash = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditPreviousResponseIdHash $_)) })
+  $eventsWithUpstreamResponseIdHash = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditUpstreamResponseIdHash $_)) })
+  $eventsWithContinuationFlag = @($parsedEvents | Where-Object { $null -ne (Get-AuditDetailValue -Event $_ -Name "is_continuation") })
+  $eventsWithAutoCompactFlag = @($parsedEvents | Where-Object { $null -ne (Get-AuditDetailValue -Event $_ -Name "is_auto_compact_candidate") })
+  $autoCompactCandidateEvents = @($parsedEvents | Where-Object { Get-AuditDetailBool -Event $_ -Name "is_auto_compact_candidate" })
+  $lineageRequiredFieldNames = @("gateway_request_id", "turn_lineage_id", "previous_response_id_hash", "upstream_response_id_hash", "is_continuation", "is_auto_compact_candidate")
+  $lineagePresentFieldNames = @()
+  if ($eventsWithGatewayRequestId.Count -gt 0) { $lineagePresentFieldNames += "gateway_request_id" }
+  if ($eventsWithTurnLineageId.Count -gt 0) { $lineagePresentFieldNames += "turn_lineage_id" }
+  if ($eventsWithPreviousResponseIdHash.Count -gt 0) { $lineagePresentFieldNames += "previous_response_id_hash" }
+  if ($eventsWithUpstreamResponseIdHash.Count -gt 0) { $lineagePresentFieldNames += "upstream_response_id_hash" }
+  if ($eventsWithContinuationFlag.Count -gt 0) { $lineagePresentFieldNames += "is_continuation" }
+  if ($eventsWithAutoCompactFlag.Count -gt 0) { $lineagePresentFieldNames += "is_auto_compact_candidate" }
+  $lineageMissingFieldNames = @($lineageRequiredFieldNames | Where-Object { $_ -notin $lineagePresentFieldNames })
   $completedFallbackTransitions = @($fallbackTransitions | Where-Object { $_.completed -and $_.differentAccount })
   $distinctHealthyAccountHashesAfterFallback = @($healthyAccountHashesAfterFallback | Sort-Object -Unique)
   $completedSameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.completedLocally })
+  $upstreamCompletedSameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.completedByUpstream })
+  $unrecoveredHardAffinityTerminal429Blocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.unrecoveredTerminal429 })
   $distinctHealthyAccountHashesAfterBlock = @(
     $newRequestAvoidance |
       ForEach-Object { $_.healthyAccountHashes } |
@@ -952,6 +1008,12 @@ function Get-AuditAcceptanceSummary {
     fallbackTransitions = @($fallbackTransitions)
     sameTaskAffinityFallbackBlockedCount = $sameTaskAffinityBlockTransitions.Count
     sameTaskAffinityLocalCompletionCount = $completedSameTaskAffinityBlocks.Count
+    sameTaskAffinityTerminalCompletionCount = $upstreamCompletedSameTaskAffinityBlocks.Count
+    sameTaskAffinityTerminalCompletionRequestIds = @($upstreamCompletedSameTaskAffinityBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sameTaskAffinityUnrecoveredTerminal429Count = $unrecoveredHardAffinityTerminal429Blocks.Count
+    sameTaskAffinityUnrecoveredTerminal429RequestIds = @($unrecoveredHardAffinityTerminal429Blocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sameTaskAffinityUnclosedBlockCount = $unclosedHardAffinityBlocks.Count
+    sameTaskAffinityUnclosedBlockRequestIds = @($unclosedHardAffinityBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityFallbackBlockedRequestIds = @($sameTaskAffinityBlockTransitions | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityFallbackBlockedTransitions = @($sameTaskAffinityBlockTransitions)
     distinctHealthyAccountCountAfterBlock = $distinctHealthyAccountHashesAfterBlock.Count
@@ -1008,10 +1070,47 @@ function Get-AuditAcceptanceSummary {
     localCompletionAfterHardAffinityLineageCount = $lineageLocalCompletionsAfterHardAffinity.Count
     localCompletionAfterHardAffinityLineages = @($lineageLocalCompletionsAfterHardAffinity)
     lineageSummaries = @($lineageSummaries)
+    auditFieldCoverage = [ordered]@{
+      parsedEventCount = $parsedEvents.Count
+      detailEventCount = $detailEvents.Count
+      gatewayRequestIdCount = $eventsWithGatewayRequestId.Count
+      turnLineageIdCount = $eventsWithTurnLineageId.Count
+      explicitTurnLineageIdCount = $eventsWithExplicitTurnLineageId.Count
+      previousResponseIdHashCount = $eventsWithPreviousResponseIdHash.Count
+      upstreamResponseIdHashCount = $eventsWithUpstreamResponseIdHash.Count
+      continuationFlagCount = $eventsWithContinuationFlag.Count
+      autoCompactFlagCount = $eventsWithAutoCompactFlag.Count
+      autoCompactCandidateCount = $autoCompactCandidateEvents.Count
+      lineageDiagnosticReady = ($parsedEvents.Count -gt 0 -and $eventsWithGatewayRequestId.Count -gt 0 -and $eventsWithTurnLineageId.Count -gt 0)
+      continuationDiagnosticReady = ($eventsWithPreviousResponseIdHash.Count -gt 0 -and $eventsWithUpstreamResponseIdHash.Count -gt 0)
+      autoCompactDiagnosticReady = ($eventsWithAutoCompactFlag.Count -gt 0)
+      presentFieldNames = @($lineagePresentFieldNames)
+      missingFieldNames = @($lineageMissingFieldNames)
+    }
     startedStreamCount = $startedStreams.Count
     completedStreamCount = $completedStreams.Count
     openStreamCount = $openStreams.Count
     interruptedStreamCount = $interruptedStreams.Count
+    clientAbortedStreamCount = $clientAbortedStreams.Count
+    clientAbortedBeforeFirstChunkCount = $clientAbortedBeforeFirstChunk.Count
+    clientAbortedAfterFirstChunkCount = $clientAbortedAfterFirstChunk.Count
+    clientAbortedStreamSummaries = @($clientAbortedStreams | ForEach-Object {
+      [ordered]@{
+        streamKey = $_.streamKey
+        requestId = $_.requestId
+        firstTimestamp = $_.firstTimestamp
+        lastTimestamp = $_.lastTimestamp
+        started = [bool]$_.started
+        completed = [bool]$_.completed
+        terminalError = [bool]$_.terminalError
+        firstAccountHash = $_.firstAccountHash
+        lastAccountHash = $_.lastAccountHash
+        phases = @($_.phases | Select-Object -Unique)
+        statuses = @($_.statuses | Select-Object -Unique)
+        observedAfterFirstChunk = [bool]($_.phases -contains "stream_write")
+        attribution = if ($_.phases -contains "stream_write") { "client_or_app_aborted_after_stream_started" } else { "client_or_app_aborted_before_stream_body" }
+      }
+    })
     streamSummaries = @($streams | ForEach-Object {
       [ordered]@{
         streamKey = $_.streamKey
@@ -1065,17 +1164,31 @@ function New-AcceptanceResults {
     hasHardAffinityFallbackBlocked = [bool]$AuditSummary.hasHardAffinityFallbackBlocked
     sameTaskAffinityFallbackBlockedCount = [int]$AuditSummary.sameTaskAffinityFallbackBlockedCount
     sameTaskAffinityLocalCompletionCount = [int]$AuditSummary.sameTaskAffinityLocalCompletionCount
+    sameTaskAffinityTerminalCompletionCount = [int]$AuditSummary.sameTaskAffinityTerminalCompletionCount
+    sameTaskAffinityUnclosedBlockCount = [int]$AuditSummary.sameTaskAffinityUnclosedBlockCount
+    sameTaskAffinityUnrecoveredTerminal429Count = [int]$AuditSummary.sameTaskAffinityUnrecoveredTerminal429Count
     sameTaskAffinityFallbackBlockedRequestIds = @($AuditSummary.sameTaskAffinityFallbackBlockedRequestIds)
+    sameTaskAffinityTerminalCompletionRequestIds = @($AuditSummary.sameTaskAffinityTerminalCompletionRequestIds)
+    sameTaskAffinityUnclosedBlockRequestIds = @($AuditSummary.sameTaskAffinityUnclosedBlockRequestIds)
+    sameTaskAffinityUnrecoveredTerminal429RequestIds = @($AuditSummary.sameTaskAffinityUnrecoveredTerminal429RequestIds)
     requiredFallbackCycles = [int]$RequiredFallbackCycles
     first429AccountHash = $AuditSummary.first429AccountHash
     localPoolUnavailableCount = [int]$AuditSummary.localPoolUnavailableCount
     responsesLocalCompletionPoolUnavailableCount = [int]$AuditSummary.responsesLocalCompletionPoolUnavailableCount
   }
-  $sameTaskPass = $AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.sameTaskAffinityFallbackBlockedCount -ge $RequiredFallbackCycles -and $AuditSummary.sameTaskAffinityLocalCompletionCount -ge $RequiredFallbackCycles
-  if ($sameTaskPass) {
+  $sameTaskObserved = $AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.sameTaskAffinityFallbackBlockedCount -ge $RequiredFallbackCycles
+  if ($AuditSummary.sameTaskAffinityLocalCompletionCount -gt 0) {
+    $results += Set-MonitorStatus $sameTask "fail" "同任务 hard-affinity block 后被本地 pool_unavailable completed 闭合；这会让用户侧任务提前结束" $sameTaskEvidence
+  } elseif ($AuditSummary.sameTaskAffinityUnrecoveredTerminal429Count -gt 0) {
+    $results += Set-MonitorStatus $sameTask "fail" "同任务 hard-affinity block 后仍以 final 429 结束" $sameTaskEvidence
+  } elseif ($AuditSummary.sameTaskAffinityUnclosedBlockCount -gt 0) {
+    $results += Set-MonitorStatus $sameTask "blocked" "同任务 hard-affinity block 已出现，但监测窗口内没有观察到 terminal/local completion，无法确认是否继续到完成" $sameTaskEvidence
+  } elseif ($sameTaskObserved -and $AuditSummary.sameTaskAffinityTerminalCompletionCount -ge $RequiredFallbackCycles) {
     $results += Set-MonitorStatus $sameTask "pass" $null $sameTaskEvidence
+  } elseif ($sameTaskObserved) {
+    $results += Set-MonitorStatus $sameTask "blocked" "同任务 hard-affinity block 已出现，但观察到的真实 upstream terminal completion 不足" $sameTaskEvidence
   } elseif ($RequireQuotaFallback) {
-    $results += Set-MonitorStatus $sameTask "blocked" "未在监测窗口内观察到同任务 429 -> cooldown -> fallback_blocked(hard_affinity) -> 本地 completed 闭合" $sameTaskEvidence
+    $results += Set-MonitorStatus $sameTask "blocked" "未在监测窗口内观察到同任务 429 -> cooldown -> fallback_blocked(hard_affinity)" $sameTaskEvidence
   } else {
     $results += Set-MonitorStatus $sameTask "skipped" "未要求 quota hard-affinity 必须出现；仅记录 audit 观察结果" $sameTaskEvidence
   }
@@ -1103,6 +1216,7 @@ function New-AcceptanceResults {
   $multiEvidence = @{
     sameTaskAffinityFallbackBlockedCount = [int]$AuditSummary.sameTaskAffinityFallbackBlockedCount
     sameTaskAffinityLocalCompletionCount = [int]$AuditSummary.sameTaskAffinityLocalCompletionCount
+    sameTaskAffinityTerminalCompletionCount = [int]$AuditSummary.sameTaskAffinityTerminalCompletionCount
     requiredFallbackCycles = [int]$RequiredFallbackCycles
     distinctHealthyAccountCountAfterBlock = [int]$AuditSummary.distinctHealthyAccountCountAfterBlock
     requiredDistinctHealthyAccounts = [int]$RequiredDistinctHealthyAccounts
@@ -1110,7 +1224,9 @@ function New-AcceptanceResults {
   }
   if ($RequiredFallbackCycles -le 1 -and $RequiredDistinctHealthyAccounts -le 1) {
     $results += Set-MonitorStatus $multi "skipped" "未要求多账号 quota recovery 计数；仅记录多账号观察结果" $multiEvidence
-  } elseif ($AuditSummary.sameTaskAffinityLocalCompletionCount -ge $RequiredFallbackCycles -and $AuditSummary.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts) {
+  } elseif ($AuditSummary.sameTaskAffinityLocalCompletionCount -gt 0) {
+    $results += Set-MonitorStatus $multi "fail" "观察到同任务 hard-affinity block 被本地 completed 闭合；多账号接管只能发生在后续 independent request" $multiEvidence
+  } elseif ($AuditSummary.sameTaskAffinityTerminalCompletionCount -ge $RequiredFallbackCycles -and $AuditSummary.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts) {
     $results += Set-MonitorStatus $multi "pass" $null $multiEvidence
   } else {
     $results += Set-MonitorStatus $multi "blocked" "未观察到足够的同任务 hard-affinity block 与后续健康账号接管" $multiEvidence
@@ -1123,6 +1239,10 @@ function New-AcceptanceResults {
     requiredCompletedStreams = [int]$RequiredCompletedStreams
     openStreamCount = [int]$AuditSummary.openStreamCount
     interruptedStreamCount = [int]$AuditSummary.interruptedStreamCount
+    clientAbortedStreamCount = [int]$AuditSummary.clientAbortedStreamCount
+    clientAbortedBeforeFirstChunkCount = [int]$AuditSummary.clientAbortedBeforeFirstChunkCount
+    clientAbortedAfterFirstChunkCount = [int]$AuditSummary.clientAbortedAfterFirstChunkCount
+    clientAbortedStreamSummaries = @($AuditSummary.clientAbortedStreamSummaries)
   }
   if ($AuditSummary.interruptedStreamCount -gt 0) {
     $results += Set-MonitorStatus $stream "fail" "已开始的 stream 后续出现 model_cooldown_applied，中断边界异常" $streamEvidence
@@ -1208,12 +1328,16 @@ function New-AcceptanceResults {
   $localCompletionEvidence = @{
     responsesLocalCompletionPoolUnavailableCount = [int]$AuditSummary.responsesLocalCompletionPoolUnavailableCount
     responsesLocalCompletionPoolUnavailableRequestIds = @($AuditSummary.responsesLocalCompletionPoolUnavailableRequestIds)
+    sameTaskAffinityLocalCompletionCount = [int]$AuditSummary.sameTaskAffinityLocalCompletionCount
+    sameTaskAffinityFallbackBlockedRequestIds = @($AuditSummary.sameTaskAffinityFallbackBlockedRequestIds)
     responsesFailedPoolUnavailableCount = [int]$AuditSummary.responsesFailedPoolUnavailableCount
     responsesFailedPoolUnavailableRequestIds = @($AuditSummary.responsesFailedPoolUnavailableRequestIds)
     openPoolWaitCount = [int]$AuditSummary.openPoolWaitCount
     openPoolWaitRequestIds = @($AuditSummary.openPoolWaitRequestIds)
   }
-  if ($AuditSummary.openPoolWaitCount -gt 0 -and $AuditSummary.responsesLocalCompletionPoolUnavailableCount -eq 0) {
+  if ($AuditSummary.sameTaskAffinityLocalCompletionCount -gt 0) {
+    $results += Set-MonitorStatus $localCompletion "fail" "同任务 hard-affinity block 不能用本地 completed Responses 伪装成成功闭合" $localCompletionEvidence
+  } elseif ($AuditSummary.openPoolWaitCount -gt 0 -and $AuditSummary.responsesLocalCompletionPoolUnavailableCount -eq 0) {
     $results += Set-MonitorStatus $localCompletion "fail" "监测窗口内存在 open pool_wait 且没有本地 completed Responses 终止；这会让 Codex turn 表面不断线但实际停滞" $localCompletionEvidence
   } elseif ($AuditSummary.responsesLocalCompletionPoolUnavailableCount -gt 0) {
     $results += Set-MonitorStatus $localCompletion "pass" "监测窗口内 Codex-facing /v1/responses 以本地 completed Responses 明确闭合 pool_unavailable，避免 response.failed/503/SSE idle" $localCompletionEvidence
@@ -1260,6 +1384,31 @@ function New-AcceptanceResults {
     $results += Set-MonitorStatus $lineageSwitch "pass" $null $lineageSwitchEvidence
   }
 
+  $fieldCoverage = New-MonitorResult "audit_lineage_fields_present"
+  $fieldCoverageEvidence = @{
+    auditFieldCoverage = $AuditSummary.auditFieldCoverage
+  }
+  if ($AuditSummary.eventCount -eq 0) {
+    $results += Set-MonitorStatus $fieldCoverage "skipped" "监测窗口内没有 audit 事件，无法评估 lineage 字段覆盖率" $fieldCoverageEvidence
+  } elseif (-not $AuditSummary.auditFieldCoverage.lineageDiagnosticReady) {
+    $results += Set-MonitorStatus $fieldCoverage "warn" "audit 缺少 gateway_request_id/turn_lineage_id 等字段，无法准确定位 continuation/auto-compact/恢复失败根因" $fieldCoverageEvidence
+  } else {
+    $results += Set-MonitorStatus $fieldCoverage "pass" $null $fieldCoverageEvidence
+  }
+
+  $clientAbort = New-MonitorResult "client_aborted_streams_classified"
+  $clientAbortEvidence = @{
+    clientAbortedStreamCount = [int]$AuditSummary.clientAbortedStreamCount
+    clientAbortedBeforeFirstChunkCount = [int]$AuditSummary.clientAbortedBeforeFirstChunkCount
+    clientAbortedAfterFirstChunkCount = [int]$AuditSummary.clientAbortedAfterFirstChunkCount
+    clientAbortedStreamSummaries = @($AuditSummary.clientAbortedStreamSummaries)
+  }
+  if ($AuditSummary.clientAbortedStreamCount -gt 0) {
+    $results += Set-MonitorStatus $clientAbort "blocked" "观察到 client_aborted；已分类到 report，但仅凭 audit 不能归因为客户端主动中断、恢复失败或服务端异常" $clientAbortEvidence
+  } else {
+    $results += Set-MonitorStatus $clientAbort "pass" $null $clientAbortEvidence
+  }
+
   $cli = New-MonitorResult "codex_cli_config_auth_untouched"
   $cliEvidence = @{
     unchanged = [bool]$CliComparison.unchanged
@@ -1301,17 +1450,32 @@ function New-ContinuitySummary {
     hasHardAffinityFallbackBlocked = [bool]$AuditSummary.hasHardAffinityFallbackBlocked
     sameTaskAffinityFallbackBlockedCount = [int]$AuditSummary.sameTaskAffinityFallbackBlockedCount
     sameTaskAffinityLocalCompletionCount = [int]$AuditSummary.sameTaskAffinityLocalCompletionCount
+    sameTaskAffinityTerminalCompletionCount = [int]$AuditSummary.sameTaskAffinityTerminalCompletionCount
+    sameTaskAffinityUnclosedBlockCount = [int]$AuditSummary.sameTaskAffinityUnclosedBlockCount
+    sameTaskAffinityUnrecoveredTerminal429Count = [int]$AuditSummary.sameTaskAffinityUnrecoveredTerminal429Count
     sameTaskAffinityFallbackBlockedRequestIds = @($AuditSummary.sameTaskAffinityFallbackBlockedRequestIds)
+    sameTaskAffinityTerminalCompletionRequestIds = @($AuditSummary.sameTaskAffinityTerminalCompletionRequestIds)
+    sameTaskAffinityUnclosedBlockRequestIds = @($AuditSummary.sameTaskAffinityUnclosedBlockRequestIds)
+    sameTaskAffinityUnrecoveredTerminal429RequestIds = @($AuditSummary.sameTaskAffinityUnrecoveredTerminal429RequestIds)
     requiredFallbackCycles = [int]$RequiredFallbackCycles
     retryLimitErrorFound = [bool]$AuditSummary.retryLimitErrorFound
     first429AccountHash = $AuditSummary.first429AccountHash
   }
   $currentStatus = "blocked"
-  $currentReason = "未在监测窗口内观察到同任务 429 -> cooldown -> fallback_blocked(hard_affinity) -> 本地 completed 闭合"
-  if ($AuditSummary.retryLimitErrorFound) {
+  $currentReason = "未在监测窗口内观察到同任务 429 -> cooldown -> fallback_blocked(hard_affinity)"
+  if ($AuditSummary.sameTaskAffinityLocalCompletionCount -gt 0) {
+    $currentStatus = "fail"
+    $currentReason = "hard-affinity block 后被本地 pool_unavailable completed 闭合"
+  } elseif ($AuditSummary.sameTaskAffinityUnrecoveredTerminal429Count -gt 0) {
+    $currentStatus = "fail"
+    $currentReason = "hard-affinity block 后仍以 final 429 结束"
+  } elseif ($AuditSummary.sameTaskAffinityUnclosedBlockCount -gt 0) {
+    $currentStatus = "blocked"
+    $currentReason = "hard-affinity block 已出现但监测窗口内没有 terminal/local completion"
+  } elseif ($AuditSummary.retryLimitErrorFound) {
     $currentStatus = "fail"
     $currentReason = "hard-affinity block 后仍出现 retry-limit/final 429"
-  } elseif ($AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.sameTaskAffinityFallbackBlockedCount -ge $RequiredFallbackCycles -and $AuditSummary.sameTaskAffinityLocalCompletionCount -ge $RequiredFallbackCycles) {
+  } elseif ($AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.sameTaskAffinityTerminalCompletionCount -ge $RequiredFallbackCycles) {
     $currentStatus = "pass"
     $currentReason = $null
   }
@@ -1403,7 +1567,7 @@ do {
 
   if ($StopWhenSatisfied) {
     $summaryNow = Get-AuditAcceptanceSummary $events
-    $quotaSatisfied = (-not $RequireQuotaFallback) -or ($summaryNow.has429 -and $summaryNow.hasUsageLimitReached -and $summaryNow.hasModelCooldownApplied -and $summaryNow.sameTaskAffinityFallbackBlockedCount -ge $RequiredFallbackCycles -and $summaryNow.sameTaskAffinityLocalCompletionCount -ge $RequiredFallbackCycles -and $summaryNow.newRequestAvoidanceCount -gt 0 -and $summaryNow.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts)
+    $quotaSatisfied = (-not $RequireQuotaFallback) -or ($summaryNow.has429 -and $summaryNow.hasUsageLimitReached -and $summaryNow.hasModelCooldownApplied -and $summaryNow.sameTaskAffinityTerminalCompletionCount -ge $RequiredFallbackCycles -and $summaryNow.sameTaskAffinityLocalCompletionCount -eq 0 -and $summaryNow.newRequestAvoidanceCount -gt 0 -and $summaryNow.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts)
     $streamSatisfied = (-not $RequireStreamCompletion) -or ($summaryNow.completedStreamCount -ge $RequiredCompletedStreams)
     $retrySatisfied = (-not $summaryNow.retryLimitErrorFound)
     $responses503Satisfied = (-not $summaryNow.responsesTransport503PoolUnavailableCount)
@@ -1455,6 +1619,7 @@ $report = [ordered]@{
   elapsedSeconds = [math]::Round(($endedAt - $startedAt).TotalSeconds, 1)
   dataRoot = $DataRoot
   auditPath = $AuditPath
+  exitCodeFile = $ExitCodeFile
   includeExistingAudit = [bool]$IncludeExistingAudit
   requireQuotaFallback = [bool]$RequireQuotaFallback
   requireStreamCompletion = [bool]$RequireStreamCompletion
@@ -1504,9 +1669,12 @@ if ($WriteReport) {
 }
 
 $report | ConvertTo-Json -Depth 20
-if ($overall -eq "fail") {
-  exit 1
+$exitCode = if ($overall -eq "fail") {
+  1
+} elseif ($overall -eq "blocked") {
+  2
+} else {
+  0
 }
-if ($overall -eq "blocked") {
-  exit 2
-}
+Write-MonitorExitCode -Path $ExitCodeFile -Code $exitCode
+exit $exitCode
