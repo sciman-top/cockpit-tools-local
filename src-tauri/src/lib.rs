@@ -343,7 +343,35 @@ pub fn run() {
                         info!("[Window] 窗口已最小化到托盘");
                     }
                     CloseWindowBehavior::Quit => {
-                        info!("[Window] 用户选择退出应用");
+                        api.prevent_close();
+                        let app_handle = window.app_handle().clone();
+                        tauri::async_runtime::spawn(async move {
+                            match modules::codex_local_access::prepare_runtime_projection_for_app_exit()
+                                .await
+                            {
+                                Ok(restored) => {
+                                    if restored {
+                                        info!("[Window] 退出前已恢复 Codex Direct Projection");
+                                    }
+                                    info!("[Window] 用户选择退出应用");
+                                    app_handle.exit(0);
+                                }
+                                Err(err) => {
+                                    logger::log_error(&format!(
+                                        "[Window] 退出前恢复 Codex Direct Projection 失败，已取消退出: {}",
+                                        err
+                                    ));
+                                    if let Err(show_err) =
+                                        modules::floating_card_window::show_main_window(&app_handle)
+                                    {
+                                        logger::log_warn(&format!(
+                                            "[Window] 恢复主窗口失败: {}",
+                                            show_err
+                                        ));
+                                    }
+                                }
+                            }
+                        });
                     }
                     CloseWindowBehavior::Ask => {
                         api.prevent_close();

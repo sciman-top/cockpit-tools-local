@@ -462,6 +462,20 @@ export function sortCodexLocalAccessAccountIdsForRefresh(
   return [...sortedKnownIds, ...missingIds];
 }
 
+export function getCodexLocalAccessPrimaryRefreshAccountId(
+  displayAccountIds: string[],
+  accounts: CodexAccount[],
+): string | null {
+  const accountById = new Map(accounts.map((account) => [account.id, account]));
+  for (const accountId of displayAccountIds) {
+    const account = accountById.get(accountId);
+    if (account && !isCodexApiKeyAccount(account)) {
+      return account.id;
+    }
+  }
+  return null;
+}
+
 export function compareCodexAccountsByRecommendedSort(
   left: CodexAccount,
   right: CodexAccount,

@@ -115,6 +115,8 @@ import {
   CODEX_RECOMMENDED_SORT_BY,
   compareCodexAccountTieBreak,
   compareCodexAccountsBySort,
+  getCodexLocalAccessPrimaryRefreshAccountId,
+  sortCodexLocalAccessAccountIdsForScheduling,
   sortCodexLocalAccessAccountIdsForRefresh,
   type CodexGroupSortMeta,
 } from "../utils/codexAccountSort";
@@ -3931,14 +3933,20 @@ export function CodexAccountsPage() {
   );
 
   const localAccessCollection = localAccessState?.collection ?? null;
-  const localAccessAccountIdSet = useMemo(
-    () => new Set(localAccessCollection?.accountIds ?? []),
+  const localAccessConfiguredAccountIds = useMemo(
+    () => localAccessCollection?.accountIds ?? [],
     [localAccessCollection?.accountIds],
   );
-  const localAccessEffectiveAccountIds =
-    localAccessState?.effectiveAccountIds ??
-    localAccessCollection?.accountIds ??
-    [];
+  const localAccessAccountIdSet = useMemo(
+    () => new Set(localAccessConfiguredAccountIds),
+    [localAccessConfiguredAccountIds],
+  );
+  const localAccessEffectiveAccountIds = useMemo(() => {
+    const configuredIds = new Set(localAccessConfiguredAccountIds);
+    const candidateIds =
+      localAccessState?.effectiveAccountIds ?? localAccessConfiguredAccountIds;
+    return candidateIds.filter((accountId) => configuredIds.has(accountId));
+  }, [localAccessConfiguredAccountIds, localAccessState?.effectiveAccountIds]);
   const localAccessRuntimeActive =
     localAccessLaunchCurrent ||
     codexRuntimeMode?.mode === "cockpit_api_service";
@@ -3950,29 +3958,32 @@ export function CodexAccountsPage() {
     () => new Set(localAccessEffectiveAccountIds),
     [localAccessEffectiveAccountIds],
   );
+  const localAccessDisplayAccountIds = useMemo(
+    () =>
+      sortCodexLocalAccessAccountIdsForScheduling(
+        localAccessConfiguredAccountIds,
+        accounts,
+        overviewCurrentAccountId,
+      ),
+    [accounts, localAccessConfiguredAccountIds, overviewCurrentAccountId],
+  );
   const localAccessAccounts = useMemo(
     () =>
-      localAccessEffectiveAccountIds
+      localAccessDisplayAccountIds
         .map((accountId) =>
           accounts.find((account) => account.id === accountId),
         )
         .filter((account): account is CodexAccount => Boolean(account)),
-    [accounts, localAccessEffectiveAccountIds],
+    [accounts, localAccessDisplayAccountIds],
   );
-  const localAccessRefreshCandidateIds = useMemo(() => {
-    const candidateIds =
-      localAccessCollection?.accountIds ?? localAccessEffectiveAccountIds;
-    return sortCodexLocalAccessAccountIdsForRefresh(candidateIds, accounts);
-  }, [accounts, localAccessCollection?.accountIds, localAccessEffectiveAccountIds]);
-  const localAccessCurrentRefreshAccountId = useMemo(() => {
-    for (const accountId of localAccessRefreshCandidateIds) {
-      const account = accounts.find((item) => item.id === accountId);
-      if (account && !isCodexApiKeyAccount(account)) {
-        return account.id;
-      }
-    }
-    return null;
-  }, [accounts, localAccessRefreshCandidateIds]);
+  const localAccessCurrentRefreshAccountId = useMemo(
+    () =>
+      getCodexLocalAccessPrimaryRefreshAccountId(
+        localAccessDisplayAccountIds,
+        accounts,
+      ),
+    [accounts, localAccessDisplayAccountIds],
+  );
   const localAccessQuotaPoolSummary = useMemo(
     () => summarizeCodexQuotaPool(localAccessAccounts),
     [localAccessAccounts],
@@ -5058,6 +5069,7 @@ export function CodexAccountsPage() {
         setLocalAccessState(nextState);
         await fetchCurrentAccount();
         setLocalAccessLaunchCurrent(true);
+        await reloadCodexRuntimeMode();
         if (options?.showSuccessMessage ?? true) {
           setMessage({
             text: t("codex.localAccess.activateSuccess", "已切换到 API 服务"),
@@ -5073,6 +5085,7 @@ export function CodexAccountsPage() {
     [
       fetchCurrentAccount,
       localAccessCollection,
+      reloadCodexRuntimeMode,
       requestLocalAccessRiskNotice,
       setMessage,
       t,
@@ -5117,8 +5130,7 @@ export function CodexAccountsPage() {
     try {
       if (
         localAccessLaunchCurrent ||
-        codexRuntimeMode?.mode === "cockpit_api_service" ||
-        localAccessCollection?.enabled
+        codexRuntimeMode?.mode === "cockpit_api_service"
       ) {
         await handleSetCodexRuntimeMode("direct_projection");
         return;
@@ -5137,7 +5149,6 @@ export function CodexAccountsPage() {
     codexRuntimeMode?.mode,
     handleQuickActivateLocalAccess,
     handleSetCodexRuntimeMode,
-    localAccessCollection?.enabled,
     localAccessLaunchCurrent,
     setMessage,
     t,
@@ -5316,15 +5327,11 @@ export function CodexAccountsPage() {
   }, [codexGroups]);
   const apiServiceSortMeta = useMemo(() => {
     const map = new Map<string, number>();
-    const orderedIds =
-      localAccessEffectiveAccountIds.length > 0
-        ? localAccessEffectiveAccountIds
-        : (localAccessCollection?.accountIds ?? []);
-    orderedIds.forEach((accountId, index) => {
+    localAccessDisplayAccountIds.forEach((accountId, index) => {
       map.set(accountId, index);
     });
     return map;
-  }, [localAccessCollection?.accountIds, localAccessEffectiveAccountIds]);
+  }, [localAccessDisplayAccountIds]);
   useEffect(() => {
     if (!localAccessRuntimeActive && !showLocalAccessModal) {
       return;
@@ -6669,7 +6676,7 @@ export function CodexAccountsPage() {
         : localAccessCollection.enabled
           ? t("codex.localAccess.statusStopped", "未运行")
           : t("codex.localAccess.statusDisabled", "已停用");
-    const isLocalAccessCurrent = localAccessLaunchCurrent;
+    const isLocalAccessCurrent = localAccessRuntimeActive;
     const configuredMemberCount = localAccessState?.memberCount ?? 0;
     const effectiveMemberCount = localAccessAccounts.length;
     const localAccessSummaryMeta =
@@ -6772,8 +6779,7 @@ export function CodexAccountsPage() {
         : null;
     const localAccessPrimaryActionIsDeactivate =
       localAccessLaunchCurrent ||
-      codexRuntimeMode?.mode === "cockpit_api_service" ||
-      Boolean(localAccessCollection?.enabled);
+      codexRuntimeMode?.mode === "cockpit_api_service";
     const localAccessPrimaryActionTitle = localAccessPrimaryActionIsDeactivate
       ? t("codex.localAccess.disableService", "停用服务")
       : t("codex.localAccess.activateAction", "启动 API 服务");

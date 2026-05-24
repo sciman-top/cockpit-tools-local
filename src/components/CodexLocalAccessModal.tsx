@@ -76,6 +76,7 @@ import {
   moveIdInOrder,
   moveIdsBeforeTarget,
   normalizeAccountOrder,
+  normalizeSelectedAccountOrder,
   type AccountOrderMove,
 } from '../utils/accountOrder';
 import {
@@ -377,7 +378,6 @@ export function CodexLocalAccessModal({
   const apiPortUrl = state?.apiPortUrl ?? '';
   const baseUrl = state?.baseUrl ?? '';
   const displayBaseUrl = baseUrl;
-  const effectiveAccountIds = state?.effectiveAccountIds ?? collection?.accountIds ?? [];
   const apiKeyTitle =
     collection && keyVisible
       ? collection.apiKey
@@ -894,10 +894,14 @@ export function CodexLocalAccessModal({
   }, [stats?.accounts]);
 
   const selectedMemberAccounts = useMemo(() => {
-    return selectedOrderForSave
+    const accountsForScheduling = selectedOrderForSave
       .map((accountId) => accountById.get(accountId))
       .filter((account): account is CodexAccount => Boolean(account));
-  }, [accountById, selectedOrderForSave]);
+    return sortCodexLocalAccessAccountsForScheduling(
+      accountsForScheduling,
+      currentAccountId,
+    );
+  }, [accountById, currentAccountId, selectedOrderForSave]);
 
   const memberRemovalSelectedCount = memberRemovalSelected.size;
   const allMembersSelectedForRemoval =
@@ -911,10 +915,7 @@ export function CodexLocalAccessModal({
   }, [selectedStatsWindow?.accounts]);
 
   const currentMemberStats = useMemo(() => {
-    const currentIds =
-      effectiveAccountIds.length > 0
-        ? effectiveAccountIds
-        : (collection?.accountIds ?? []);
+    const currentIds = collection?.accountIds ?? [];
     return currentIds
       .map((accountId) => {
         const account = accountById.get(accountId);
@@ -946,7 +947,6 @@ export function CodexLocalAccessModal({
     accountById,
     collection?.accountIds,
     currentAccountId,
-    effectiveAccountIds,
     t,
     windowStatsByAccountId,
   ]);
@@ -1534,7 +1534,7 @@ export function CodexLocalAccessModal({
   };
 
   const buildPersistedMemberIds = (order: string[]) =>
-    normalizeAccountOrder(
+    normalizeSelectedAccountOrder(
       order.filter((accountId) => {
         const account = accountById.get(accountId);
         if (!account) return false;

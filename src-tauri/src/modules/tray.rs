@@ -3222,8 +3222,34 @@ fn handle_menu_event<R: Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::
             }
         }
         menu_ids::QUIT => {
-            info!("[Tray] 用户选择退出应用");
-            app.exit(0);
+            let app_handle = app.clone();
+            tauri::async_runtime::spawn(async move {
+                match crate::modules::codex_local_access::prepare_runtime_projection_for_app_exit()
+                    .await
+                {
+                    Ok(restored) => {
+                        if restored {
+                            info!("[Tray] 退出前已恢复 Codex Direct Projection");
+                        }
+                        info!("[Tray] 用户选择退出应用");
+                        app_handle.exit(0);
+                    }
+                    Err(err) => {
+                        crate::modules::logger::log_error(&format!(
+                            "[Tray] 退出前恢复 Codex Direct Projection 失败，已取消退出: {}",
+                            err
+                        ));
+                        if let Err(show_err) =
+                            crate::modules::floating_card_window::show_main_window(&app_handle)
+                        {
+                            crate::modules::logger::log_warn(&format!(
+                                "[Tray] 恢复主窗口失败: {}",
+                                show_err
+                            ));
+                        }
+                    }
+                }
+            });
         }
         _ => {
             if let Some(platform) = parse_platform_from_menu_id(id) {

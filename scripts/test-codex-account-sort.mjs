@@ -13,6 +13,7 @@ await mkdir(outdir, { recursive: true });
 
 await esbuild.build({
   entryPoints: {
+    accountOrder: path.join(root, 'src/utils/accountOrder.ts'),
     floatingCardSelectors: path.join(root, 'src/utils/floatingCardSelectors.ts'),
     codexAccountSort: path.join(root, 'src/utils/codexAccountSort.ts'),
     codexTypes: path.join(root, 'src/types/codex.ts'),
@@ -26,6 +27,7 @@ await esbuild.build({
   logLevel: 'silent',
 });
 
+const accountOrder = await import(pathToFileURL(path.join(outdir, 'accountOrder.mjs')).href);
 const selectors = await import(pathToFileURL(path.join(outdir, 'floatingCardSelectors.mjs')).href);
 const sort = await import(pathToFileURL(path.join(outdir, 'codexAccountSort.mjs')).href);
 const codexTypes = await import(pathToFileURL(path.join(outdir, 'codexTypes.mjs')).href);
@@ -54,6 +56,21 @@ function quota(hourly, weekly, extra = {}) {
     ...extra,
   };
 }
+
+assert.deepEqual(
+  accountOrder.normalizeAccountOrder(['pool-member'], ['candidate-a', 'pool-member', 'candidate-b']),
+  ['pool-member', 'candidate-a', 'candidate-b'],
+  'Full account order normalization keeps its custom-sort fill behavior',
+);
+
+assert.deepEqual(
+  accountOrder.normalizeSelectedAccountOrder(
+    ['pool-member', 'missing', 'pool-member'],
+    ['candidate-a', 'pool-member', 'candidate-b'],
+  ),
+  ['pool-member'],
+  'API service member persistence must not append every available candidate account',
+);
 
 const exhaustedWeeklyButRecentlyUsed = codexAccount(
   'exhausted-weekly',
@@ -124,6 +141,20 @@ assert.deepEqual(
   ),
   ['current-low', 'quota-80-soon', 'quota-80-late', 'quota-30'],
   'API service collection saves should pin the current account, then sort by quota and reset time',
+);
+
+assert.deepEqual(
+  sort.sortCodexLocalAccessAccountsForScheduling(
+    [
+      codexAccount('saved-first', quota(0, 97), { created_at: 30 }),
+      codexAccount('current-saved-second', quota(0, 97), { created_at: 20 }),
+      codexAccount('saved-third', quota(0, 97), { created_at: 10 }),
+      codexAccount('weekly-low', quota(0, 4), { created_at: 40 }),
+    ],
+    'current-saved-second',
+  ).map((account) => account.id),
+  ['current-saved-second', 'saved-first', 'saved-third', 'weekly-low'],
+  'API service member display should pin the current account even when saved order puts it later',
 );
 
 assert.deepEqual(

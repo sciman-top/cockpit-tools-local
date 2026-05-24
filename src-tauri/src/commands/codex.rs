@@ -850,18 +850,11 @@ pub async fn codex_runtime_mode_set(
 
 #[tauri::command]
 pub async fn codex_local_access_activate(app: AppHandle) -> Result<CodexLocalAccessState, String> {
-    let codex_home = codex_account::get_codex_home();
-    let state = codex_local_access::activate_local_access_for_dir(&codex_home).await?;
-    if let Err(e) = codex_local_access::set_runtime_integration_mode(
+    codex_local_access::set_runtime_integration_mode(
         CodexRuntimeIntegrationMode::CockpitApiService,
     )
-    .await
-    {
-        logger::log_warn(&format!(
-            "API 服务启动模式已启用，但写入 Codex runtime mode 失败: {}",
-            e
-        ));
-    }
+    .await?;
+    let state = codex_local_access::get_local_access_state().await?;
     let api_service_speed = codex_speed::get_api_service_app_speed_config()?.speed;
     codex_speed::write_official_app_speed(api_service_speed.clone())?;
 

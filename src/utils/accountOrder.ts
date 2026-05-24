@@ -30,6 +30,23 @@ export function normalizeAccountOrder(
   return next;
 }
 
+export function normalizeSelectedAccountOrder(
+  order: string[],
+  availableIds: string[],
+): string[] {
+  const available = new Set(availableIds);
+  const seen = new Set<string>();
+  const next: string[] = [];
+
+  for (const accountId of order) {
+    if (!available.has(accountId) || seen.has(accountId)) continue;
+    next.push(accountId);
+    seen.add(accountId);
+  }
+
+  return next;
+}
+
 export function moveIdInOrder(
   order: string[],
   accountId: string,

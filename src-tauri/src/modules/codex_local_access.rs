@@ -62,7 +62,7 @@ const RESPONSE_AFFINITY_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 const MAX_RESPONSE_AFFINITY_BINDINGS: usize = 4096;
 const REQUEST_AFFINITY_TTL_MS: i64 = 60 * 60 * 1000;
 const MAX_REQUEST_AFFINITY_BINDINGS: usize = 4096;
-const REQUEST_AFFINITY_BINDING_REASON: &str = "client_request_id";
+const REQUEST_AFFINITY_BINDING_REASON: &str = "codex_turn_affinity";
 const PROCESS_STICKY_BINDING_KEY: &str = "process";
 const PROCESS_STICKY_BINDING_REASON: &str = "sticky_process";
 const PROCESS_STICKY_BINDING_TTL_MS: i64 = 24 * 60 * 60 * 1000;
@@ -929,6 +929,10 @@ fn should_sync_local_access_collection_on_account_switch(
     collection.follow_current_account
 }
 
+fn should_restore_direct_projection_before_app_exit(mode: CodexRuntimeIntegrationMode) -> bool {
+    mode == CodexRuntimeIntegrationMode::CockpitApiService
+}
+
 fn build_follow_current_local_access_account_ids(
     account_id: &str,
     collection: &CodexLocalAccessCollection,
@@ -1089,6 +1093,22 @@ pub async fn set_runtime_integration_mode(
     let state = build_runtime_mode_state(mode);
     save_runtime_mode_state(&state)?;
     Ok(state)
+}
+
+pub async fn prepare_runtime_projection_for_app_exit() -> Result<bool, String> {
+    let mode = load_runtime_mode_state()
+        .map(|state| state.mode)
+        .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
+    if !should_restore_direct_projection_before_app_exit(mode) {
+        return Ok(false);
+    }
+
+    let state = set_runtime_integration_mode(CodexRuntimeIntegrationMode::DirectProjection).await?;
+    logger::log_info(&format!(
+        "[CodexRuntimeMode] 应用退出前已恢复 Direct Projection: mode={:?}",
+        state.mode
+    ));
+    Ok(true)
 }
 
 pub async fn sync_runtime_projection_after_account_switch(account_id: &str) -> Result<(), String> {
@@ -1913,7 +1933,7 @@ async fn local_backpressure_bypass_reason(request: &ParsedRequest) -> Option<&'s
         if request_header_value(request, "x-codex-turn-metadata").is_some() {
             return Some("codex_turn_metadata");
         }
-        return Some("client_request_id");
+        return Some("codex_turn_affinity");
     }
     None
 }
@@ -6427,7 +6447,6 @@ async fn resolve_affinity_account(previous_response_id: &str) -> Option<String> 
 fn request_affinity_key(request: &ParsedRequest) -> Option<String> {
     codex_turn_state_request_id(request)
         .or_else(|| codex_turn_metadata_request_id(request))
-        .or_else(|| health_registry_request_id_from_request(request))
 }
 
 async fn resolve_request_affinity_account_from_runtime(request: &ParsedRequest) -> Option<String> {
@@ -11576,6 +11595,7 @@ mod tests {
         resolve_supported_model_alias, retry_failover_account_attempt_limit,
         retry_failover_max_retries, save_health_registry_to_path, selector_audit_detail,
         selector_selected_reason, set_runtime_integration_mode, should_defer_pool_unavailable,
+        should_restore_direct_projection_before_app_exit,
         should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, should_use_pool_unavailable_summary,
@@ -13482,7 +13502,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn same_client_request_id_continuation_bypasses_pool_snapshot_and_forwards_upstream() {
+    async fn codex_turn_metadata_continuation_bypasses_pool_snapshot_and_forwards_upstream() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -13533,12 +13553,19 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             assert!(
                 request_text.contains("X-Client-Request-Id: req-active-task")
                     || request_text.contains("x-client-request-id: req-active-task"),
-                "continuation request should preserve the client request id: {}",
+                "continuation request should preserve the thread request id: {}",
+                request_text
+            );
+            assert!(
+                request_text
+                    .to_ascii_lowercase()
+                    .contains("x-codex-turn-metadata: {\"turn_id\":\"turn-active\"}"),
+                "continuation request should preserve the Codex turn metadata: {}",
                 request_text
             );
             assert!(
                 !request_text.contains("previous_response_id"),
-                "this regression covers request-id continuity without previous_response_id: {}",
+                "this regression covers turn metadata continuity without previous_response_id: {}",
                 request_text
             );
             let body = concat!(
@@ -13642,10 +13669,16 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let affinity_request = ParsedRequest {
             method: "POST".to_string(),
             target: "/v1/responses".to_string(),
-            headers: HashMap::from([(
-                "x-client-request-id".to_string(),
-                "req-active-task".to_string(),
-            )]),
+            headers: HashMap::from([
+                (
+                    "x-client-request-id".to_string(),
+                    "req-active-task".to_string(),
+                ),
+                (
+                    "x-codex-turn-metadata".to_string(),
+                    r#"{"turn_id":"turn-active"}"#.to_string(),
+                ),
+            ]),
             body: br#"{"model":"gpt-5.5","input":"previous successful task step"}"#.to_vec(),
         };
         let mut persisted_registry =
@@ -13676,7 +13709,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("client should connect");
         let body = br#"{"model":"gpt-5.5","input":"continue task"}"#;
         let request = format!(
-            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-active-task\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nX-Client-Request-Id: req-active-task\r\nX-Codex-Turn-Metadata: {{\"turn_id\":\"turn-active\"}}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
             body.len(),
             String::from_utf8_lossy(body)
         );
@@ -13705,7 +13738,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
             .expect("audit should be written to isolated root");
         assert!(audit.contains("\"phase\":\"local_backpressure\""));
-        assert!(audit.contains("\"reason\":\"client_request_id\""));
+        assert!(audit.contains("\"reason\":\"codex_turn_metadata\""));
         assert!(audit.contains("\"phase\":\"stream_completed\""));
         assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
         assert!(!audit.contains("\"errorType\":\"pool_unavailable\""));
@@ -13733,7 +13766,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn same_client_request_id_hard_affinity_blocks_fallback_after_usage_limit() {
+    async fn same_client_request_id_does_not_block_independent_fallback_after_usage_limit() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -13784,20 +13817,28 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             let request_text = String::from_utf8_lossy(&request).to_string();
             seen.push(request_text.clone());
             assert!(
-                request_text.contains("Authorization: Bearer sk-local-old")
-                    || request_text.contains("authorization: Bearer sk-local-old"),
-                "attempt should use the request-affinity account: {}",
+                request_text.contains("Authorization: Bearer sk-local-current")
+                    || request_text.contains("authorization: Bearer sk-local-current"),
+                "thread-scoped request id alone should not pin a new request to the old account: {}",
                 request_text
             );
             assert!(
-                !request_text.contains("Authorization: Bearer sk-local-current")
-                    && !request_text.contains("authorization: Bearer sk-local-current"),
-                "same task must not be sent to the replacement account: {}",
+                !request_text.contains("Authorization: Bearer sk-local-old")
+                    && !request_text.contains("authorization: Bearer sk-local-old"),
+                "thread-scoped request id alone must allow the replacement account: {}",
                 request_text
             );
-            let body = r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+            let body = concat!(
+                "event: response.created\n",
+                "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_request_affinity_fallback_ok\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                "event: response.output_text.delta\n",
+                "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"CURRENT\"}\n\n",
+                "event: response.completed\n",
+                "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_request_affinity_fallback_ok\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                "data: [DONE]\n\n"
+            );
             let response = format!(
-                "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nRetry-After: 600\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                 body.as_bytes().len(),
                 body
             );
@@ -13897,7 +13938,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let mut persisted_registry =
             load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
                 .expect("health registry should load from isolated test root");
-        assert!(upsert_request_affinity_binding(
+        assert_eq!(
+            request_affinity_key(&affinity_request),
+            None,
+            "x-client-request-id is thread-scoped and must not become a hard turn affinity key"
+        );
+        assert!(!upsert_request_affinity_binding(
             &mut persisted_registry,
             &affinity_request,
             "api-old",
@@ -13934,25 +13980,23 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("response read should succeed");
         let response_text = String::from_utf8_lossy(&response);
         assert!(
-            response_text.contains("resp_cockpit_pool_unavailable_")
-                && response_text.contains("data: [DONE]"),
-            "request-id hard affinity should finish locally instead of switching accounts: {}",
+            response_text.contains("resp_request_affinity_fallback_ok")
+                && response_text.contains("CURRENT"),
+            "independent request should immediately use the replacement account: {}",
             response_text
         );
         assert!(
-            !response_text.contains("resp_request_affinity_fallback_ok")
-                && !response_text.contains("CURRENT"),
-            "request-id hard affinity must not replay on replacement account: {}",
+            !response_text.contains("resp_cockpit_pool_unavailable_"),
+            "thread-scoped request id must not trigger local pool_unavailable completion: {}",
             response_text
         );
 
         let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
             .expect("audit should be written to isolated root");
-        assert!(audit.contains("\"phase\":\"fallback_blocked\""));
-        assert!(audit.contains("\"outcome\":\"hard_affinity\""));
-        assert!(audit.contains("\"outcome\":\"in_band_local_completion\""));
-        assert!(!audit.contains("\"phase\":\"fallback_selected\""));
-        assert!(!audit.contains("\"phase\":\"stream_completed\""));
+        assert!(!audit.contains("\"phase\":\"fallback_blocked\""));
+        assert!(!audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
+        assert!(audit.contains("\"phase\":\"stream_completed\""));
 
         let server_result = server.await.expect("server task should join");
         assert!(server_result.is_ok(), "server failed: {:?}", server_result);
@@ -17566,6 +17610,16 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(!should_sync_local_access_collection_on_account_switch(
             CodexRuntimeIntegrationMode::DirectProjection,
             &collection
+        ));
+    }
+
+    #[test]
+    fn app_exit_projection_guard_only_targets_cockpit_api_service() {
+        assert!(should_restore_direct_projection_before_app_exit(
+            CodexRuntimeIntegrationMode::CockpitApiService
+        ));
+        assert!(!should_restore_direct_projection_before_app_exit(
+            CodexRuntimeIntegrationMode::DirectProjection
         ));
     }
 
