@@ -50,7 +50,6 @@ const LITELLM_GATEWAY_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_HTTP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_INLINE_ACCOUNT_RETRY_WAIT: Duration = Duration::from_secs(3);
-const MAX_HARD_AFFINITY_INLINE_RETRY_WAIT: Duration = Duration::from_secs(60);
 const MAX_POOL_UNAVAILABLE_PRE_ADMISSION_WAIT: Duration = Duration::from_secs(3);
 const UPSTREAM_SEND_RETRY_ATTEMPTS: usize = 3;
 const UPSTREAM_SEND_RETRY_BASE_DELAY: Duration = Duration::from_millis(200);
@@ -10170,11 +10169,17 @@ fn should_retry_single_account_upstream_status(status: StatusCode) -> bool {
     )
 }
 
+fn hard_affinity_inline_retry_wait_limit(config: &CodexLocalApiSafetyConfig) -> Duration {
+    Duration::from_secs(config.request_timeout_seconds.max(1))
+        .saturating_sub(Duration::from_secs(1))
+}
+
 fn should_retry_hard_affinity_upstream_failure(
     hard_affinity_active: bool,
     classified: &ClassifiedCodexUpstreamError,
     retry_attempt: usize,
     max_retry_attempts: usize,
+    retry_wait_limit: Duration,
 ) -> Option<Duration> {
     if !hard_affinity_active
         || retry_attempt >= max_retry_attempts
@@ -10185,7 +10190,7 @@ fn should_retry_hard_affinity_upstream_failure(
 
     classified
         .retry_after
-        .filter(|wait| *wait <= MAX_HARD_AFFINITY_INLINE_RETRY_WAIT)
+        .filter(|wait| *wait <= retry_wait_limit)
 }
 
 fn single_account_status_retry_delay(retry_attempt: usize) -> Duration {
@@ -10907,10 +10912,16 @@ async fn proxy_request_with_account_pool(
                     let hard_affinity_bound = hard_affinity_account_id.is_some();
                     let hard_affinity_active =
                         hard_affinity_account_id.as_deref() == Some(account.id.as_str());
+                    let hard_affinity_retry_wait_limit =
+                        hard_affinity_inline_retry_wait_limit(&collection.safety_config);
                     if hard_affinity_bound {
                         detail.insert(
                             "max_hard_affinity_inline_retry_wait_ms".to_string(),
-                            MAX_HARD_AFFINITY_INLINE_RETRY_WAIT.as_millis().to_string(),
+                            hard_affinity_retry_wait_limit.as_millis().to_string(),
+                        );
+                        detail.insert(
+                            "hard_affinity_inline_retry_wait_limit_ms".to_string(),
+                            hard_affinity_retry_wait_limit.as_millis().to_string(),
                         );
                     }
                     let can_try_next_account =
@@ -10939,6 +10950,7 @@ async fn proxy_request_with_account_pool(
                         &classified,
                         single_account_status_retry_attempt,
                         max_retry_attempts,
+                        hard_affinity_retry_wait_limit,
                     ) {
                         single_account_status_retry_attempt += 1;
                         record_hard_affinity_retry_wait_audit(
@@ -10947,6 +10959,7 @@ async fn proxy_request_with_account_pool(
                             status,
                             &classified,
                             wait,
+                            hard_affinity_retry_wait_limit,
                             "sleeping",
                         );
                         tokio::time::sleep(wait).await;
@@ -10956,6 +10969,7 @@ async fn proxy_request_with_account_pool(
                             status,
                             &classified,
                             wait,
+                            hard_affinity_retry_wait_limit,
                             "retrying",
                         );
                         continue;
@@ -11125,6 +11139,7 @@ fn record_hard_affinity_retry_wait_audit(
     status: StatusCode,
     classified: &ClassifiedCodexUpstreamError,
     wait: Duration,
+    retry_wait_limit: Duration,
     outcome: &str,
 ) {
     let context = build_audit_context(request, Some(account_id));
@@ -11143,7 +11158,11 @@ fn record_hard_affinity_retry_wait_audit(
             ("retry_after_ms".to_string(), wait.as_millis().to_string()),
             (
                 "max_inline_wait_ms".to_string(),
-                MAX_HARD_AFFINITY_INLINE_RETRY_WAIT.as_millis().to_string(),
+                retry_wait_limit.as_millis().to_string(),
+            ),
+            (
+                "inline_wait_limit_ms".to_string(),
+                retry_wait_limit.as_millis().to_string(),
             ),
             (
                 "message".to_string(),
@@ -12051,10 +12070,11 @@ mod tests {
         extract_usage_capture, filter_local_access_account_ids, first_audit_timestamp_from_path,
         first_stable_local_access_port, gateway_runtime, grant_active_stream_lease,
         grant_active_stream_lease_for_request, handle_connection,
-        health_registry_account_cooldown_wait, health_registry_account_is_schedulable,
-        health_registry_model_key, is_responses_completion_event,
-        is_responses_websocket_upgrade_request, is_websocket_upgrade_request,
-        json_response_with_retry_after, load_health_registry_from_path, load_runtime_mode_state,
+        hard_affinity_inline_retry_wait_limit, health_registry_account_cooldown_wait,
+        health_registry_account_is_schedulable, health_registry_model_key,
+        is_responses_completion_event, is_responses_websocket_upgrade_request,
+        is_websocket_upgrade_request, json_response_with_retry_after,
+        load_health_registry_from_path, load_runtime_mode_state,
         local_api_safety_config_for_preset, local_backpressure_wait_duration,
         next_routing_start_index, normalize_health_registry, normalize_local_api_safety_config,
         now_ms, official_codex_sticky_routing_boundary, parse_codex_retry_after,
@@ -12069,7 +12089,7 @@ mod tests {
         save_health_registry_to_path, selector_audit_detail, selector_selected_reason,
         set_runtime_integration_mode, should_defer_pool_unavailable,
         should_restore_direct_projection_before_app_exit,
-        should_retry_single_account_upstream_status,
+        should_retry_hard_affinity_upstream_failure, should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, should_use_pool_unavailable_summary,
         should_write_in_band_pool_unavailable_response, sort_account_ids_by_health_estimate,
@@ -12300,6 +12320,27 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         .expect("retry after should be parsed from generic upstream rate limit");
 
         assert_eq!(wait, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn hard_affinity_retry_should_allow_reset_window_inside_default_request_budget() {
+        let classified = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"type":"usage_limit_reached","reset_after_seconds":61}}"#,
+        );
+
+        assert_eq!(classified.retry_after, Some(Duration::from_secs(61)));
+        assert_eq!(
+            should_retry_hard_affinity_upstream_failure(
+                true,
+                &classified,
+                0,
+                1,
+                hard_affinity_inline_retry_wait_limit(&CodexLocalApiSafetyConfig::default())
+            ),
+            Some(Duration::from_secs(61))
+        );
     }
 
     #[test]

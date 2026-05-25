@@ -7,6 +7,9 @@ param(
   [string]$AuditPath,
   [string]$ReportDir = (Join-Path (Get-Location) "reports\local-hardened-api-live-monitor"),
   [string]$ExitCodeFile,
+  [string]$CheckpointPath,
+  [ValidateRange(1, 300)]
+  [int]$CheckpointIntervalSeconds = 10,
   [string[]]$CodexAppProcessNames = @("Codex"),
   [string[]]$CodexAppPathIncludePatterns = @(
     "*\WindowsApps\OpenAI.Codex_*\app\Codex.exe",
@@ -363,6 +366,28 @@ function Get-AuditDetailBool {
   $value -match '^(?i:true|1|yes)$'
 }
 
+function Get-AuditLeaseId {
+  param([System.Collections.IDictionary]$Event)
+  foreach ($name in @("lease_id", "leaseId")) {
+    $value = Get-AuditDetailValue -Event $Event -Name $name
+    if (-not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-") {
+      return $value
+    }
+  }
+  $null
+}
+
+function Get-AuditAdmissionAttempt {
+  param([System.Collections.IDictionary]$Event)
+  foreach ($name in @("admission_attempt", "admissionAttempt", "attempt")) {
+    $value = Get-AuditDetailValue -Event $Event -Name $name
+    if (-not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-") {
+      return $value
+    }
+  }
+  $null
+}
+
 function Get-AuditLineageId {
   param([System.Collections.IDictionary]$Event)
   $explicit = Get-AuditDetailValue -Event $Event -Name "turn_lineage_id"
@@ -452,6 +477,277 @@ function Test-HardAffinityLineageSource {
 function Test-MetadataLineageSource {
   param([string]$Source)
   $Source -in @("codex_turn_metadata", "codex_turn_metadata_turn_id")
+}
+
+function New-RequestTimelines {
+  param([object[]]$ParsedEvents)
+
+  $groups = [ordered]@{}
+  foreach ($event in $ParsedEvents) {
+    $requestId = [string]$event.requestId
+    if ([string]::IsNullOrWhiteSpace($requestId)) {
+      $requestId = "-"
+    }
+    $gatewayRequestId = Get-AuditGatewayRequestId $event
+    $timelineKey = if (-not [string]::IsNullOrWhiteSpace($gatewayRequestId)) {
+      "gateway:{0}" -f $gatewayRequestId
+    } else {
+      "request:{0}" -f $requestId
+    }
+    if (-not $groups.Contains($timelineKey)) {
+      $groups[$timelineKey] = [ordered]@{
+        timelineKey = $timelineKey
+        requestId = $requestId
+        firstTimestamp = $event.timestamp
+        lastTimestamp = $event.timestamp
+        eventCount = 0
+        gatewayRequestIds = @()
+        leaseIds = @()
+        accountHashes = @()
+        phases = @()
+        statuses = @()
+        admissionAttempts = @()
+        turnLineageIds = @()
+        turnLineageSources = @()
+        previousResponseIdHashes = @()
+        upstreamResponseIdHashes = @()
+        terminalOrigins = @()
+        hasContinuation = $false
+        hasAutoCompactCandidate = $false
+        has429 = $false
+        usageLimitReachedCount = 0
+        modelCooldownCount = 0
+        fallbackSelectedCount = 0
+        fallbackBlockedCount = 0
+        hardAffinityBlockedCount = 0
+        upstreamForward200Count = 0
+        upstreamForward429Count = 0
+        final200Count = 0
+        final429Count = 0
+        terminalUpstreamCompletionCount = 0
+        localCompletionCount = 0
+        clientAbortedCount = 0
+        poolWaitCount = 0
+        streamWriteCount = 0
+        streamCompletedCount = 0
+        leaseGrantedCount = 0
+        leaseReleasedCount = 0
+        keyEvents = @()
+      }
+    }
+
+    $group = $groups[$timelineKey]
+    $group.eventCount++
+    $group.lastTimestamp = $event.timestamp
+    if ($requestId -ne "-" -and $group.requestId -eq "-") {
+      $group.requestId = $requestId
+    }
+    if ($gatewayRequestId) {
+      $group.gatewayRequestIds += $gatewayRequestId
+    }
+    $leaseId = Get-AuditLeaseId $event
+    if ($leaseId) {
+      $group.leaseIds += $leaseId
+    }
+    if (Test-ValidAccountHash $event.accountHash) {
+      $group.accountHashes += $event.accountHash
+    }
+    if ($event.phase) {
+      $group.phases += $event.phase
+    }
+    if ($null -ne $event.status) {
+      $group.statuses += [string]$event.status
+      if ($event.status -eq 429) {
+        $group.has429 = $true
+      }
+    }
+    $admissionAttempt = Get-AuditAdmissionAttempt $event
+    if ($admissionAttempt) {
+      $group.admissionAttempts += $admissionAttempt
+    }
+    $lineageId = Get-AuditLineageId $event
+    if ($lineageId) {
+      $group.turnLineageIds += $lineageId
+    }
+    $lineageSource = Get-AuditLineageSource $event
+    if ($lineageSource) {
+      $group.turnLineageSources += $lineageSource
+    }
+    $previousResponseIdHash = Get-AuditPreviousResponseIdHash $event
+    if ($previousResponseIdHash) {
+      $group.previousResponseIdHashes += $previousResponseIdHash
+    }
+    $upstreamResponseIdHash = Get-AuditUpstreamResponseIdHash $event
+    if ($upstreamResponseIdHash) {
+      $group.upstreamResponseIdHashes += $upstreamResponseIdHash
+    }
+    $terminalOrigin = Get-AuditDetailValue -Event $event -Name "terminal_origin"
+    if ($terminalOrigin) {
+      $group.terminalOrigins += $terminalOrigin
+    }
+    if (Get-AuditDetailBool -Event $event -Name "is_continuation") {
+      $group.hasContinuation = $true
+    }
+    if (Get-AuditDetailBool -Event $event -Name "is_auto_compact_candidate") {
+      $group.hasAutoCompactCandidate = $true
+    }
+    if (Test-UsageLimitEvent $event) {
+      $group.usageLimitReachedCount++
+    }
+    switch ($event.phase) {
+      "model_cooldown_applied" { $group.modelCooldownCount++ }
+      "fallback_selected" { $group.fallbackSelectedCount++ }
+      "fallback_blocked" {
+        $group.fallbackBlockedCount++
+        if ($event.outcome -eq "hard_affinity") {
+          $group.hardAffinityBlockedCount++
+        }
+      }
+      "pool_wait" { $group.poolWaitCount++ }
+      "stream_write" { $group.streamWriteCount++ }
+      "stream_completed" {
+        $group.streamCompletedCount++
+        $group.terminalUpstreamCompletionCount++
+      }
+      "client_aborted" { $group.clientAbortedCount++ }
+      "lease_granted" { $group.leaseGrantedCount++ }
+      "lease_released" {
+        $group.leaseReleasedCount++
+        if ($event.outcome -eq "completed") {
+          $group.terminalUpstreamCompletionCount++
+        }
+        if ($event.outcome -eq "client_aborted") {
+          $group.clientAbortedCount++
+        }
+      }
+      "upstream_forward" {
+        if ($event.status -eq 200) {
+          $group.upstreamForward200Count++
+        } elseif ($event.status -eq 429) {
+          $group.upstreamForward429Count++
+        }
+      }
+      "final_response" {
+        if ($event.status -eq 200) {
+          $group.final200Count++
+          if (Test-LocalPoolUnavailableEvent $event) {
+            $group.localCompletionCount++
+          } else {
+            $group.terminalUpstreamCompletionCount++
+          }
+        } elseif ($event.status -eq 429) {
+          $group.final429Count++
+        }
+      }
+    }
+
+    $group.keyEvents += [ordered]@{
+      timestamp = $event.timestamp
+      phase = $event.phase
+      accountHash = $event.accountHash
+      status = $event.status
+      errorType = $event.errorType
+      outcome = $event.outcome
+      streamState = $event.streamState
+      gatewayRequestId = $gatewayRequestId
+      leaseId = $leaseId
+      admissionAttempt = $admissionAttempt
+      turnLineageId = $lineageId
+      previousResponseIdHash = $previousResponseIdHash
+      upstreamResponseIdHash = $upstreamResponseIdHash
+      terminalOrigin = $terminalOrigin
+    }
+  }
+
+  @($groups.Values | ForEach-Object {
+    $accountHashes = @($_.accountHashes | Where-Object { Test-ValidAccountHash $_ } | Select-Object -Unique)
+    $classification = "observed"
+    if ($_.hardAffinityBlockedCount -gt 0 -and $_.final429Count -gt 0) {
+      $classification = "hard_affinity_terminal_429"
+    } elseif ($_.hardAffinityBlockedCount -gt 0 -and $_.localCompletionCount -gt 0) {
+      $classification = "hard_affinity_local_completion"
+    } elseif ($_.hardAffinityBlockedCount -gt 0 -and $_.terminalUpstreamCompletionCount -gt 0) {
+      $classification = "hard_affinity_completed_on_original_account"
+    } elseif ($_.hasContinuation -and $accountHashes.Count -gt 1) {
+      $classification = "continuation_account_switch"
+    } elseif ($_.clientAbortedCount -gt 0 -and $_.streamWriteCount -gt 0) {
+      $classification = "client_aborted_after_stream_started"
+    } elseif ($_.clientAbortedCount -gt 0) {
+      $classification = "client_aborted_before_stream_body"
+    } elseif ($_.poolWaitCount -gt 0 -and $_.terminalUpstreamCompletionCount -gt 0) {
+      $classification = "pool_wait_recovered_completed"
+    } elseif ($_.localCompletionCount -gt 0) {
+      $classification = "pool_unavailable_local_completion"
+    } elseif ($_.final429Count -gt 0) {
+      $classification = "terminal_429"
+    } elseif ($_.terminalUpstreamCompletionCount -gt 0 -and ($_.upstreamForward200Count -gt 0 -or $_.leaseGrantedCount -gt 0 -or $_.streamWriteCount -gt 0)) {
+      $classification = "independent_request_completed"
+    }
+
+    [ordered]@{
+      timelineKey = $_.timelineKey
+      requestId = $_.requestId
+      firstTimestamp = $_.firstTimestamp
+      lastTimestamp = $_.lastTimestamp
+      eventCount = [int]$_.eventCount
+      classification = $classification
+      gatewayRequestIds = @($_.gatewayRequestIds | Select-Object -Unique)
+      leaseIds = @($_.leaseIds | Select-Object -Unique)
+      accountHashes = @($accountHashes)
+      phases = @($_.phases | Select-Object -Unique)
+      statuses = @($_.statuses | Select-Object -Unique)
+      admissionAttempts = @($_.admissionAttempts | Select-Object -Unique)
+      turnLineageIds = @($_.turnLineageIds | Select-Object -Unique)
+      turnLineageSources = @($_.turnLineageSources | Select-Object -Unique)
+      previousResponseIdHashes = @($_.previousResponseIdHashes | Select-Object -Unique)
+      upstreamResponseIdHashes = @($_.upstreamResponseIdHashes | Select-Object -Unique)
+      terminalOrigins = @($_.terminalOrigins | Select-Object -Unique)
+      hasContinuation = [bool]$_.hasContinuation
+      hasAutoCompactCandidate = [bool]$_.hasAutoCompactCandidate
+      has429 = [bool]$_.has429
+      usageLimitReachedCount = [int]$_.usageLimitReachedCount
+      modelCooldownCount = [int]$_.modelCooldownCount
+      fallbackSelectedCount = [int]$_.fallbackSelectedCount
+      fallbackBlockedCount = [int]$_.fallbackBlockedCount
+      hardAffinityBlockedCount = [int]$_.hardAffinityBlockedCount
+      upstreamForward200Count = [int]$_.upstreamForward200Count
+      upstreamForward429Count = [int]$_.upstreamForward429Count
+      final200Count = [int]$_.final200Count
+      final429Count = [int]$_.final429Count
+      terminalUpstreamCompletionCount = [int]$_.terminalUpstreamCompletionCount
+      localCompletionCount = [int]$_.localCompletionCount
+      clientAbortedCount = [int]$_.clientAbortedCount
+      poolWaitCount = [int]$_.poolWaitCount
+      streamWriteCount = [int]$_.streamWriteCount
+      streamCompletedCount = [int]$_.streamCompletedCount
+      leaseGrantedCount = [int]$_.leaseGrantedCount
+      leaseReleasedCount = [int]$_.leaseReleasedCount
+      keyEvents = @($_.keyEvents)
+    }
+  } | Sort-Object firstTimestamp, timelineKey)
+}
+
+function Format-AuditRealtimeEventLine {
+  param([System.Collections.IDictionary]$Event)
+  if (-not $Event.parsed) {
+    return "event=parse_error"
+  }
+  $gatewayRequestId = Get-AuditGatewayRequestId $Event
+  $leaseId = Get-AuditLeaseId $Event
+  $admissionAttempt = Get-AuditAdmissionAttempt $Event
+  $parts = @(
+    "event={0}" -f $Event.phase,
+    "requestId={0}" -f $Event.requestId,
+    "gatewayRequestId={0}" -f $(if ($gatewayRequestId) { $gatewayRequestId } else { "-" }),
+    "leaseId={0}" -f $(if ($leaseId) { $leaseId } else { "-" }),
+    "accountHash={0}" -f $Event.accountHash,
+    "status={0}" -f $(if ($null -ne $Event.status) { $Event.status } else { "-" }),
+    "errorType={0}" -f $(if ($Event.errorType) { $Event.errorType } else { "-" }),
+    "outcome={0}" -f $(if ($Event.outcome) { $Event.outcome } else { "-" }),
+    "streamState={0}" -f $(if ($Event.streamState) { $Event.streamState } else { "-" }),
+    "admissionAttempt={0}" -f $(if ($admissionAttempt) { $admissionAttempt } else { "-" })
+  )
+  $parts -join "; "
 }
 
 function Get-AuditAcceptanceSummary {
@@ -1057,6 +1353,7 @@ function Get-AuditAcceptanceSummary {
       $openPoolWaitRequestIds += $poolWaitRequestId
     }
   }
+  $requestTimelines = New-RequestTimelines $parsedEvents
 
   [ordered]@{
     eventCount = $Events.Count
@@ -1160,6 +1457,8 @@ function Get-AuditAcceptanceSummary {
       presentFieldNames = @($lineagePresentFieldNames)
       missingFieldNames = @($lineageMissingFieldNames)
     }
+    requestTimelineCount = $requestTimelines.Count
+    requestTimelines = @($requestTimelines)
     startedStreamCount = $startedStreams.Count
     completedStreamCount = $completedStreams.Count
     openStreamCount = $openStreams.Count
@@ -1625,6 +1924,105 @@ function New-ContinuitySummary {
   }
 }
 
+function New-MonitorReport {
+  param(
+    [datetime]$StartedAt,
+    [datetime]$EndedAt,
+    [string]$ReportStatus,
+    [string]$TerminationReason,
+    [object[]]$Events,
+    [System.Collections.IDictionary]$CliBefore,
+    [System.Collections.IDictionary]$CliAfter,
+    [System.Collections.IDictionary]$AppBefore,
+    [System.Collections.IDictionary]$AppAfter,
+    [string]$ReportPath,
+    [string]$CheckpointPath
+  )
+
+  $cliComparison = Compare-FileGuardState $CliBefore $CliAfter
+  $appComparison = Compare-CodexAppProcessState $AppBefore $AppAfter
+  $auditSummary = Get-AuditAcceptanceSummary $Events
+  $results = New-AcceptanceResults -AuditSummary $auditSummary -CliComparison $cliComparison -AppComparison $appComparison
+  $continuitySummary = New-ContinuitySummary $auditSummary
+  $overall = if ($results | Where-Object { $_.status -eq "fail" }) {
+    "fail"
+  } elseif ($results | Where-Object { $_.status -eq "blocked" }) {
+    "blocked"
+  } else {
+    "pass"
+  }
+
+  [ordered]@{
+    schemaVersion = 1
+    generatedAt = $EndedAt.ToString("o")
+    overall = $overall
+    reportStatus = $ReportStatus
+    terminationReason = $TerminationReason
+    mode = "live_codex_app_monitor"
+    startedAt = $StartedAt.ToString("o")
+    endedAt = $EndedAt.ToString("o")
+    elapsedSeconds = [math]::Round(($EndedAt - $StartedAt).TotalSeconds, 1)
+    dataRoot = $DataRoot
+    auditPath = $AuditPath
+    exitCodeFile = $ExitCodeFile
+    checkpointPath = $CheckpointPath
+    reportPath = $ReportPath
+    includeExistingAudit = [bool]$IncludeExistingAudit
+    requireQuotaFallback = [bool]$RequireQuotaFallback
+    requireStreamCompletion = [bool]$RequireStreamCompletion
+    requireCliConfigUntouched = [bool]$RequireCliConfigUntouched
+    requireAppStable = [bool]$RequireAppStable
+    requiredFallbackCycles = [int]$RequiredFallbackCycles
+    requiredDistinctHealthyAccounts = [int]$RequiredDistinctHealthyAccounts
+    requiredCompletedStreams = [int]$RequiredCompletedStreams
+    retryLimitRegressionCheck = "always_on"
+    responsesPoolUnavailableTransport503RegressionCheck = "always_on"
+    responsesPoolUnavailableFailedStreamRegressionCheck = "always_on"
+    responsesPoolUnavailableSyntheticCompletionRegressionCheck = "always_on"
+    poolWaitTerminalProgressRegressionCheck = "always_on"
+    temporaryConfig = [ordered]@{
+      managedByThisScript = $false
+      restored = "not_applicable"
+      reason = "live monitor is read-only; provider switching/restoration is performed outside this script"
+    }
+    codexCliGuard = [ordered]@{
+      before = $CliBefore
+      after = $CliAfter
+      comparison = $cliComparison
+    }
+    codexAppGuard = [ordered]@{
+      before = $AppBefore
+      after = $AppAfter
+      comparison = $appComparison
+    }
+    audit = $auditSummary
+    continuitySummary = $continuitySummary
+    results = $results
+    safetyNotes = @(
+      "this live monitor is read-only",
+      "it hashes ~/.codex/config.toml and ~/.codex/auth.json but does not read or write their contents",
+      "it does not start, stop, restart, or kill Codex App, Codex CLI, or Cockpit services",
+      "it does not switch providers or restore manual provider changes",
+      "use the App-safe isolated acceptance script when temporary provider config must be created and restored automatically"
+    )
+  }
+}
+
+function Write-MonitorJsonFile {
+  param(
+    [System.Collections.IDictionary]$Report,
+    [string]$Path
+  )
+  if ([string]::IsNullOrWhiteSpace($Path)) {
+    return
+  }
+  $dir = Split-Path -Parent $Path
+  if (-not [string]::IsNullOrWhiteSpace($dir)) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  }
+  $Report | ConvertTo-Json -Depth 24 | Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
 if (-not $AuditPath) {
   $AuditPath = Join-Path $DataRoot "codex_local_access_audit.jsonl"
 }
@@ -1635,6 +2033,14 @@ $offset = Get-InitialAuditOffset $AuditPath
 $events = @()
 $cliBefore = Get-FileGuardState $CodexHome
 $appBefore = Get-CodexAppProcessState $CodexAppProcessNames $CodexAppPathIncludePatterns $CodexAppPathExcludePatterns
+$terminationReason = "deadline"
+$lastCheckpointAt = [datetime]::MinValue
+if ($WriteReport) {
+  New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
+  if ([string]::IsNullOrWhiteSpace($CheckpointPath)) {
+    $CheckpointPath = Join-Path $ReportDir "live-monitor-checkpoint.json"
+  }
+}
 
 if (-not $Quiet) {
   Write-Host ("monitoring audit={0}" -f $AuditPath)
@@ -1643,11 +2049,39 @@ if (-not $Quiet) {
 
 do {
   $lines = Read-NewAuditLines -Path $AuditPath -Offset ([ref]$offset)
+  $wroteEventsThisPoll = $false
   if ($lines.Count -gt 0) {
-    $events += @($lines | ForEach-Object { Convert-AuditLine $_ })
+    $newEvents = @($lines | ForEach-Object { Convert-AuditLine $_ })
+    $events += $newEvents
+    $wroteEventsThisPoll = $true
     if (-not $Quiet) {
+      foreach ($event in $newEvents) {
+        Write-Host (Format-AuditRealtimeEventLine $event)
+      }
       $summary = Get-AuditAcceptanceSummary $events
       Write-Host ("events={0}; has429={1}; fallbackBlocked={2}; sameTaskLocalCompletion={3}; newRequestAvoidance={4}; healthyAccountsAfterBlock={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; localCompletionPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}; lineageSwitch={19}; continuationReroute={20}; autoCompactReroute={21}" -f $summary.eventCount, $summary.has429, $summary.sameTaskAffinityFallbackBlockedCount, $summary.sameTaskAffinityLocalCompletionCount, $summary.newRequestAvoidanceCount, $summary.distinctHealthyAccountCountAfterBlock, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.responsesLocalCompletionPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount, $summary.lineageAccountSwitchCount, $summary.continuationReroutedCount, $summary.autoCompactReroutedCount)
+    }
+  }
+
+  if ($WriteReport) {
+    $nowForCheckpoint = Get-Date
+    if ($wroteEventsThisPoll -or ($nowForCheckpoint - $lastCheckpointAt).TotalSeconds -ge $CheckpointIntervalSeconds) {
+      $cliCurrent = Get-FileGuardState $CodexHome
+      $appCurrent = Get-CodexAppProcessState $CodexAppProcessNames $CodexAppPathIncludePatterns $CodexAppPathExcludePatterns
+      $checkpoint = New-MonitorReport `
+        -StartedAt $startedAt `
+        -EndedAt $nowForCheckpoint `
+        -ReportStatus "running" `
+        -TerminationReason "running" `
+        -Events $events `
+        -CliBefore $cliBefore `
+        -CliAfter $cliCurrent `
+        -AppBefore $appBefore `
+        -AppAfter $appCurrent `
+        -ReportPath $null `
+        -CheckpointPath $CheckpointPath
+      Write-MonitorJsonFile -Report $checkpoint -Path $CheckpointPath
+      $lastCheckpointAt = $nowForCheckpoint
     }
   }
 
@@ -1662,14 +2096,17 @@ do {
     $legacySyntheticTerminalSatisfied = (-not $summaryNow.inBandSyntheticPoolUnavailableCount)
     $poolWaitProgressSatisfied = (-not $summaryNow.openPoolWaitCount)
     if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied) {
+      $terminationReason = "stop_when_satisfied"
       break
     }
   }
 
   if ($DurationSeconds -le 0) {
+    $terminationReason = "duration_or_zero"
     break
   }
   if ($StopSignalFile -and (Test-Path -LiteralPath $StopSignalFile)) {
+    $terminationReason = "stop_signal_file"
     if (-not $Quiet) {
       Write-Host ("stop_signal_file_detected={0}" -f $StopSignalFile)
     }
@@ -1681,80 +2118,33 @@ do {
 $endedAt = Get-Date
 $cliAfter = Get-FileGuardState $CodexHome
 $appAfter = Get-CodexAppProcessState $CodexAppProcessNames $CodexAppPathIncludePatterns $CodexAppPathExcludePatterns
-$cliComparison = Compare-FileGuardState $cliBefore $cliAfter
-$appComparison = Compare-CodexAppProcessState $appBefore $appAfter
-$auditSummary = Get-AuditAcceptanceSummary $events
-$results = New-AcceptanceResults -AuditSummary $auditSummary -CliComparison $cliComparison -AppComparison $appComparison
-$continuitySummary = New-ContinuitySummary $auditSummary
-
-$overall = if ($results | Where-Object { $_.status -eq "fail" }) {
-  "fail"
-} elseif ($results | Where-Object { $_.status -eq "blocked" }) {
-  "blocked"
-} else {
-  "pass"
-}
-
-$report = [ordered]@{
-  schemaVersion = 1
-  generatedAt = $endedAt.ToString("o")
-  overall = $overall
-  mode = "live_codex_app_monitor"
-  startedAt = $startedAt.ToString("o")
-  endedAt = $endedAt.ToString("o")
-  elapsedSeconds = [math]::Round(($endedAt - $startedAt).TotalSeconds, 1)
-  dataRoot = $DataRoot
-  auditPath = $AuditPath
-  exitCodeFile = $ExitCodeFile
-  includeExistingAudit = [bool]$IncludeExistingAudit
-  requireQuotaFallback = [bool]$RequireQuotaFallback
-  requireStreamCompletion = [bool]$RequireStreamCompletion
-  requireCliConfigUntouched = [bool]$RequireCliConfigUntouched
-  requireAppStable = [bool]$RequireAppStable
-  requiredFallbackCycles = [int]$RequiredFallbackCycles
-  requiredDistinctHealthyAccounts = [int]$RequiredDistinctHealthyAccounts
-  requiredCompletedStreams = [int]$RequiredCompletedStreams
-  retryLimitRegressionCheck = "always_on"
-  responsesPoolUnavailableTransport503RegressionCheck = "always_on"
-  responsesPoolUnavailableFailedStreamRegressionCheck = "always_on"
-  responsesPoolUnavailableSyntheticCompletionRegressionCheck = "always_on"
-  poolWaitTerminalProgressRegressionCheck = "always_on"
-  temporaryConfig = [ordered]@{
-    managedByThisScript = $false
-    restored = "not_applicable"
-    reason = "live monitor is read-only; provider switching/restoration is performed outside this script"
-  }
-  codexCliGuard = [ordered]@{
-    before = $cliBefore
-    after = $cliAfter
-    comparison = $cliComparison
-  }
-  codexAppGuard = [ordered]@{
-    before = $appBefore
-    after = $appAfter
-    comparison = $appComparison
-  }
-  audit = $auditSummary
-  continuitySummary = $continuitySummary
-  results = $results
-  safetyNotes = @(
-    "this live monitor is read-only",
-    "it hashes ~/.codex/config.toml and ~/.codex/auth.json but does not read or write their contents",
-    "it does not start, stop, restart, or kill Codex App, Codex CLI, or Cockpit services",
-    "it does not switch providers or restore manual provider changes",
-    "use the App-safe isolated acceptance script when temporary provider config must be created and restored automatically"
-  )
-}
-
+$reportPath = $null
 if ($WriteReport) {
   New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
   $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
   $reportPath = Join-Path $ReportDir ("live-monitor-{0}.json" -f $stamp)
-  $report.reportPath = $reportPath
-  $report | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $reportPath -Encoding UTF8
 }
 
-$report | ConvertTo-Json -Depth 20
+$report = New-MonitorReport `
+  -StartedAt $startedAt `
+  -EndedAt $endedAt `
+  -ReportStatus "completed" `
+  -TerminationReason $terminationReason `
+  -Events $events `
+  -CliBefore $cliBefore `
+  -CliAfter $cliAfter `
+  -AppBefore $appBefore `
+  -AppAfter $appAfter `
+  -ReportPath $reportPath `
+  -CheckpointPath $CheckpointPath
+
+if ($WriteReport) {
+  Write-MonitorJsonFile -Report $report -Path $reportPath
+  Write-MonitorJsonFile -Report $report -Path $CheckpointPath
+}
+
+$report | ConvertTo-Json -Depth 24
+$overall = $report.overall
 $exitCode = if ($overall -eq "fail") {
   1
 } elseif ($overall -eq "blocked") {

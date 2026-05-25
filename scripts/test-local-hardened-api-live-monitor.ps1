@@ -92,6 +92,10 @@ try {
   $passSummary = Convert-JsonOutput $passOutput "pass fixture"
   Assert-Equal $passSummary.overall "pass" "expected pass fixture overall"
   Assert-True (Test-Path -LiteralPath $passSummary.reportPath) "expected written report path"
+  Assert-True (Test-Path -LiteralPath $passSummary.checkpointPath) "expected live monitor checkpoint path"
+  $passCheckpoint = Get-Content -LiteralPath $passSummary.checkpointPath -Raw | ConvertFrom-Json
+  Assert-Equal $passCheckpoint.reportStatus "completed" "expected final checkpoint to mark completed status"
+  Assert-Equal $passSummary.terminationReason "duration_or_zero" "expected duration-zero fixture termination reason"
   Assert-Equal (($passSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "pass" "expected same-task hard-affinity block pass"
   Assert-Equal (($passSummary.results | Where-Object name -eq "new_request_avoids_exhausted_account").status) "pass" "expected healthy-account fallback pass"
   Assert-Equal (($passSummary.results | Where-Object name -eq "accepted_stream_continuity").status) "pass" "expected stream continuity pass"
@@ -102,6 +106,16 @@ try {
   Assert-Equal $passSummary.audit.newRequestBlockedReuseCount 0 "expected no new request to reuse the exhausted account"
   Assert-Equal $passSummary.temporaryConfig.restored "not_applicable" "expected live monitor not to manage temp config"
   Assert-Equal (($passSummary.results | Where-Object name -eq "audit_lineage_fields_present").status) "pass" "expected lineage field coverage pass"
+  $currentTimeline = $passSummary.audit.requestTimelines | Where-Object requestId -eq "turn:sha256:current"
+  Assert-True ($null -ne $currentTimeline) "expected request timeline for exhausted current turn"
+  Assert-Equal $currentTimeline.gatewayRequestIds[0] "gw-pass-1" "expected current timeline gateway id"
+  Assert-Equal $currentTimeline.fallbackBlockedCount 1 "expected current timeline to expose hard-affinity block"
+  Assert-Equal $currentTimeline.terminalUpstreamCompletionCount 1 "expected current timeline terminal completion"
+  Assert-Equal $currentTimeline.classification "hard_affinity_completed_on_original_account" "expected current timeline classification"
+  $nextTimeline = $passSummary.audit.requestTimelines | Where-Object requestId -eq "turn:sha256:next"
+  Assert-True ($null -ne $nextTimeline) "expected request timeline for independent next turn"
+  Assert-Equal $nextTimeline.accountHashes[0] "sha256:healthy" "expected independent turn healthy account"
+  Assert-Equal $nextTimeline.classification "independent_request_completed" "expected independent timeline classification"
 
   $dataRootMissingFields = Join-Path $tempRoot "data-missing-fields"
   $auditMissingFields = Join-Path $dataRootMissingFields "codex_local_access_audit.jsonl"
@@ -122,6 +136,37 @@ try {
   $missingFieldsSummary = Convert-JsonOutput $missingFieldsOutput "missing-field fixture"
   Assert-Equal (($missingFieldsSummary.results | Where-Object name -eq "audit_lineage_fields_present").status) "warn" "missing lineage fields should warn about limited root-cause diagnostics"
   Assert-Equal $missingFieldsSummary.audit.auditFieldCoverage.gatewayRequestIdCount 0 "expected missing gateway_request_id coverage"
+
+  $dataRootStopSignal = Join-Path $tempRoot "data-stop-signal"
+  $auditStopSignal = Join-Path $dataRootStopSignal "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditStopSignal @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-stop"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-stop"; turn_lineage_id = "turn:sha256:stop" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-stop"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-stop"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-stop"; turn_lineage_id = "turn:sha256:stop"; lease_id = "73" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-stop"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-stop"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-stop"; turn_lineage_id = "turn:sha256:stop"; lease_id = "73" } }
+  )
+  $stopReportDir = Join-Path $tempRoot "stop-reports"
+  $stopSignalFile = Join-Path $tempRoot "stop.signal"
+  "stop" | Set-Content -LiteralPath $stopSignalFile -Encoding ASCII
+  $stopSignalOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 30 `
+    -DataRoot $dataRootStopSignal `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -WriteReport `
+    -ReportDir $stopReportDir `
+    -StopSignalFile $stopSignalFile `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor stop-signal fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $stopSignalSummary = Convert-JsonOutput $stopSignalOutput "stop-signal fixture"
+  Assert-Equal $stopSignalSummary.terminationReason "stop_signal_file" "expected stop signal to finalize report gracefully"
+  Assert-True (Test-Path -LiteralPath $stopSignalSummary.reportPath) "expected stop-signal final report"
+  Assert-True (Test-Path -LiteralPath $stopSignalSummary.checkpointPath) "expected stop-signal checkpoint"
+  $stopTimeline = $stopSignalSummary.audit.requestTimelines | Where-Object requestId -eq "req-stop"
+  Assert-Equal $stopTimeline.leaseIds[0] "73" "expected stop-signal timeline lease id"
 
   $dataRootSameTaskLocalCompletion = Join-Path $tempRoot "data-same-task-local-completion"
   $auditSameTaskLocalCompletion = Join-Path $dataRootSameTaskLocalCompletion "codex_local_access_audit.jsonl"
