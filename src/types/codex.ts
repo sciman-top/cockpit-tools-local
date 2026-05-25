@@ -421,9 +421,19 @@ function toBoolValue(value: unknown): boolean | undefined {
 }
 
 function toFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value)
-    ? value
-    : undefined;
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function normalizeCodexUnixSeconds(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value)) return undefined;
+  return value > 1_000_000_000_000 ? Math.floor(value / 1000) : value;
 }
 
 function decodeJwtPayload(token: string | undefined): JsonRecord | null {
@@ -537,7 +547,7 @@ function normalizeCodeReviewWindow(
     limitWindowSeconds !== undefined && limitWindowSeconds > 0
       ? Math.ceil(limitWindowSeconds / 60)
       : undefined;
-  const resetAt = toFiniteNumber(window.reset_at);
+  const resetAt = normalizeCodexUnixSeconds(toFiniteNumber(window.reset_at));
   const resetAfterSeconds = toFiniteNumber(window.reset_after_seconds);
   const resetTime =
     resetAt ??
@@ -872,10 +882,83 @@ function clampCodexQuotaPercentage(value: number | null | undefined): number {
 }
 
 const CODEX_WEEK_WINDOW_SECONDS = 7 * 24 * 60 * 60;
+const CODEX_WEEK_WINDOW_MINUTES = 7 * 24 * 60;
+const CODEX_WEEKLY_WINDOW_MINUTES_THRESHOLD = 6 * 24 * 60;
 const CODEX_FIVE_HOUR_WINDOW_SECONDS = 5 * 60 * 60;
 const CODEX_FREE_BASELINE_USED_PERCENT_MAX = 3;
 const CODEX_FREE_BASELINE_RESET_GRACE_SECONDS = 5 * 60;
 const CODEX_SERVER_INITIAL_BASELINE_REMAINING_PERCENTAGE = 97;
+
+interface CodexNormalizedQuotaWindowSlot {
+  percentage: number;
+  resetTime?: number;
+  windowMinutes?: number;
+  present: boolean;
+}
+
+interface CodexNormalizedQuotaWindowSlots {
+  hourly: CodexNormalizedQuotaWindowSlot;
+  weekly: CodexNormalizedQuotaWindowSlot;
+}
+
+function isCodexWeeklyWindowMinutes(windowMinutes: number | undefined): boolean {
+  return (
+    typeof windowMinutes === "number" &&
+    Number.isFinite(windowMinutes) &&
+    windowMinutes >= CODEX_WEEKLY_WINDOW_MINUTES_THRESHOLD
+  );
+}
+
+function getCodexNormalizedQuotaWindowSlots(
+  quota: CodexQuota,
+): CodexNormalizedQuotaWindowSlots {
+  const hasPresenceFlags =
+    quota.hourly_window_present !== undefined ||
+    quota.weekly_window_present !== undefined;
+  const bothFlagsFalse =
+    quota.hourly_window_present === false &&
+    quota.weekly_window_present === false;
+
+  let hourly: CodexNormalizedQuotaWindowSlot = {
+    percentage: clampCodexQuotaPercentage(quota.hourly_percentage),
+    resetTime: quota.hourly_reset_time,
+    windowMinutes: quota.hourly_window_minutes,
+    present:
+      !hasPresenceFlags || quota.hourly_window_present === true || bothFlagsFalse,
+  };
+  let weekly: CodexNormalizedQuotaWindowSlot = {
+    percentage: clampCodexQuotaPercentage(quota.weekly_percentage),
+    resetTime: quota.weekly_reset_time,
+    windowMinutes: quota.weekly_window_minutes,
+    present: !hasPresenceFlags || quota.weekly_window_present === true,
+  };
+
+  if (hourly.present && isCodexWeeklyWindowMinutes(hourly.windowMinutes)) {
+    if (!weekly.present || hourly.percentage < weekly.percentage) {
+      weekly = {
+        percentage: hourly.percentage,
+        resetTime: hourly.resetTime ?? weekly.resetTime,
+        windowMinutes: hourly.windowMinutes ?? weekly.windowMinutes,
+        present: true,
+      };
+    } else {
+      weekly = {
+        ...weekly,
+        windowMinutes: weekly.windowMinutes ?? hourly.windowMinutes,
+        present: true,
+      };
+    }
+
+    hourly = {
+      percentage: 100,
+      resetTime: undefined,
+      windowMinutes: undefined,
+      present: false,
+    };
+  }
+
+  return { hourly, weekly };
+}
 
 function getCodexQuotaRawRateLimitWindow(
   quota: CodexQuota | undefined,
@@ -960,25 +1043,6 @@ function applyCodexServerBaselineAdjustment(
   return percentage;
 }
 
-function isCodexQuotaWindowPresent(
-  quota: CodexQuota,
-  window: "hourly" | "weekly",
-): boolean {
-  const hasPresenceFlags =
-    quota.hourly_window_present !== undefined ||
-    quota.weekly_window_present !== undefined;
-  if (!hasPresenceFlags) return true;
-  if (
-    quota.hourly_window_present === false &&
-    quota.weekly_window_present === false
-  ) {
-    return window === "hourly";
-  }
-  return window === "hourly"
-    ? quota.hourly_window_present === true
-    : quota.weekly_window_present === true;
-}
-
 export function getCodexEffectiveQuotaPercentages(
   quota: CodexQuota | undefined,
 ): CodexEffectiveQuotaPercentages {
@@ -986,18 +1050,19 @@ export function getCodexEffectiveQuotaPercentages(
     return { hourly: null, weekly: null, weeklyBlocksHourly: false };
   }
 
-  const hourly = isCodexQuotaWindowPresent(quota, "hourly")
+  const slots = getCodexNormalizedQuotaWindowSlots(quota);
+  const hourly = slots.hourly.present
     ? applyCodexServerBaselineAdjustment(
         quota,
         "hourly",
-        clampCodexQuotaPercentage(quota.hourly_percentage),
+        slots.hourly.percentage,
       )
     : null;
-  const weekly = isCodexQuotaWindowPresent(quota, "weekly")
+  const weekly = slots.weekly.present
     ? applyCodexServerBaselineAdjustment(
         quota,
         "weekly",
-        clampCodexQuotaPercentage(quota.weekly_percentage),
+        slots.weekly.percentage,
       )
     : null;
   const weeklyBlocksHourly = weekly === 0 && hourly != null;
@@ -1015,7 +1080,6 @@ export function getCodexQuotaWindowLabel(
 ): string {
   const HOUR_MINUTES = 60;
   const DAY_MINUTES = 24 * HOUR_MINUTES;
-  const WEEK_MINUTES = 7 * DAY_MINUTES;
   const safeMinutes =
     typeof windowMinutes === "number" &&
     Number.isFinite(windowMinutes) &&
@@ -1027,8 +1091,8 @@ export function getCodexQuotaWindowLabel(
     return fallback === "weekly" ? "Weekly" : "5h";
   }
 
-  if (safeMinutes >= WEEK_MINUTES - 1) {
-    const weeks = Math.ceil(safeMinutes / WEEK_MINUTES);
+  if (safeMinutes >= CODEX_WEEK_WINDOW_MINUTES - 1) {
+    const weeks = Math.ceil(safeMinutes / CODEX_WEEK_WINDOW_MINUTES);
     return weeks <= 1 ? "Weekly" : `${weeks} Week`;
   }
 
@@ -1050,40 +1114,35 @@ export function getCodexQuotaWindows(
 
   const windows: CodexQuotaWindow[] = [];
   const effective = getCodexEffectiveQuotaPercentages(quota);
-  const hasPresenceFlags =
-    quota.hourly_window_present !== undefined ||
-    quota.weekly_window_present !== undefined;
-
-  const appendPrimary =
-    !hasPresenceFlags || quota.hourly_window_present === true;
-  const appendSecondary =
-    !hasPresenceFlags || quota.weekly_window_present === true;
+  const slots = getCodexNormalizedQuotaWindowSlots(quota);
+  const appendPrimary = slots.hourly.present;
+  const appendSecondary = slots.weekly.present;
 
   if (appendPrimary) {
-    const rawPercentage = clampCodexQuotaPercentage(quota.hourly_percentage);
+    const rawPercentage = slots.hourly.percentage;
     windows.push({
       id: "primary",
-      label: getCodexQuotaWindowLabel(quota.hourly_window_minutes, "hourly"),
+      label: getCodexQuotaWindowLabel(slots.hourly.windowMinutes, "hourly"),
       percentage: effective.hourly ?? 0,
       rawPercentage,
       serverBaselineAdjusted:
         isCodexServerInitialBaseline(quota, "hourly") &&
         effective.hourly != null &&
         effective.hourly !== rawPercentage,
-      resetTime: quota.hourly_reset_time,
-      windowMinutes: quota.hourly_window_minutes,
+      resetTime: slots.hourly.resetTime,
+      windowMinutes: slots.hourly.windowMinutes,
     });
   }
 
   if (appendSecondary) {
-    const rawPercentage = clampCodexQuotaPercentage(quota.weekly_percentage);
+    const rawPercentage = slots.weekly.percentage;
     windows.push({
       id: "secondary",
-      label: getCodexQuotaWindowLabel(quota.weekly_window_minutes, "weekly"),
+      label: getCodexQuotaWindowLabel(slots.weekly.windowMinutes, "weekly"),
       percentage: effective.weekly ?? 0,
       rawPercentage,
-      resetTime: quota.weekly_reset_time,
-      windowMinutes: quota.weekly_window_minutes,
+      resetTime: slots.weekly.resetTime,
+      windowMinutes: slots.weekly.windowMinutes,
     });
   }
 
@@ -1094,10 +1153,10 @@ export function getCodexQuotaWindows(
   return [
     {
       id: "primary",
-      label: getCodexQuotaWindowLabel(quota.hourly_window_minutes, "hourly"),
+      label: getCodexQuotaWindowLabel(slots.hourly.windowMinutes, "hourly"),
       percentage: effective.hourly ?? 0,
-      resetTime: quota.hourly_reset_time,
-      windowMinutes: quota.hourly_window_minutes,
+      resetTime: slots.hourly.resetTime,
+      windowMinutes: slots.hourly.windowMinutes,
     },
   ];
 }
@@ -1107,10 +1166,11 @@ export function formatCodexResetTime(
   resetTime: number | undefined,
   t: Translate,
 ): string {
-  if (!resetTime) return "";
+  const normalizedResetTime = normalizeCodexUnixSeconds(resetTime);
+  if (!normalizedResetTime) return "";
 
   const now = Math.floor(Date.now() / 1000);
-  const diff = resetTime - now;
+  const diff = normalizedResetTime - now;
 
   if (diff <= 0) return t("common.shared.quota.resetDone");
 
@@ -1125,7 +1185,7 @@ export function formatCodexResetTime(
   if (minutes > 0) parts.push(`${minutes}m`);
 
   const relative = parts.length > 0 ? parts.join(" ") : "<1m";
-  const absolute = formatCodexResetTimeAbsolute(resetTime);
+  const absolute = formatCodexResetTimeAbsolute(normalizedResetTime);
 
   return `${relative} (${absolute})`;
 }
@@ -1133,9 +1193,10 @@ export function formatCodexResetTime(
 export function formatCodexResetTimeAbsolute(
   resetTime: number | undefined,
 ): string {
-  if (!resetTime) return "";
+  const normalizedResetTime = normalizeCodexUnixSeconds(resetTime);
+  if (!normalizedResetTime) return "";
 
-  const resetDate = new Date(resetTime * 1000);
+  const resetDate = new Date(normalizedResetTime * 1000);
 
   const pad = (value: number) => String(value).padStart(2, "0");
   const month = pad(resetDate.getMonth() + 1);

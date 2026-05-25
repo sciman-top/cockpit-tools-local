@@ -4165,14 +4165,34 @@ fn parse_retry_after_headers(headers: Option<&HeaderMap>) -> Option<Duration> {
         .and_then(|value| parse_retry_after_header_value(value, chrono::Utc::now()))
 }
 
-fn parse_usage_limit_body_retry_after(error_body: &str) -> Option<Duration> {
+fn parse_upstream_body_retry_after(status: StatusCode, error_body: &str) -> Option<Duration> {
     if error_body.trim().is_empty() {
+        return None;
+    }
+    if !matches!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
+    ) {
         return None;
     }
 
     let payload = serde_json::from_str::<Value>(error_body).ok()?;
-    let provider_code = extract_provider_error_code(&payload)?;
-    if provider_code.to_ascii_lowercase() != "usage_limit_reached" {
+    let provider_code = extract_provider_error_code(&payload)
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let body_lower = error_body.to_ascii_lowercase();
+    let has_retryable_marker = [
+        "usage_limit_reached",
+        "insufficient_quota",
+        "rate_limit",
+        "too_many_requests",
+        "quota",
+        "model_capacity",
+        "capacity",
+    ]
+    .iter()
+    .any(|marker| provider_code.contains(marker) || body_lower.contains(marker));
+    if !has_retryable_marker {
         return None;
     }
 
@@ -4207,7 +4227,7 @@ fn classify_codex_upstream_error(
         .to_ascii_lowercase();
     let body_lower = error_body.to_ascii_lowercase();
     let retry_after = parse_retry_after_headers(headers)
-        .or_else(|| parse_usage_limit_body_retry_after(error_body));
+        .or_else(|| parse_upstream_body_retry_after(status, error_body));
 
     let has_marker = |markers: &[&str]| {
         markers
@@ -12261,6 +12281,28 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn parses_codex_retry_after_from_insufficient_quota_payload() {
+        let wait = parse_codex_retry_after(
+            StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"type":"insufficient_quota","reset_after_seconds":"90"}}"#,
+        )
+        .expect("retry after should be parsed from account quota exhaustion");
+
+        assert_eq!(wait, Duration::from_secs(90));
+    }
+
+    #[test]
+    fn parses_codex_retry_after_from_generic_rate_limit_payload() {
+        let wait = parse_codex_retry_after(
+            StatusCode::TOO_MANY_REQUESTS,
+            r#"{"error":{"type":"rate_limit_exceeded","retry_after":30}}"#,
+        )
+        .expect("retry after should be parsed from generic upstream rate limit");
+
+        assert_eq!(wait, Duration::from_secs(30));
+    }
+
+    #[test]
     fn classifier_prefers_retry_after_headers_over_body_resets() {
         let mut headers = reqwest::header::HeaderMap::new();
         headers.insert("retry-after-ms", HeaderValue::from_static("2500"));
@@ -12671,6 +12713,102 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             Some("gpt-5.5"),
             now + 61_000
         ));
+    }
+
+    #[test]
+    fn health_registry_insufficient_quota_uses_reset_hint_for_recovery() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        let classified = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"type":"insufficient_quota","reset_after_seconds":90}}"#,
+        );
+
+        assert_eq!(
+            classified.error_type,
+            CodexLocalAccessErrorType::InsufficientQuota
+        );
+        assert_eq!(classified.retry_after, Some(Duration::from_secs(90)));
+
+        update_health_registry_from_classified_error(
+            &mut registry,
+            "account-insufficient",
+            Some("gpt-5.5"),
+            Some("req-insufficient"),
+            &classified,
+            now,
+        );
+
+        let account = registry
+            .accounts
+            .get("account-insufficient")
+            .expect("account should be tracked");
+        assert_eq!(
+            account.status,
+            CodexLocalAccessAccountHealthStatus::Exhausted
+        );
+        assert_eq!(account.cooldown_until_ms, Some(now + 90_000));
+        assert_eq!(account.estimated_reset_at_ms, Some(now + 90_000));
+        assert_eq!(account.estimated_remaining_percentage, Some(0));
+        assert_eq!(account.last_observed_remaining_percentage, Some(0));
+        assert_eq!(account.reset_source.as_deref(), Some("upstream_reset_hint"));
+        assert!(!health_registry_account_is_schedulable(
+            &registry,
+            "account-insufficient",
+            Some("gpt-5.5"),
+            now
+        ));
+
+        let normalized = normalize_health_registry(registry, now + 91_000);
+        let recovered = normalized
+            .accounts
+            .get("account-insufficient")
+            .expect("account should still be tracked");
+        assert_eq!(
+            recovered.status,
+            CodexLocalAccessAccountHealthStatus::EstimatedAvailable
+        );
+        assert_eq!(recovered.estimated_remaining_percentage, Some(100));
+    }
+
+    #[test]
+    fn health_registry_generic_rate_limit_uses_reset_hint_without_zero_quota() {
+        let now = 1_700_000_000_000;
+        let mut registry = empty_health_registry(now);
+        let classified = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"type":"rate_limit_exceeded","reset_after_seconds":30}}"#,
+        );
+
+        assert_eq!(
+            classified.error_type,
+            CodexLocalAccessErrorType::UpstreamRateLimit
+        );
+        assert_eq!(classified.retry_after, Some(Duration::from_secs(30)));
+
+        update_health_registry_from_classified_error(
+            &mut registry,
+            "account-rate-limit",
+            Some("gpt-5.5"),
+            Some("req-rate-limit"),
+            &classified,
+            now,
+        );
+
+        let account = registry
+            .accounts
+            .get("account-rate-limit")
+            .expect("account should be tracked");
+        assert_eq!(
+            account.status,
+            CodexLocalAccessAccountHealthStatus::CoolingDown
+        );
+        assert_eq!(account.cooldown_until_ms, Some(now + 30_000));
+        assert_eq!(account.estimated_remaining_percentage, None);
+        assert_eq!(account.last_observed_remaining_percentage, None);
+        assert_eq!(account.reset_source.as_deref(), Some("upstream_reset_hint"));
     }
 
     #[test]

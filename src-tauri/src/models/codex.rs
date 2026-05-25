@@ -160,6 +160,48 @@ pub struct CodexQuota {
     pub raw_data: Option<serde_json::Value>,
 }
 
+impl CodexQuota {
+    pub fn normalize_window_slots(&mut self) -> bool {
+        const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
+
+        let hourly_looks_weekly = self
+            .hourly_window_minutes
+            .map(|minutes| minutes >= WEEKLY_WINDOW_MINUTES_THRESHOLD)
+            .unwrap_or(false);
+        let hourly_present = self.hourly_window_present.unwrap_or(true);
+        if !hourly_looks_weekly || !hourly_present {
+            return false;
+        }
+
+        let moved_percentage = self.hourly_percentage.clamp(0, 100);
+        let moved_reset_time = self.hourly_reset_time;
+        let moved_window_minutes = self.hourly_window_minutes;
+        let weekly_present = self.weekly_window_present.unwrap_or(false);
+
+        if !weekly_present {
+            self.weekly_percentage = moved_percentage;
+            self.weekly_reset_time = moved_reset_time;
+            self.weekly_window_minutes = moved_window_minutes;
+        } else {
+            let current_weekly = self.weekly_percentage.clamp(0, 100);
+            if moved_percentage < current_weekly {
+                self.weekly_percentage = moved_percentage;
+                self.weekly_reset_time = moved_reset_time.or(self.weekly_reset_time);
+                self.weekly_window_minutes = moved_window_minutes.or(self.weekly_window_minutes);
+            } else if self.weekly_window_minutes.is_none() {
+                self.weekly_window_minutes = moved_window_minutes;
+            }
+        }
+
+        self.weekly_window_present = Some(true);
+        self.hourly_percentage = 100;
+        self.hourly_reset_time = None;
+        self.hourly_window_minutes = None;
+        self.hourly_window_present = Some(false);
+        true
+    }
+}
+
 /// Codex 配额错误信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CodexQuotaErrorInfo {

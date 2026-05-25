@@ -1,8 +1,11 @@
 use crate::models::codex::{CodexAccount, CodexQuota, CodexQuotaErrorInfo};
 use crate::modules::{codex_account, logger};
+use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 // 使用 wham/usage 端点（Quotio 使用的）
 const USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
@@ -11,6 +14,8 @@ const LEGACY_NEW_API_PROVIDER_ID: &str = "new_api";
 const COCKPIT_API_PLAN_TYPE: &str = "Cockpit Api";
 const LEGACY_NEW_API_EXCLUSIVE_PLAN_TYPE: &str = "NEW_API_EXCLUSIVE";
 const COCKPIT_API_BASE_URL: &str = "https://chongcodex.cn/v1";
+const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
+const DIRECT_SESSION_SCAN_MAX_FILES: usize = 32;
 
 fn get_header_value(headers: &HeaderMap, name: &str) -> String {
     headers
@@ -92,6 +97,10 @@ fn first_i64_field<'a>(
         value.get(key).and_then(|item| {
             item.as_i64()
                 .or_else(|| item.as_u64().and_then(|v| i64::try_from(v).ok()))
+                .or_else(|| {
+                    item.as_str()
+                        .and_then(|value| value.trim().parse::<i64>().ok())
+                })
         })
     })
 }
@@ -114,6 +123,9 @@ fn extract_quota_reset_hint_from_body(body: &str, now: i64) -> Option<(Option<i6
                 "reset_after_seconds",
                 "resets_in_seconds",
                 "resetAfterSeconds",
+                "resetsInSeconds",
+                "retry_after_seconds",
+                "retry_after",
             ],
         )
         .filter(|seconds| *seconds >= 0);
@@ -138,24 +150,24 @@ fn write_quota_error(account: &mut CodexAccount, message: String) {
 
 fn is_quota_exhaustion_error(message: &str) -> bool {
     let lower = message.to_ascii_lowercase();
-    lower.contains("api 返回错误 429")
-        || lower.contains("too many requests")
-        || lower.contains("rate_limit")
-        || lower.contains("rate limit")
-        || lower.contains("limit_reached")
+    lower.contains("usage_limit_reached")
+        || lower.contains("insufficient_quota")
         || lower.contains("usage_limit")
         || lower.contains("usage limit")
-        || lower.contains("model_cap")
+        || lower.contains("limit_reached")
+        || lower.contains("limit reached")
         || (lower.contains("quota")
             && (lower.contains("exceed") || lower.contains("limit") || lower.contains("exhaust")))
 }
 
-fn build_exhausted_quota_snapshot(account: &CodexAccount, message: &str) -> CodexQuota {
+fn build_exhausted_quota_snapshot_with_hint(
+    account: &CodexAccount,
+    source: &str,
+    reset_at: Option<i64>,
+    reset_after_seconds: Option<i64>,
+    now: i64,
+) -> CodexQuota {
     let previous = account.quota.as_ref();
-    let now = chrono::Utc::now().timestamp();
-    let reset_at = extract_i64_marker_from_message(message, "[reset_at:")
-        .map(normalize_unix_timestamp_seconds);
-    let reset_after_seconds = extract_i64_marker_from_message(message, "[reset_after_seconds:");
     let hourly_reset_time = reset_at.or_else(|| previous.and_then(|quota| quota.hourly_reset_time));
     let weekly_reset_time = reset_at.or_else(|| previous.and_then(|quota| quota.weekly_reset_time));
     CodexQuota {
@@ -172,13 +184,27 @@ fn build_exhausted_quota_snapshot(account: &CodexAccount, message: &str) -> Code
             .and_then(|quota| quota.weekly_window_present)
             .or(Some(true)),
         raw_data: Some(json!({
-            "source": "quota_refresh_error",
+            "source": source,
             "quota_exhausted": true,
             "exhausted_at": now,
             "reset_at": reset_at,
             "reset_after_seconds": reset_after_seconds,
         })),
     }
+}
+
+fn build_exhausted_quota_snapshot(account: &CodexAccount, message: &str) -> CodexQuota {
+    let now = chrono::Utc::now().timestamp();
+    let reset_at = extract_i64_marker_from_message(message, "[reset_at:")
+        .map(normalize_unix_timestamp_seconds);
+    let reset_after_seconds = extract_i64_marker_from_message(message, "[reset_after_seconds:");
+    build_exhausted_quota_snapshot_with_hint(
+        account,
+        "quota_refresh_error",
+        reset_at,
+        reset_after_seconds,
+        now,
+    )
 }
 
 fn write_quota_fetch_error(account: &mut CodexAccount, message: String) {
@@ -229,6 +255,8 @@ struct UsageResponse {
     rate_limit: Option<RateLimitInfo>,
     #[serde(rename = "code_review_rate_limit")]
     code_review_rate_limit: Option<RateLimitInfo>,
+    #[serde(rename = "rate_limit_reached_type")]
+    rate_limit_reached_type: Option<serde_json::Value>,
 }
 
 fn normalize_remaining_percentage(window: &WindowInfo) -> i32 {
@@ -244,9 +272,15 @@ fn normalize_window_minutes(window: &WindowInfo) -> Option<i64> {
     Some((seconds + 59) / 60)
 }
 
+fn is_weekly_window(window: &WindowInfo) -> bool {
+    normalize_window_minutes(window)
+        .map(|minutes| minutes >= WEEKLY_WINDOW_MINUTES_THRESHOLD)
+        .unwrap_or(false)
+}
+
 fn normalize_reset_time(window: &WindowInfo) -> Option<i64> {
     if let Some(reset_at) = window.reset_at {
-        return Some(reset_at);
+        return Some(normalize_unix_timestamp_seconds(reset_at));
     }
 
     let reset_after_seconds = window.reset_after_seconds?;
@@ -255,6 +289,72 @@ fn normalize_reset_time(window: &WindowInfo) -> Option<i64> {
     }
 
     Some(chrono::Utc::now().timestamp() + reset_after_seconds)
+}
+
+fn read_rate_limit_reached_type(value: &serde_json::Value) -> Option<String> {
+    if let Some(kind) = value.as_str() {
+        return Some(kind.trim().to_ascii_lowercase());
+    }
+
+    value
+        .get("type")
+        .or_else(|| value.get("kind"))
+        .and_then(|item| item.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase)
+}
+
+fn is_exhausted_rate_limit_reached_type(value: Option<&serde_json::Value>) -> bool {
+    let Some(kind) = value.and_then(read_rate_limit_reached_type) else {
+        return false;
+    };
+
+    matches!(
+        kind.as_str(),
+        "rate_limit_reached"
+            | "workspace_owner_credits_depleted"
+            | "workspace_member_credits_depleted"
+            | "workspace_owner_usage_limit_reached"
+            | "workspace_member_usage_limit_reached"
+            | "usage_limit_reached"
+            | "credits_depleted"
+    )
+}
+
+fn rate_limit_marks_exhausted(rate_limit: Option<&RateLimitInfo>) -> bool {
+    let Some(rate_limit) = rate_limit else {
+        return false;
+    };
+
+    rate_limit.limit_reached == Some(true) || rate_limit.allowed == Some(false)
+}
+
+fn apply_window_to_quota_slots(
+    window: &WindowInfo,
+    exhausted: bool,
+    hourly: &mut (i32, Option<i64>, Option<i64>, bool),
+    weekly: &mut (i32, Option<i64>, Option<i64>, bool),
+) {
+    let remaining = if exhausted {
+        0
+    } else {
+        normalize_remaining_percentage(window)
+    };
+    let reset_time = normalize_reset_time(window);
+    let window_minutes = normalize_window_minutes(window);
+    let target = if is_weekly_window(window) {
+        weekly
+    } else {
+        hourly
+    };
+
+    if !target.3 || remaining < target.0 {
+        target.0 = remaining;
+        target.1 = reset_time;
+        target.2 = window_minutes;
+        target.3 = true;
+    }
 }
 
 /// 配额查询结果（包含 plan_type）
@@ -379,45 +479,619 @@ fn parse_quota_from_usage(usage: &UsageResponse, raw_body: &str) -> Result<Codex
     let rate_limit = usage.rate_limit.as_ref();
     let primary_window = rate_limit.and_then(|r| r.primary_window.as_ref());
     let secondary_window = rate_limit.and_then(|r| r.secondary_window.as_ref());
+    let exhausted = rate_limit_marks_exhausted(rate_limit)
+        || is_exhausted_rate_limit_reached_type(usage.rate_limit_reached_type.as_ref());
 
-    // Primary window = 5小时配额（session）
-    let (hourly_percentage, hourly_reset_time, hourly_window_minutes) =
-        if let Some(primary) = primary_window {
-            (
-                normalize_remaining_percentage(primary),
-                normalize_reset_time(primary),
-                normalize_window_minutes(primary),
-            )
-        } else {
-            (100, None, None)
-        };
+    let mut hourly = (100, None, None, false);
+    let mut weekly = (100, None, None, false);
 
-    // Secondary window = 周配额
-    let (weekly_percentage, weekly_reset_time, weekly_window_minutes) =
-        if let Some(secondary) = secondary_window {
-            (
-                normalize_remaining_percentage(secondary),
-                normalize_reset_time(secondary),
-                normalize_window_minutes(secondary),
-            )
-        } else {
-            (100, None, None)
-        };
+    for window in [primary_window, secondary_window].into_iter().flatten() {
+        apply_window_to_quota_slots(window, exhausted, &mut hourly, &mut weekly);
+    }
 
     // 保存原始响应
     let raw_data: Option<serde_json::Value> = serde_json::from_str(raw_body).ok();
 
     Ok(CodexQuota {
-        hourly_percentage,
-        hourly_reset_time,
-        hourly_window_minutes,
-        hourly_window_present: Some(primary_window.is_some()),
-        weekly_percentage,
-        weekly_reset_time,
-        weekly_window_minutes,
-        weekly_window_present: Some(secondary_window.is_some()),
+        hourly_percentage: hourly.0,
+        hourly_reset_time: hourly.1,
+        hourly_window_minutes: hourly.2,
+        hourly_window_present: Some(hourly.3),
+        weekly_percentage: weekly.0,
+        weekly_reset_time: weekly.1,
+        weekly_window_minutes: weekly.2,
+        weekly_window_present: Some(weekly.3),
         raw_data,
     })
+}
+
+fn quota_reset_time_for_preservation(quota: &CodexQuota) -> Option<i64> {
+    [quota.hourly_reset_time, quota.weekly_reset_time]
+        .into_iter()
+        .flatten()
+        .max()
+}
+
+fn should_keep_existing_quota_exhaustion(account: &CodexAccount, now: i64) -> bool {
+    let Some(error) = account.quota_error.as_ref() else {
+        return false;
+    };
+    let code_or_message = error.code.as_deref().unwrap_or(error.message.as_str());
+    if !is_quota_exhaustion_error(code_or_message) && !is_quota_exhaustion_error(&error.message) {
+        return false;
+    }
+
+    let Some(quota) = account.quota.as_ref() else {
+        return false;
+    };
+    if quota.hourly_percentage > 0 || quota.weekly_percentage > 0 {
+        return false;
+    }
+
+    quota_reset_time_for_preservation(quota)
+        .map(|reset_at| reset_at > now)
+        .unwrap_or(false)
+}
+
+#[derive(Debug, Clone)]
+struct DirectQuotaObservation {
+    observed_at: i64,
+    reset_at: Option<i64>,
+    reset_after_seconds: Option<i64>,
+    error_type: Option<String>,
+    source: String,
+    quota: Option<CodexQuota>,
+    exhausted: bool,
+}
+
+fn parse_session_timestamp_seconds(value: &serde_json::Value) -> Option<i64> {
+    let raw = value.get("timestamp").and_then(|item| item.as_str())?;
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|parsed| parsed.with_timezone(&Utc).timestamp())
+}
+
+fn read_f64_field(value: &serde_json::Value, key: &str) -> Option<f64> {
+    value.get(key).and_then(|item| {
+        item.as_f64().or_else(|| {
+            item.as_str()
+                .and_then(|text| text.trim().parse::<f64>().ok())
+        })
+    })
+}
+
+fn direct_window_reset_at(window: &serde_json::Value, observed_at: i64) -> Option<i64> {
+    if let Some(reset_at) = first_i64_field(
+        window,
+        [
+            "resets_at",
+            "reset_at",
+            "resetAt",
+            "reset_at_seconds",
+            "reset_timestamp",
+        ],
+    )
+    .map(normalize_unix_timestamp_seconds)
+    {
+        return Some(reset_at);
+    }
+
+    first_i64_field(
+        window,
+        [
+            "resets_in_seconds",
+            "reset_after_seconds",
+            "resetAfterSeconds",
+            "retry_after_seconds",
+            "retry_after",
+        ],
+    )
+    .filter(|seconds| *seconds >= 0)
+    .map(|seconds| observed_at + seconds)
+}
+
+fn direct_window_minutes(window: &serde_json::Value) -> Option<i64> {
+    first_i64_field(
+        window,
+        [
+            "window_minutes",
+            "limit_window_minutes",
+            "limitWindowMinutes",
+        ],
+    )
+    .filter(|minutes| *minutes > 0)
+    .or_else(|| {
+        first_i64_field(
+            window,
+            [
+                "limit_window_seconds",
+                "window_seconds",
+                "limitWindowSeconds",
+            ],
+        )
+        .filter(|seconds| *seconds > 0)
+        .map(|seconds| (seconds + 59) / 60)
+    })
+}
+
+fn direct_window_is_weekly(window: &serde_json::Value) -> bool {
+    direct_window_minutes(window)
+        .map(|minutes| minutes >= WEEKLY_WINDOW_MINUTES_THRESHOLD)
+        .unwrap_or(false)
+}
+
+fn direct_window_remaining_percentage(window: &serde_json::Value, exhausted: bool) -> Option<i32> {
+    if exhausted {
+        return Some(0);
+    }
+
+    let used = read_f64_field(window, "used_percent")?.clamp(0.0, 100.0);
+    Some((100.0 - used).round().clamp(0.0, 100.0) as i32)
+}
+
+fn apply_direct_window_to_quota_slots(
+    window: &serde_json::Value,
+    exhausted: bool,
+    observed_at: i64,
+    hourly: &mut (i32, Option<i64>, Option<i64>, bool),
+    weekly: &mut (i32, Option<i64>, Option<i64>, bool),
+) {
+    let Some(remaining) = direct_window_remaining_percentage(window, exhausted) else {
+        return;
+    };
+    let reset_time = direct_window_reset_at(window, observed_at);
+    let window_minutes = direct_window_minutes(window);
+    let target = if direct_window_is_weekly(window) {
+        weekly
+    } else {
+        hourly
+    };
+
+    if !target.3 || remaining < target.0 {
+        target.0 = remaining;
+        target.1 = reset_time;
+        target.2 = window_minutes;
+        target.3 = true;
+    }
+}
+
+fn parse_direct_rate_limits_observation(
+    rate_limits: &serde_json::Value,
+    observed_at: i64,
+) -> Option<DirectQuotaObservation> {
+    let reached_type = rate_limits
+        .get("rate_limit_reached_type")
+        .and_then(read_rate_limit_reached_type);
+    let reached_type_exhausted = rate_limits
+        .get("rate_limit_reached_type")
+        .is_some_and(|value| is_exhausted_rate_limit_reached_type(Some(value)));
+
+    let primary = rate_limits.get("primary");
+    let secondary = rate_limits.get("secondary");
+    let windows: Vec<&serde_json::Value> = [primary, secondary].into_iter().flatten().collect();
+    if windows.is_empty() {
+        return None;
+    }
+
+    let exhausted_window = windows.iter().copied().find(|window| {
+        read_f64_field(window, "used_percent")
+            .map(|used| used >= 100.0)
+            .unwrap_or(false)
+    });
+    let fallback_window = windows
+        .iter()
+        .copied()
+        .find(|window| direct_window_reset_at(window, observed_at).is_some());
+
+    let exhausted = reached_type_exhausted || exhausted_window.is_some();
+    let mut hourly = (100, None, None, false);
+    let mut weekly = (100, None, None, false);
+    for window in &windows {
+        apply_direct_window_to_quota_slots(
+            window,
+            exhausted,
+            observed_at,
+            &mut hourly,
+            &mut weekly,
+        );
+    }
+
+    if !hourly.3 && !weekly.3 {
+        return None;
+    }
+
+    let reset_at = exhausted_window
+        .and_then(|window| direct_window_reset_at(window, observed_at))
+        .or_else(|| fallback_window.and_then(|window| direct_window_reset_at(window, observed_at)));
+    let error_type = if exhausted {
+        Some(reached_type.unwrap_or_else(|| "usage_limit_reached".to_string()))
+    } else {
+        reached_type
+    };
+    let quota_reset_at = [hourly.1, weekly.1].into_iter().flatten().max();
+    let quota = CodexQuota {
+        hourly_percentage: hourly.0,
+        hourly_reset_time: hourly.1,
+        hourly_window_minutes: hourly.2,
+        hourly_window_present: Some(hourly.3),
+        weekly_percentage: weekly.0,
+        weekly_reset_time: weekly.1,
+        weekly_window_minutes: weekly.2,
+        weekly_window_present: Some(weekly.3),
+        raw_data: Some(json!({
+            "source": "codex_session_rate_limits",
+            "observed_at": observed_at,
+            "quota_exhausted": exhausted,
+            "rate_limit_reached_type": error_type.as_deref(),
+            "plan_type": rate_limits.get("plan_type").and_then(|value| value.as_str()),
+        })),
+    };
+
+    Some(DirectQuotaObservation {
+        observed_at,
+        reset_at: reset_at.or(quota_reset_at),
+        reset_after_seconds: reset_at
+            .or(quota_reset_at)
+            .map(|reset| reset.saturating_sub(observed_at).max(0)),
+        error_type,
+        source: "codex_session_rate_limits".to_string(),
+        quota: Some(quota),
+        exhausted,
+    })
+}
+
+fn value_has_usage_limit_marker(value: &serde_json::Value) -> bool {
+    let Some(text) = value.as_str() else {
+        return false;
+    };
+    let lower = text.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "usage_limit_reached"
+            | "insufficient_quota"
+            | "workspace_owner_credits_depleted"
+            | "workspace_member_credits_depleted"
+            | "workspace_owner_usage_limit_reached"
+            | "workspace_member_usage_limit_reached"
+            | "credits_depleted"
+    )
+}
+
+fn find_usage_limit_object(value: &serde_json::Value) -> Option<&serde_json::Value> {
+    let object = value.as_object()?;
+    if object
+        .get("type")
+        .or_else(|| object.get("code"))
+        .is_some_and(value_has_usage_limit_marker)
+    {
+        return Some(value);
+    }
+
+    for item in object.values() {
+        if item.is_object() {
+            if let Some(found) = find_usage_limit_object(item) {
+                return Some(found);
+            }
+        } else if let Some(items) = item.as_array() {
+            for child in items {
+                if let Some(found) = find_usage_limit_object(child) {
+                    return Some(found);
+                }
+            }
+        }
+    }
+
+    None
+}
+
+fn parse_direct_error_observation(
+    root: &serde_json::Value,
+    observed_at: i64,
+) -> Option<DirectQuotaObservation> {
+    let error = find_usage_limit_object(root)?;
+    let error_type = error
+        .get("type")
+        .or_else(|| error.get("code"))
+        .and_then(|item| item.as_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_else(|| "usage_limit_reached".to_string());
+    let reset_at = first_i64_field(
+        error,
+        [
+            "resets_at",
+            "reset_at",
+            "resetAt",
+            "reset_at_seconds",
+            "reset_timestamp",
+        ],
+    )
+    .map(normalize_unix_timestamp_seconds);
+    let reset_after_seconds = first_i64_field(
+        error,
+        [
+            "resets_in_seconds",
+            "reset_after_seconds",
+            "resetAfterSeconds",
+            "retry_after_seconds",
+            "retry_after",
+        ],
+    )
+    .filter(|seconds| *seconds >= 0);
+    let reset_at = reset_at.or_else(|| reset_after_seconds.map(|seconds| observed_at + seconds));
+
+    Some(DirectQuotaObservation {
+        observed_at,
+        reset_at,
+        reset_after_seconds,
+        error_type: Some(error_type),
+        source: "codex_session_error".to_string(),
+        quota: None,
+        exhausted: true,
+    })
+}
+
+fn parse_direct_quota_observation_from_session_line(line: &str) -> Option<DirectQuotaObservation> {
+    if !line.contains("rate_limits")
+        && !line.contains("usage_limit_reached")
+        && !line.contains("insufficient_quota")
+        && !line.contains("credits_depleted")
+    {
+        return None;
+    }
+
+    let root: serde_json::Value = serde_json::from_str(line).ok()?;
+    let observed_at = parse_session_timestamp_seconds(&root)?;
+    if let Some(rate_limits) = root
+        .get("payload")
+        .and_then(|payload| payload.get("rate_limits"))
+    {
+        if let Some(observation) = parse_direct_rate_limits_observation(rate_limits, observed_at) {
+            return Some(observation);
+        }
+    }
+
+    parse_direct_error_observation(&root, observed_at)
+}
+
+fn collect_session_jsonl_files(root: &Path) -> Vec<PathBuf> {
+    let sessions_root = root.join("sessions");
+    let mut stack = vec![sessions_root];
+    let mut files = Vec::new();
+
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path.extension().and_then(|ext| ext.to_str()) == Some("jsonl") {
+                files.push(path);
+            }
+        }
+    }
+
+    files.sort_by_key(|path| {
+        fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .ok()
+    });
+    files.reverse();
+    files.truncate(DIRECT_SESSION_SCAN_MAX_FILES);
+    files
+}
+
+fn latest_direct_quota_observation_from_sessions(
+    codex_home: &Path,
+    since_seconds: i64,
+) -> Option<DirectQuotaObservation> {
+    let mut best: Option<DirectQuotaObservation> = None;
+    for path in collect_session_jsonl_files(codex_home) {
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in content.lines().rev() {
+            let Some(observation) = parse_direct_quota_observation_from_session_line(line) else {
+                continue;
+            };
+            if observation.observed_at < since_seconds {
+                continue;
+            }
+            if is_better_direct_quota_observation(&observation, best.as_ref()) {
+                best = Some(observation);
+            }
+        }
+    }
+
+    best
+}
+
+fn is_better_direct_quota_observation(
+    candidate: &DirectQuotaObservation,
+    current: Option<&DirectQuotaObservation>,
+) -> bool {
+    let Some(current) = current else {
+        return true;
+    };
+    if candidate.exhausted != current.exhausted {
+        return candidate.exhausted;
+    }
+    if candidate.exhausted {
+        return candidate.observed_at > current.observed_at;
+    }
+
+    let candidate_remaining = candidate
+        .quota
+        .as_ref()
+        .and_then(quota_remaining_for_direct_observation);
+    let current_remaining = current
+        .quota
+        .as_ref()
+        .and_then(quota_remaining_for_direct_observation);
+
+    match (candidate_remaining, current_remaining) {
+        (Some(left), Some(right)) if left != right => left < right,
+        (Some(_), None) => true,
+        (None, Some(_)) => false,
+        _ => candidate.observed_at > current.observed_at,
+    }
+}
+
+fn apply_direct_quota_observation(
+    account: &mut CodexAccount,
+    observation: &DirectQuotaObservation,
+) {
+    let reset_at = observation.reset_at;
+    if let Some(quota) = observation.quota.clone() {
+        account.quota = Some(quota);
+    } else {
+        account.quota = Some(build_exhausted_quota_snapshot_with_hint(
+            account,
+            "codex_direct_oauth_upstream_error",
+            reset_at,
+            observation.reset_after_seconds,
+            observation.observed_at,
+        ));
+    }
+
+    if observation.exhausted {
+        let error_type = observation
+            .error_type
+            .clone()
+            .unwrap_or_else(|| "usage_limit_reached".to_string());
+        account.quota_error = Some(CodexQuotaErrorInfo {
+            code: Some(error_type.clone()),
+            message: format!(
+                "Codex Direct OAuth upstream quota exhausted: status=429, error_type={}, reset_at={}",
+                error_type,
+                reset_at
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            ),
+            timestamp: observation.observed_at,
+        });
+    } else if account
+        .quota_error
+        .as_ref()
+        .map(|error| {
+            error.timestamp <= observation.observed_at
+                && (error
+                    .code
+                    .as_deref()
+                    .map(is_quota_exhaustion_error)
+                    .unwrap_or(false)
+                    || is_quota_exhaustion_error(&error.message))
+        })
+        .unwrap_or(false)
+    {
+        account.quota_error = None;
+    }
+    account.usage_updated_at = Some(observation.observed_at);
+}
+
+fn quota_remaining_for_direct_observation(quota: &CodexQuota) -> Option<i32> {
+    let mut quota = quota.clone();
+    quota.normalize_window_slots();
+
+    let mut percentages = Vec::new();
+    if quota.hourly_window_present.unwrap_or(true) {
+        percentages.push(quota.hourly_percentage.clamp(0, 100));
+    }
+    if quota.weekly_window_present.unwrap_or(true) {
+        percentages.push(quota.weekly_percentage.clamp(0, 100));
+    }
+    percentages.into_iter().min()
+}
+
+fn should_apply_direct_quota_observation(
+    account: &CodexAccount,
+    observation: &DirectQuotaObservation,
+) -> bool {
+    if observation.exhausted {
+        if observation
+            .reset_at
+            .map(|reset_at| reset_at <= chrono::Utc::now().timestamp())
+            .unwrap_or(false)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    let Some(observed_quota) = observation.quota.as_ref() else {
+        return true;
+    };
+    let Some(observed_remaining) = quota_remaining_for_direct_observation(observed_quota) else {
+        return false;
+    };
+    let Some(current_remaining) = account
+        .quota
+        .as_ref()
+        .and_then(quota_remaining_for_direct_observation)
+    else {
+        return true;
+    };
+
+    observed_remaining < current_remaining
+}
+
+fn apply_latest_direct_oauth_observation_if_current(
+    account: &mut CodexAccount,
+) -> Result<bool, String> {
+    let Ok(runtime_mode) = crate::modules::codex_local_access::load_runtime_mode_state() else {
+        return Ok(false);
+    };
+    if runtime_mode.mode
+        != crate::models::codex_local_access::CodexRuntimeIntegrationMode::DirectProjection
+        || runtime_mode.current_account_id.as_deref() != Some(account.id.as_str())
+    {
+        return Ok(false);
+    }
+
+    let since_seconds = account
+        .last_used
+        .max(runtime_mode.updated_at.div_euclid(1000));
+    let Some(observation) = latest_direct_quota_observation_from_sessions(
+        &codex_account::get_codex_home(),
+        since_seconds,
+    ) else {
+        return Ok(false);
+    };
+
+    if should_keep_existing_quota_exhaustion(account, observation.observed_at)
+        && account
+            .quota_error
+            .as_ref()
+            .map(|error| error.timestamp >= observation.observed_at)
+            .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+    if !should_apply_direct_quota_observation(account, &observation) {
+        return Ok(false);
+    }
+
+    apply_direct_quota_observation(account, &observation);
+    codex_account::save_account(account)?;
+    if observation.exhausted {
+        logger::log_warn(&format!(
+            "Codex Direct OAuth 配额耗尽已从官方 session 记录同步: account_id={}, source={}, reset_at={:?}",
+            account.id, observation.source, observation.reset_at
+        ));
+    } else {
+        logger::log_info(&format!(
+            "Codex Direct OAuth 配额快照已从官方 session 记录同步: account_id={}, source={}, remaining={:?}, reset_at={:?}",
+            account.id,
+            observation.source,
+            account
+                .quota
+                .as_ref()
+                .and_then(quota_remaining_for_direct_observation),
+            observation.reset_at
+        ));
+    }
+    Ok(true)
 }
 
 fn is_new_api_account(account: &CodexAccount) -> bool {
@@ -689,6 +1363,21 @@ async fn refresh_account_quota_once(account_id: &str) -> Result<CodexQuota, Stri
         }
     }
 
+    if apply_latest_direct_oauth_observation_if_current(&mut account)? {
+        if let Some(quota) = account.quota.clone() {
+            return Ok(quota);
+        }
+    }
+    if should_keep_existing_quota_exhaustion(&account, chrono::Utc::now().timestamp()) {
+        if let Some(quota) = account.quota.clone() {
+            logger::log_info(&format!(
+                "Codex 账号 {} 仍处于已记录的配额冷却期，跳过本次 wham/usage 刷新以避免覆盖 Direct OAuth 429 快照",
+                account.email
+            ));
+            return Ok(quota);
+        }
+    }
+
     let result = match fetch_quota(&account).await {
         Ok(result) => result,
         Err(e) => {
@@ -853,6 +1542,447 @@ mod tests {
         .expect("reset hint should parse");
 
         assert_eq!(hint, (Some(1_700_000_060), Some(60)));
+    }
+
+    #[test]
+    fn quota_reset_hint_body_accepts_string_retry_after_alias() {
+        let hint = extract_quota_reset_hint_from_body(
+            r#"{"error":{"code":"insufficient_quota","retry_after":"45"}}"#,
+            1_700_000_000,
+        )
+        .expect("reset hint should parse string retry_after alias");
+
+        assert_eq!(hint, (Some(1_700_000_045), Some(45)));
+    }
+
+    #[test]
+    fn quota_usage_reset_at_normalizes_millisecond_timestamp() {
+        let usage = UsageResponse {
+            plan_type: Some("pro".to_string()),
+            rate_limit: Some(RateLimitInfo {
+                allowed: Some(true),
+                limit_reached: Some(false),
+                primary_window: Some(WindowInfo {
+                    used_percent: Some(40),
+                    limit_window_seconds: Some(18_000),
+                    reset_after_seconds: None,
+                    reset_at: Some(1_700_000_360_000),
+                }),
+                secondary_window: None,
+            }),
+            code_review_rate_limit: None,
+            rate_limit_reached_type: None,
+        };
+
+        let quota = parse_quota_from_usage(&usage, "{}").expect("quota should parse");
+
+        assert_eq!(quota.hourly_percentage, 60);
+        assert_eq!(quota.hourly_reset_time, Some(1_700_000_360));
+    }
+
+    #[test]
+    fn quota_usage_primary_weekly_window_maps_to_weekly_quota() {
+        let usage = UsageResponse {
+            plan_type: Some("free".to_string()),
+            rate_limit: Some(RateLimitInfo {
+                allowed: Some(false),
+                limit_reached: Some(true),
+                primary_window: Some(WindowInfo {
+                    used_percent: Some(100),
+                    limit_window_seconds: Some(604_800),
+                    reset_after_seconds: None,
+                    reset_at: Some(1_700_604_800),
+                }),
+                secondary_window: None,
+            }),
+            code_review_rate_limit: None,
+            rate_limit_reached_type: None,
+        };
+
+        let quota = parse_quota_from_usage(&usage, "{}").expect("quota should parse");
+
+        assert_eq!(quota.hourly_percentage, 100);
+        assert_eq!(quota.hourly_window_present, Some(false));
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(1_700_604_800));
+        assert_eq!(quota.weekly_window_present, Some(true));
+    }
+
+    #[test]
+    fn persisted_weekly_window_in_hourly_slot_normalizes_to_weekly() {
+        let mut quota = CodexQuota {
+            hourly_percentage: 97,
+            hourly_reset_time: Some(1_780_310_638),
+            hourly_window_minutes: Some(10_080),
+            hourly_window_present: Some(true),
+            weekly_percentage: 100,
+            weekly_reset_time: None,
+            weekly_window_minutes: None,
+            weekly_window_present: Some(false),
+            raw_data: None,
+        };
+
+        assert!(quota.normalize_window_slots());
+        assert_eq!(quota.hourly_percentage, 100);
+        assert_eq!(quota.hourly_reset_time, None);
+        assert_eq!(quota.hourly_window_present, Some(false));
+        assert_eq!(quota.weekly_percentage, 97);
+        assert_eq!(quota.weekly_reset_time, Some(1_780_310_638));
+        assert_eq!(quota.weekly_window_minutes, Some(10_080));
+        assert_eq!(quota.weekly_window_present, Some(true));
+    }
+
+    #[test]
+    fn quota_usage_reached_type_zeroes_lagging_usage_payload() {
+        let usage: UsageResponse = serde_json::from_str(
+            r#"{
+              "plan_type":"free",
+              "rate_limit":{
+                "allowed":true,
+                "limit_reached":false,
+                "primary_window":{
+                  "used_percent":3,
+                  "limit_window_seconds":604800,
+                  "reset_at":1700604800
+                }
+              },
+              "rate_limit_reached_type":{"type":"workspace_member_usage_limit_reached"}
+            }"#,
+        )
+        .expect("usage payload should parse");
+
+        let quota = parse_quota_from_usage(&usage, "{}").expect("quota should parse");
+
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(1_700_604_800));
+    }
+
+    #[test]
+    fn active_direct_quota_exhaustion_snapshot_blocks_stale_success_overwrite() {
+        let mut account = test_account();
+        account.quota_error = Some(CodexQuotaErrorInfo {
+            code: Some("usage_limit_reached".to_string()),
+            message: "Codex Direct OAuth upstream quota exhausted: status=429, error_type=usage_limit_reached, reset_at=1700003600".to_string(),
+            timestamp: 1_700_000_000,
+        });
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 0,
+            hourly_reset_time: Some(1_700_003_600),
+            hourly_window_minutes: Some(300),
+            hourly_window_present: Some(true),
+            weekly_percentage: 0,
+            weekly_reset_time: Some(1_700_003_600),
+            weekly_window_minutes: Some(10080),
+            weekly_window_present: Some(true),
+            raw_data: Some(json!({
+                "source": "codex_direct_oauth_upstream_error",
+                "quota_exhausted": true,
+                "reset_at": 1_700_003_600
+            })),
+        });
+
+        assert!(should_keep_existing_quota_exhaustion(
+            &account,
+            1_700_000_100
+        ));
+    }
+
+    #[test]
+    fn direct_session_rate_limit_event_builds_quota_observation() {
+        let line = serde_json::json!({
+            "timestamp": "2026-05-25T11:42:31.809Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "rate_limits": {
+                    "limit_id": "codex",
+                    "primary": {
+                        "used_percent": 100.0,
+                        "window_minutes": 10080,
+                        "resets_at": 1780314131
+                    },
+                    "secondary": null,
+                    "plan_type": "free",
+                    "rate_limit_reached_type": "workspace_member_usage_limit_reached"
+                }
+            }
+        })
+        .to_string();
+
+        let observation =
+            parse_direct_quota_observation_from_session_line(&line).expect("observation");
+
+        assert_eq!(observation.reset_at, Some(1_780_314_131));
+        assert_eq!(
+            observation.error_type.as_deref(),
+            Some("workspace_member_usage_limit_reached")
+        );
+        assert_eq!(observation.source, "codex_session_rate_limits");
+        assert!(observation.exhausted);
+        assert_eq!(
+            observation
+                .quota
+                .as_ref()
+                .map(|quota| quota.weekly_percentage),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn direct_session_rate_limit_event_computes_relative_reset_hint() {
+        let line = serde_json::json!({
+            "timestamp": "2026-05-25T11:42:31Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": "100",
+                        "window_minutes": 300,
+                        "reset_after_seconds": "60"
+                    }
+                }
+            }
+        })
+        .to_string();
+
+        let observation =
+            parse_direct_quota_observation_from_session_line(&line).expect("observation");
+
+        assert_eq!(observation.reset_after_seconds, Some(60));
+        assert_eq!(observation.reset_at, Some(observation.observed_at + 60));
+    }
+
+    #[test]
+    fn direct_session_rate_limit_event_updates_partial_remaining_quota() {
+        let line = serde_json::json!({
+            "timestamp": "2026-05-25T12:41:39Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": 56,
+                        "window_minutes": 10080,
+                        "resets_at": 1780317510
+                    },
+                    "secondary": null,
+                    "plan_type": "free",
+                    "rate_limit_reached_type": null
+                }
+            }
+        })
+        .to_string();
+
+        let observation =
+            parse_direct_quota_observation_from_session_line(&line).expect("observation");
+        let quota = observation.quota.as_ref().expect("quota snapshot");
+
+        assert!(!observation.exhausted);
+        assert_eq!(observation.error_type, None);
+        assert_eq!(quota.hourly_window_present, Some(false));
+        assert_eq!(quota.weekly_percentage, 44);
+        assert_eq!(quota.weekly_reset_time, Some(1_780_317_510));
+        assert_eq!(quota.weekly_window_minutes, Some(10_080));
+    }
+
+    #[test]
+    fn direct_session_partial_quota_only_applies_when_more_constrained() {
+        let mut account = test_account();
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 100,
+            hourly_reset_time: None,
+            hourly_window_minutes: None,
+            hourly_window_present: Some(false),
+            weekly_percentage: 97,
+            weekly_reset_time: Some(1_780_317_510),
+            weekly_window_minutes: Some(10_080),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+        let observation = DirectQuotaObservation {
+            observed_at: 1_779_712_100,
+            reset_at: Some(1_780_317_510),
+            reset_after_seconds: Some(60),
+            error_type: None,
+            source: "codex_session_rate_limits".to_string(),
+            exhausted: false,
+            quota: Some(CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 44,
+                weekly_reset_time: Some(1_780_317_510),
+                weekly_window_minutes: Some(10_080),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            }),
+        };
+
+        assert!(should_apply_direct_quota_observation(
+            &account,
+            &observation
+        ));
+
+        account.quota.as_mut().unwrap().weekly_percentage = 20;
+        assert!(!should_apply_direct_quota_observation(
+            &account,
+            &observation
+        ));
+
+        let expired_exhaustion = DirectQuotaObservation {
+            observed_at: 1,
+            reset_at: Some(1),
+            reset_after_seconds: Some(0),
+            error_type: Some("usage_limit_reached".to_string()),
+            source: "codex_session_error".to_string(),
+            exhausted: true,
+            quota: None,
+        };
+        assert!(!should_apply_direct_quota_observation(
+            &account,
+            &expired_exhaustion
+        ));
+    }
+
+    #[test]
+    fn direct_session_observation_selection_prefers_more_constrained_snapshot() {
+        let older_low = DirectQuotaObservation {
+            observed_at: 20,
+            reset_at: Some(100),
+            reset_after_seconds: Some(80),
+            error_type: None,
+            source: "codex_session_rate_limits".to_string(),
+            exhausted: false,
+            quota: Some(CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 44,
+                weekly_reset_time: Some(100),
+                weekly_window_minutes: Some(10_080),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            }),
+        };
+        let newer_high = DirectQuotaObservation {
+            observed_at: 30,
+            reset_at: Some(110),
+            reset_after_seconds: Some(80),
+            error_type: None,
+            source: "codex_session_rate_limits".to_string(),
+            exhausted: false,
+            quota: Some(CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 97,
+                weekly_reset_time: Some(110),
+                weekly_window_minutes: Some(10_080),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            }),
+        };
+
+        assert!(is_better_direct_quota_observation(
+            &older_low,
+            Some(&newer_high)
+        ));
+        assert!(!is_better_direct_quota_observation(
+            &newer_high,
+            Some(&older_low)
+        ));
+    }
+
+    #[test]
+    fn direct_session_error_event_parses_reset_hint() {
+        let line = serde_json::json!({
+            "timestamp": "2026-05-25T11:42:31Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "error",
+                "status": 429,
+                "error": {
+                    "type": "usage_limit_reached",
+                    "message": "The usage limit has been reached",
+                    "resets_in_seconds": "120"
+                }
+            }
+        })
+        .to_string();
+
+        let observation =
+            parse_direct_quota_observation_from_session_line(&line).expect("observation");
+
+        assert_eq!(observation.reset_after_seconds, Some(120));
+        assert_eq!(observation.reset_at, Some(observation.observed_at + 120));
+        assert_eq!(
+            observation.error_type.as_deref(),
+            Some("usage_limit_reached")
+        );
+    }
+
+    #[test]
+    fn direct_session_error_event_parses_insufficient_quota_without_rate_limits() {
+        let line = serde_json::json!({
+            "timestamp": "2026-05-25T11:42:31Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "error",
+                "status": 429,
+                "error": {
+                    "type": "insufficient_quota",
+                    "message": "Quota exceeded",
+                    "reset_after_seconds": 45
+                }
+            }
+        })
+        .to_string();
+
+        let observation =
+            parse_direct_quota_observation_from_session_line(&line).expect("observation");
+
+        assert_eq!(observation.reset_after_seconds, Some(45));
+        assert_eq!(
+            observation.error_type.as_deref(),
+            Some("insufficient_quota")
+        );
+    }
+
+    #[test]
+    fn quota_fetch_error_does_not_zero_generic_rate_limit() {
+        let mut account = test_account();
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 64,
+            hourly_reset_time: Some(111),
+            hourly_window_minutes: Some(300),
+            hourly_window_present: Some(true),
+            weekly_percentage: 27,
+            weekly_reset_time: Some(222),
+            weekly_window_minutes: Some(10080),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+
+        write_quota_fetch_error(
+            &mut account,
+            "API 返回错误 429 [error_code:rate_limit_exceeded] [reset_after_seconds:60] [body_len:42]".to_string(),
+        );
+
+        let quota = account.quota.as_ref().expect("quota should stay unchanged");
+        assert_eq!(quota.hourly_percentage, 64);
+        assert_eq!(quota.weekly_percentage, 27);
+        assert_eq!(
+            account
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("rate_limit_exceeded")
+        );
+        assert!(account.usage_updated_at.is_none());
     }
 
     #[test]

@@ -1,6 +1,10 @@
 use crate::models::codex::{
     CodexAccount, CodexAccountIndex, CodexAccountSummary, CodexApiProviderMode, CodexAppSpeed,
-    CodexAuthFile, CodexAuthMode, CodexAuthTokens, CodexJwtPayload, CodexQuickConfig, CodexTokens,
+    CodexAuthFile, CodexAuthMode, CodexAuthTokens, CodexJwtPayload, CodexQuickConfig, CodexQuota,
+    CodexQuotaErrorInfo, CodexTokens,
+};
+use crate::models::codex_local_access::{
+    CodexLocalAccessAccountHealth, CodexLocalAccessHealthRegistry,
 };
 use crate::modules::{account, codex_oauth, logger};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -66,6 +70,8 @@ const CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_ALL: &str = "all_accounts";
 const CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED: &str = "selected_accounts";
 const DISK_FULL_ERROR_CODE: &str = "DISK_FULL";
 const CODEX_TOKEN_SOURCE_MANAGED: &str = "managed";
+const CODEX_LOCAL_ACCESS_HEALTH_FILE: &str = "codex_local_access_health.json";
+const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
 const CODEX_PROACTIVE_REFRESH_INTERVAL_SECONDS: i64 = 8 * 24 * 60 * 60;
 const CODEX_AUTH_PROJECTION_FILE_NAME: &str = ".cockpit_codex_auth.json";
 const CODEX_AUTH_PROJECTION_WRITER: &str = "cockpit";
@@ -2008,6 +2014,168 @@ pub fn load_account(account_id: &str) -> Option<CodexAccount> {
     load_account_with_summary(account_id, None).ok().flatten()
 }
 
+fn normalize_account_for_runtime(account: &mut CodexAccount) -> bool {
+    if let Some(quota) = account.quota.as_mut() {
+        return quota.normalize_window_slots();
+    }
+    false
+}
+
+fn local_access_health_registry_path() -> Result<PathBuf, String> {
+    Ok(account::get_data_dir()?.join(CODEX_LOCAL_ACCESS_HEALTH_FILE))
+}
+
+fn load_local_access_health_registry() -> Option<CodexLocalAccessHealthRegistry> {
+    let path = local_access_health_registry_path().ok()?;
+    if !path.exists() {
+        return None;
+    }
+
+    let content = fs::read_to_string(&path).ok()?;
+    serde_json::from_str::<CodexLocalAccessHealthRegistry>(&content).ok()
+}
+
+fn codex_local_access_quota_error_code(health: &CodexLocalAccessAccountHealth) -> Option<String> {
+    [
+        health.last_error_type.as_deref(),
+        health.last_provider_code.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|code| is_codex_quota_exhaustion_code(code))
+    .map(str::to_string)
+}
+
+fn is_codex_quota_exhaustion_code(code: &str) -> bool {
+    matches!(
+        code.trim().to_ascii_lowercase().as_str(),
+        "usage_limit_reached" | "insufficient_quota" | "credits_depleted"
+    )
+}
+
+fn effective_codex_quota_remaining(quota: &CodexQuota) -> Option<i32> {
+    let mut quota = quota.clone();
+    quota.normalize_window_slots();
+
+    let mut percentages = Vec::new();
+    if quota.hourly_window_present.unwrap_or(true) {
+        percentages.push(quota.hourly_percentage.clamp(0, 100));
+    }
+    if quota.weekly_window_present.unwrap_or(true) {
+        percentages.push(quota.weekly_percentage.clamp(0, 100));
+    }
+    percentages.into_iter().min()
+}
+
+fn future_quota_reset_from_account(account: &CodexAccount, now_seconds: i64) -> Option<i64> {
+    let mut quota = account.quota.clone()?;
+    quota.normalize_window_slots();
+
+    let weekly_reset = quota.weekly_reset_time.filter(|reset| *reset > now_seconds);
+    let weekly_window_is_present = quota.weekly_window_present.unwrap_or(true);
+    let weekly_window_looks_weekly = quota
+        .weekly_window_minutes
+        .map(|minutes| minutes >= WEEKLY_WINDOW_MINUTES_THRESHOLD)
+        .unwrap_or(weekly_window_is_present);
+    if weekly_window_is_present && weekly_window_looks_weekly {
+        return weekly_reset;
+    }
+
+    quota.hourly_reset_time.filter(|reset| *reset > now_seconds)
+}
+
+fn repair_account_quota_from_local_access_health(
+    account: &mut CodexAccount,
+    registry: &CodexLocalAccessHealthRegistry,
+    now_seconds: i64,
+) -> bool {
+    if account.is_api_key_auth() {
+        return false;
+    }
+
+    let Some(health) = registry.accounts.get(&account.id) else {
+        return false;
+    };
+    let Some(error_code) = codex_local_access_quota_error_code(health) else {
+        return false;
+    };
+    let Some(reset_at) = health
+        .estimated_reset_at_ms
+        .map(|value| value.div_euclid(1000))
+        .filter(|value| *value > now_seconds)
+        .or_else(|| future_quota_reset_from_account(account, now_seconds))
+    else {
+        return false;
+    };
+
+    let current_remaining = account
+        .quota
+        .as_ref()
+        .and_then(effective_codex_quota_remaining);
+    if current_remaining == Some(0) {
+        return false;
+    }
+
+    let observed_at = health
+        .last_quota_exhausted_at_ms
+        .or(Some(health.updated_at))
+        .filter(|value| *value > 0)
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
+        .div_euclid(1000);
+
+    account.quota = Some(CodexQuota {
+        hourly_percentage: 100,
+        hourly_reset_time: None,
+        hourly_window_minutes: None,
+        hourly_window_present: Some(false),
+        weekly_percentage: 0,
+        weekly_reset_time: Some(reset_at),
+        weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+        weekly_window_present: Some(true),
+        raw_data: Some(serde_json::json!({
+            "source": "codex_local_access_health_registry",
+            "error_type": error_code,
+            "health_updated_at_ms": health.updated_at,
+            "previous_remaining_percentage": current_remaining,
+        })),
+    });
+    account.quota_error = Some(CodexQuotaErrorInfo {
+        code: Some(error_code.clone()),
+        message: format!(
+            "Codex local access quota exhaustion replayed from health registry: error_type={}, reset_at={}",
+            error_code, reset_at
+        ),
+        timestamp: observed_at,
+    });
+    account.usage_updated_at = Some(observed_at);
+    true
+}
+
+fn repair_accounts_quota_from_local_access_health(accounts: &mut [CodexAccount]) {
+    let Some(registry) = load_local_access_health_registry() else {
+        return;
+    };
+    let now_seconds = chrono::Utc::now().timestamp();
+    let mut repaired = 0usize;
+    for account in accounts {
+        if repair_account_quota_from_local_access_health(account, &registry, now_seconds) {
+            match save_account(account) {
+                Ok(()) => repaired += 1,
+                Err(error) => logger::log_warn(&format!(
+                    "[Codex Account][QuotaRepair] 历史 quota 状态写回失败: account_id={}, error={}",
+                    account.id, error
+                )),
+            }
+        }
+    }
+    if repaired > 0 {
+        logger::log_warn(&format!(
+            "[Codex Account][QuotaRepair] 已根据 local access health registry 修复历史 quota 缓存: repaired_accounts={}",
+            repaired
+        ));
+    }
+}
+
 fn load_account_with_summary(
     account_id: &str,
     summary: Option<&CodexAccountSummary>,
@@ -2019,14 +2187,23 @@ fn load_account_with_summary(
 
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("读取账号详情失败 ({}): {}", path.display(), error))?;
-    if let Ok(account) = serde_json::from_str::<CodexAccount>(&content) {
+    if let Ok(mut account) = serde_json::from_str::<CodexAccount>(&content) {
+        if normalize_account_for_runtime(&mut account) {
+            if let Err(error) = save_account(&account) {
+                logger::log_warn(&format!(
+                    "[Codex Account][Compat] 账号 quota 窗口标准化写回失败: account_id={}, error={}",
+                    account.id, error
+                ));
+            }
+        }
         return Ok(Some(account));
     }
 
     let value = serde_json::from_str::<serde_json::Value>(&content)
         .map_err(|error| format!("账号详情不是有效 JSON ({}): {}", path.display(), error))?;
-    let account = parse_codex_account_compat(value, account_id, summary)?
+    let mut account = parse_codex_account_compat(value, account_id, summary)?
         .ok_or_else(|| format!("账号详情缺少可识别凭据 ({})", path.display()))?;
+    normalize_account_for_runtime(&mut account);
 
     if let Err(error) = save_account(&account) {
         logger::log_warn(&format!(
@@ -2041,8 +2218,10 @@ fn load_account_with_summary(
 /// 保存单个账号详情
 pub fn save_account(account: &CodexAccount) -> Result<(), String> {
     let path = get_accounts_dir().join(format!("{}.json", &account.id));
+    let mut account = account.clone();
+    normalize_account_for_runtime(&mut account);
     let content =
-        serde_json::to_string_pretty(account).map_err(|e| format!("序列化失败: {}", e))?;
+        serde_json::to_string_pretty(&account).map_err(|e| format!("序列化失败: {}", e))?;
     write_string_atomic(&path, &content).map_err(|e| format!("写入账号详情失败: {}", e))?;
     Ok(())
 }
@@ -2059,7 +2238,7 @@ pub fn delete_account_file(account_id: &str) -> Result<(), String> {
 /// 列出所有账号
 pub fn list_accounts() -> Vec<CodexAccount> {
     let index = load_account_index();
-    index
+    let mut accounts: Vec<CodexAccount> = index
         .accounts
         .iter()
         .filter_map(
@@ -2074,7 +2253,9 @@ pub fn list_accounts() -> Vec<CodexAccount> {
                 }
             },
         )
-        .collect()
+        .collect();
+    repair_accounts_quota_from_local_access_health(&mut accounts);
+    accounts
 }
 
 pub fn list_accounts_checked() -> Result<Vec<CodexAccount>, String> {
@@ -2105,6 +2286,8 @@ pub fn list_accounts_checked() -> Result<Vec<CodexAccount>, String> {
             failed.join("; ")
         ));
     }
+
+    repair_accounts_quota_from_local_access_health(&mut accounts);
 
     Ok(accounts)
 }
@@ -4121,22 +4304,132 @@ mod tests {
         get_current_or_fallback_oauth_account, list_accounts_checked, load_account,
         load_account_index, parse_auth_file_last_refresh, parse_codex_account_compat,
         parse_line_delimited_json_values, read_api_provider_from_config_toml,
-        read_quick_config_from_config_toml, resolve_api_provider_config, save_account,
-        save_account_index, should_accept_authority_snapshot, sync_account_from_auth_dir,
+        read_quick_config_from_config_toml, repair_account_quota_from_local_access_health,
+        resolve_api_provider_config, save_account, save_account_index,
+        should_accept_authority_snapshot, sync_account_from_auth_dir,
         sync_managed_projection_from_auth_dir, validate_api_key_credentials,
         write_api_key_provider_to_config_toml, write_api_provider_to_config_toml,
         write_managed_projection_to_dir, write_quick_config_to_config_toml, ApiProviderConfig,
         CodexAccountIndex, CodexAccountSummary, CodexAuthFile, CodexAuthTokens,
         LocalCodexOAuthSnapshot, CODEX_AUTO_COMPACT_DEFAULT_LIMIT, CODEX_CONTEXT_WINDOW_1M_VALUE,
         CODEX_PROFILE_SHARED_COCKPIT_API, CODEX_RUNTIME_MODEL_PROVIDER_ID,
+        WEEKLY_WINDOW_MINUTES_THRESHOLD,
     };
-    use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexAuthMode, CodexTokens};
+    use crate::models::codex::{
+        CodexAccount, CodexApiProviderMode, CodexAuthMode, CodexQuota, CodexTokens,
+    };
+    use crate::models::codex_local_access::{
+        CodexLocalAccessAccountHealth, CodexLocalAccessHealthRegistry,
+    };
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use std::fs;
     use std::sync::{LazyLock, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     static TEST_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    fn test_codex_account_with_quota(id: &str, quota: CodexQuota) -> CodexAccount {
+        let mut account = CodexAccount::new(
+            id.to_string(),
+            "quota@example.com".to_string(),
+            CodexTokens {
+                id_token: "id-token".to_string(),
+                access_token: "access-token".to_string(),
+                refresh_token: None,
+            },
+        );
+        account.quota = Some(quota);
+        account
+    }
+
+    fn stale_weekly_in_hourly_quota(reset_at: i64) -> CodexQuota {
+        CodexQuota {
+            hourly_percentage: 97,
+            hourly_reset_time: Some(reset_at),
+            hourly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+            hourly_window_present: Some(true),
+            weekly_percentage: 100,
+            weekly_reset_time: None,
+            weekly_window_minutes: None,
+            weekly_window_present: Some(false),
+            raw_data: None,
+        }
+    }
+
+    #[test]
+    fn health_registry_quota_repair_marks_stale_weekly_cache_exhausted() {
+        let now = 1_700_000_000;
+        let reset_at = now + 86_400;
+        let mut account =
+            test_codex_account_with_quota("codex_stale_97", stale_weekly_in_hourly_quota(reset_at));
+        let mut registry = CodexLocalAccessHealthRegistry::default();
+        registry.accounts.insert(
+            account.id.clone(),
+            CodexLocalAccessAccountHealth {
+                last_error_type: Some("usage_limit_reached".to_string()),
+                updated_at: (now - 60) * 1000,
+                ..Default::default()
+            },
+        );
+
+        assert!(repair_account_quota_from_local_access_health(
+            &mut account,
+            &registry,
+            now
+        ));
+
+        let quota = account.quota.expect("quota should be repaired");
+        assert_eq!(quota.hourly_percentage, 100);
+        assert_eq!(quota.hourly_window_present, Some(false));
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at));
+        assert_eq!(
+            quota.weekly_window_minutes,
+            Some(WEEKLY_WINDOW_MINUTES_THRESHOLD)
+        );
+        assert_eq!(
+            account
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("usage_limit_reached")
+        );
+    }
+
+    #[test]
+    fn health_registry_quota_repair_skips_expired_reset_evidence() {
+        let now = 1_700_000_000;
+        let mut account = test_codex_account_with_quota(
+            "codex_expired_97",
+            stale_weekly_in_hourly_quota(now - 60),
+        );
+        let original_remaining = account
+            .quota
+            .as_ref()
+            .map(|quota| (quota.hourly_percentage, quota.hourly_reset_time));
+        let mut registry = CodexLocalAccessHealthRegistry::default();
+        registry.accounts.insert(
+            account.id.clone(),
+            CodexLocalAccessAccountHealth {
+                last_error_type: Some("usage_limit_reached".to_string()),
+                updated_at: (now - 120) * 1000,
+                ..Default::default()
+            },
+        );
+
+        assert!(!repair_account_quota_from_local_access_health(
+            &mut account,
+            &registry,
+            now
+        ));
+        assert_eq!(
+            account
+                .quota
+                .as_ref()
+                .map(|quota| (quota.hourly_percentage, quota.hourly_reset_time)),
+            original_remaining
+        );
+    }
 
     #[test]
     fn parse_line_delimited_json_values_accepts_one_object_per_line() {

@@ -24,8 +24,9 @@
 - 维护 Cockpit 时把当前 Codex 连续性当作硬护栏：未经当前任务明确确认，不停止、重启、kill 或自动拉起 `Codex App`、`codex`、Cockpit release exe 或 live dev app。
 - 需要 live UI 或 packaged exe 验证时，先说明确切命令、原因、端口/窗口/单实例唤醒/资源占用/会话连续性影响，并询问：`是否允许我现在执行 <command> 进行实时验证？`
 - Codex API service、routing、quota、pool scheduling 或 failover 变更前，优先查本仓 `docs/reference-gateway-best-practices.md` 和 `D:\CODE\external\_reference_gateway_sources`；外部参考只作结构证据，不覆盖本仓运行事实。
-- Codex API service routing、quota continuity、pool scheduling, sorting, or risk-reduction changes 必须优先对照本机参考源；Official `openai-codex` source is the highest reference。若参考源陈旧，只允许非破坏性 `git fetch --prune` / `pull --ff-only` 刷新后再用作证据。
 
+<!-- auto-merged target-local additions -->
+- Codex API service routing、quota continuity、pool scheduling, sorting, or risk-reduction changes 必须优先对照本机参考源；Official `openai-codex` source is the highest reference。若参考源陈旧，只允许非破坏性 `git fetch --prune` / `pull --ff-only` 刷新后再用作证据。
 ### A.3 N/A 分类与字段
 - `platform_na`：平台能力缺失、命令不存在或非交互限制导致命令不可用。
 - `gate_na`：门禁步骤客观不可执行（含脚本缺失、当前任务纯文档/注释/排版、live dev/build 未获授权）。
@@ -66,10 +67,11 @@
 - build/typecheck/Rust test 失败：阻断，先修回归再继续。
 - `SECURITY.md`、Tauri capabilities、updater/signing、release scripts、auth/provider/local API service、quota routing 和 live config 属高影响面；发布或持久化前必须有回滚路径和验证证据。
 - live upstream quota probe 默认不跑；只有当前任务明确要求并带 `-AcknowledgeLiveUpstreamRisk` 时才可执行。
-- 超过默认 drain 请求量、把 drain 间隔降到 20 秒以下，或扩大真实上游消耗范围时，还必须同时带 `-AcknowledgeExpandedLiveUpstreamRisk` 并在报告中解释为什么缓存/静态 reset 数据不足。
-- Cooldown recovery must be inferred from stored reset times/health registry by default；不得通过重复刷新/polling 冷却恢复来消耗账号池。
 - Fallback continuity probe 默认使用 app-safe isolated/bypass 路径；不得为了 smoke 修改当前 active Codex CLI provider 或自动切换账号池。
 
+<!-- auto-merged target-local additions -->
+- 超过默认 drain 请求量、把 drain 间隔降到 20 秒以下，或扩大真实上游消耗范围时，还必须同时带 `-AcknowledgeExpandedLiveUpstreamRisk` 并在报告中解释为什么缓存/静态 reset 数据不足。
+- Cooldown recovery must be inferred from stored reset times/health registry by default；不得通过重复刷新/polling 冷却恢复来消耗账号池。
 ### C.5 证据与回滚
 - 治理接入证据落 `D:\CODE\governed-ai-coding-runtime\docs\change-evidence\`；本仓验证报告优先落 `reports/`。
 - 最低字段：规则 ID、风险等级、执行命令、关键输出、兼容性判断、回滚动作。

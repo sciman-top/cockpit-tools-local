@@ -358,6 +358,104 @@ assert.equal(
   'Codex quota issue presentation should classify JSON usage_limit_reached bodies as quota-limited',
 );
 
+const staleWeeklyInHourlySlot = quota(97, 100, {
+  hourly_reset_time: 1_780_310_638,
+  hourly_window_minutes: 10_080,
+  hourly_window_present: true,
+  weekly_window_present: false,
+});
+assert.deepEqual(
+  codexTypes.getCodexEffectiveQuotaPercentages(staleWeeklyInHourlySlot),
+  { hourly: null, weekly: 97, weeklyBlocksHourly: false },
+  'Persisted free-plan weekly windows stored in the hourly slot must count as weekly quota',
+);
+assert.deepEqual(
+  codexTypes.getCodexQuotaWindows(staleWeeklyInHourlySlot).map((window) => ({
+    label: window.label,
+    percentage: window.percentage,
+    resetTime: window.resetTime,
+    windowMinutes: window.windowMinutes,
+  })),
+  [
+    {
+      label: 'Weekly',
+      percentage: 97,
+      resetTime: 1_780_310_638,
+      windowMinutes: 10_080,
+    },
+  ],
+  'Stale weekly-in-hourly quota snapshots should render as a single weekly window',
+);
+
+assert.deepEqual(
+  sort.sortCodexLocalAccessAccountIdsForStableDisplay(
+    ['stale-weekly-exhausted', 'usable'],
+    [
+      codexAccount(
+        'stale-weekly-exhausted',
+        quota(0, 100, {
+          hourly_window_minutes: 10_080,
+          hourly_window_present: true,
+          weekly_window_present: false,
+        }),
+      ),
+      codexAccount('usable', quota(20, 20)),
+    ],
+    'stale-weekly-exhausted',
+  ),
+  ['usable', 'stale-weekly-exhausted'],
+  'Stable display should move a current account with stale weekly-in-hourly exhausted quota to the end',
+);
+assert.equal(
+  selectors.getRecommendedCodexAccount(
+    [
+      codexAccount(
+        'stale-weekly-exhausted',
+        quota(0, 100, {
+          hourly_window_minutes: 10_080,
+          hourly_window_present: true,
+          weekly_window_present: false,
+        }),
+      ),
+      codexAccount('usable', quota(20, 20)),
+    ],
+    null,
+  )?.id,
+  'usable',
+  'Recommendations must not treat stale weekly-in-hourly exhausted quota as available',
+);
+
+const codeReviewResetBefore = Math.floor(Date.now() / 1000) + 120;
+const codeReviewMetric = codexTypes.getCodexCodeReviewQuotaMetric({
+  raw_data: {
+    code_review_rate_limit: {
+      primary_window: {
+        used_percent: '25',
+        limit_window_seconds: '18000',
+        reset_after_seconds: '120',
+      },
+    },
+  },
+});
+const codeReviewResetAfter = Math.floor(Date.now() / 1000) + 120;
+assert.ok(codeReviewMetric, 'Codex code-review quota metric should parse');
+assert.equal(
+  codeReviewMetric.percentage,
+  75,
+  'Codex code-review quota should parse numeric-string usage percentages',
+);
+assert.ok(
+  codeReviewMetric.resetTime >= codeReviewResetBefore &&
+    codeReviewMetric.resetTime <= codeReviewResetAfter,
+  'Codex code-review quota should parse numeric-string reset_after_seconds',
+);
+
+assert.equal(
+  codexTypes.formatCodexResetTimeAbsolute(1_700_000_360_000),
+  codexTypes.formatCodexResetTimeAbsolute(1_700_000_360),
+  'Codex quota reset formatter should normalize millisecond timestamps',
+);
+
 assert.equal(
   codexTypes.isCodexAccountErrorState(codexAccount('limited', quota(0, 0), {
     quota_error: quotaLimitedError,
