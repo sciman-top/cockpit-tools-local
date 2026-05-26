@@ -580,6 +580,96 @@ try {
   Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "pool_wait_reaches_terminal_or_recovery").status) "pass" "expected recovered pool_wait to satisfy terminal progress guard"
   Assert-Equal (($poolWaitSummary.results | Where-Object name -eq "responses_pool_unavailable_legacy_synthetic_completion_absent").status) "pass" "expected recovered pool_wait not to fail legacy synthetic completion guard"
 
+  $dataRootStickyResetRecovered = Join-Path $tempRoot "data-sticky-reset-recovered"
+  $auditStickyResetRecovered = Join-Path $dataRootStickyResetRecovered "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditStickyResetRecovered @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:sticky-recovered"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:sticky-recovered"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; normal_request_timeout_ms = "1000"; request_timeout_ms = "86401000"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state"; turn_lineage_id = "turn:sha256:sticky-recovered"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:sticky-recovered"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; retry_after_ms = "1500" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:sticky-recovered"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; retry_after_ms = "1500"; hard_affinity_inline_retry_wait_limit_ms = "86400000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:sticky-recovered"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "sleeping"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; reason = "hard_affinity_same_account_retry"; retry_after_ms = "1500"; inline_wait_limit_ms = "86400000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:sticky-recovered"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "retrying"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; reason = "hard_affinity_same_account_retry"; slept_ms = "1500" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:sticky-recovered"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:sticky-recovered"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered" } }
+  )
+  $stickyResetRecoveredOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootStickyResetRecovered `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireStreamCompletion `
+    -RequiredCompletedStreams 1 `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor sticky reset recovered fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $stickyResetRecoveredSummary = Convert-JsonOutput $stickyResetRecoveredOutput "sticky reset recovered fixture"
+  Assert-Equal $stickyResetRecoveredSummary.overall "pass" "expected sticky reset recovered fixture overall"
+  Assert-Equal $stickyResetRecoveredSummary.audit.stickyResetWaitRecoveredCount 1 "expected one sticky reset wait recovery"
+  Assert-Equal $stickyResetRecoveredSummary.audit.stickyResetWaitKilledByLocalTimeoutCount 0 "expected no sticky reset wait timeout kill"
+  Assert-Equal (($stickyResetRecoveredSummary.results | Where-Object name -eq "sticky_reset_wait_not_killed_by_local_timeout").status) "pass" "expected sticky reset recovered guard pass"
+
+  $dataRootStructuredTrace = Join-Path $tempRoot "data-structured-trace"
+  $auditStructuredTrace = Join-Path $dataRootStructuredTrace "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditStructuredTrace @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:trace"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-trace" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:trace"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-trace"; normal_request_timeout_ms = "1000"; request_timeout_ms = "86401000"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state"; turn_lineage_id = "turn:sha256:trace"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:trace"; phase = "quota_classification"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "exhausted"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; retry_after_ms = "1500"; reset_source = "retry_after" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:trace"; phase = "routing_decision"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "selected"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; hard_affinity_bound = "true" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:trace"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; retry_after_ms = "1500"; hard_affinity_inline_retry_wait_limit_ms = "86400000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:trace"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "sleeping"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; reason = "hard_affinity_same_account_retry"; retry_after_ms = "1500"; inline_wait_limit_ms = "86400000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:trace"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "retrying"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; reason = "hard_affinity_same_account_retry"; slept_ms = "1500" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:trace"; phase = "stream_terminal"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; response_completed_seen = "true"; compaction_summary_seen = "true"; response_id_hash = "response:sha256:trace" } }
+  )
+  $structuredTraceOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootStructuredTrace `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireStreamCompletion `
+    -RequiredCompletedStreams 1 `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor structured trace fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $structuredTraceSummary = Convert-JsonOutput $structuredTraceOutput "structured trace fixture"
+  Assert-Equal $structuredTraceSummary.overall "pass" "expected structured trace fixture overall"
+  Assert-Equal $structuredTraceSummary.audit.requestTraceCount 1 "expected request_trace count"
+  Assert-Equal $structuredTraceSummary.audit.quotaClassificationCount 1 "expected quota_classification count"
+  Assert-Equal $structuredTraceSummary.audit.routingDecisionCount 1 "expected routing_decision count"
+  Assert-Equal $structuredTraceSummary.audit.streamTerminalCount 1 "expected stream_terminal count"
+  Assert-Equal $structuredTraceSummary.audit.streamTerminalResponseCompletedCount 1 "expected response.completed trace count"
+  Assert-Equal $structuredTraceSummary.audit.streamTerminalCompactionSummaryCount 1 "expected compaction summary trace count"
+  Assert-Equal $structuredTraceSummary.audit.completedStreamCount 1 "expected stream_terminal to count as completed stream"
+  Assert-Equal (($structuredTraceSummary.results | Where-Object name -eq "structured_behavior_trace_present").status) "pass" "expected structured behavior trace coverage pass"
+
+  $dataRootStickyResetTimeout = Join-Path $tempRoot "data-sticky-reset-timeout"
+  $auditStickyResetTimeout = Join-Path $dataRootStickyResetTimeout "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditStickyResetTimeout @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:sticky-timeout"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-sticky-timeout" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:sticky-timeout"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-sticky-timeout"; normal_request_timeout_ms = "1000"; request_timeout_ms = "1000"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state"; turn_lineage_id = "turn:sha256:sticky-timeout"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:sticky-timeout"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-sticky-timeout"; turn_lineage_id = "turn:sha256:sticky-timeout"; retry_after_ms = "1500" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:sticky-timeout"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-sticky-timeout"; turn_lineage_id = "turn:sha256:sticky-timeout"; retry_after_ms = "1500"; hard_affinity_inline_retry_wait_limit_ms = "1000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:sticky-timeout"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 503; errorType = "pool_unavailable"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-sticky-timeout"; turn_lineage_id = "turn:sha256:sticky-timeout"; message = "本地接入请求超时，请稍后重试" } }
+  )
+  $stickyResetTimeoutOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootStickyResetTimeout `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 1) "expected sticky reset timeout fixture exit code 1"
+  $stickyResetTimeoutSummary = Convert-JsonOutput $stickyResetTimeoutOutput "sticky reset timeout fixture"
+  Assert-Equal $stickyResetTimeoutSummary.overall "fail" "expected sticky reset timeout fixture overall fail"
+  Assert-Equal $stickyResetTimeoutSummary.audit.stickyResetWaitKilledByLocalTimeoutCount 1 "expected one sticky reset wait killed by local timeout"
+  Assert-Equal (($stickyResetTimeoutSummary.results | Where-Object name -eq "sticky_reset_wait_not_killed_by_local_timeout").status) "fail" "expected sticky reset timeout guard fail"
+
   $dataRootActiveDrain = Join-Path $tempRoot "data-active-drain"
   $auditActiveDrain = Join-Path $dataRootActiveDrain "codex_local_access_audit.jsonl"
   Write-AuditLines $auditActiveDrain @(

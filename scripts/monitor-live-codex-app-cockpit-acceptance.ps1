@@ -335,6 +335,23 @@ function Test-CodexResponsesRoute {
   $route -eq "/v1/responses" -or $route -eq "/responses" -or $route.EndsWith("/responses")
 }
 
+function Test-AuditStreamTerminalCompleted {
+  param([System.Collections.IDictionary]$Event)
+  if ($Event.phase -eq "stream_completed") {
+    return $true
+  }
+  if ($Event.phase -eq "lease_released" -and $Event.outcome -eq "completed") {
+    return $true
+  }
+  if ($Event.phase -ne "stream_terminal") {
+    return $false
+  }
+  if ($Event.outcome -eq "completed" -or $Event.streamState -eq "completed") {
+    return $true
+  }
+  Get-AuditDetailBool -Event $Event -Name "response_completed_seen"
+}
+
 function Get-AuditDetailValue {
   param(
     [System.Collections.IDictionary]$Event,
@@ -364,6 +381,22 @@ function Get-AuditDetailBool {
     return $false
   }
   $value -match '^(?i:true|1|yes)$'
+}
+
+function Get-AuditDetailInt64 {
+  param(
+    [System.Collections.IDictionary]$Event,
+    [string]$Name
+  )
+  $value = Get-AuditDetailValue -Event $Event -Name $Name
+  if ([string]::IsNullOrWhiteSpace($value)) {
+    return $null
+  }
+  $parsed = 0L
+  if ([int64]::TryParse($value, [ref]$parsed)) {
+    return $parsed
+  }
+  $null
 }
 
 function Get-AuditLeaseId {
@@ -608,6 +641,12 @@ function New-RequestTimelines {
       "stream_completed" {
         $group.streamCompletedCount++
         $group.terminalUpstreamCompletionCount++
+      }
+      "stream_terminal" {
+        if (Test-AuditStreamTerminalCompleted $event) {
+          $group.streamCompletedCount++
+          $group.terminalUpstreamCompletionCount++
+        }
       }
       "client_aborted" { $group.clientAbortedCount++ }
       "lease_granted" { $group.leaseGrantedCount++ }
@@ -909,8 +948,7 @@ function Get-AuditAcceptanceSummary {
           break
         }
         if (
-          $candidate.phase -eq "stream_completed" -or
-          ($candidate.phase -eq "lease_released" -and $candidate.outcome -eq "completed") -or
+          (Test-AuditStreamTerminalCompleted $candidate) -or
           ($candidate.phase -eq "final_response" -and $candidate.status -eq 200 -and -not (Test-LocalPoolUnavailableEvent $candidate))
         ) {
           $terminalCompletion = $candidate
@@ -1015,6 +1053,13 @@ function Get-AuditAcceptanceSummary {
   $activeStreamGroups = @{}
   $accountGroups = @{}
   $streamSequence = 0
+  $hardAffinityContinuityRequestIds = @(
+    $parsedEvents |
+      Where-Object { $_.phase -eq "request_trace" -and (Get-AuditDetailBool -Event $_ -Name "hard_affinity_continuity") } |
+      ForEach-Object { $_.requestId } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne "-" } |
+      Sort-Object -Unique
+  )
   foreach ($event in $parsedEvents) {
     $requestId = $event.requestId
     if (Test-ValidAccountHash $event.accountHash) {
@@ -1048,7 +1093,7 @@ function Get-AuditAcceptanceSummary {
       if ($event.phase -eq "model_cooldown_applied") {
         $account.modelCooldownCount++
       }
-      if ($event.phase -eq "stream_completed" -or ($event.phase -eq "lease_released" -and $event.outcome -eq "completed")) {
+      if (Test-AuditStreamTerminalCompleted $event) {
         $account.completedStreamCount++
       }
       if ($requestId -and $requestId -ne "-") {
@@ -1060,7 +1105,10 @@ function Get-AuditAcceptanceSummary {
     if (-not $requestId -or $requestId -eq "-") {
       continue
     }
-    $isStreamEvent = $event.phase -in @("lease_granted", "stream_write", "stream_completed", "lease_released")
+    $isStreamTerminalEvent = $event.phase -in @("stream_completed", "stream_terminal")
+    $isStreamEvent =
+      $event.phase -in @("lease_granted", "stream_write", "lease_released") -or
+      ($isStreamTerminalEvent -and ($activeStreamGroups.ContainsKey($requestId) -or $hardAffinityContinuityRequestIds -contains $requestId))
     $group = $null
     if ($event.phase -eq "lease_granted") {
       $streamSequence++
@@ -1120,10 +1168,10 @@ function Get-AuditAcceptanceSummary {
     if (Test-ValidAccountHash $event.accountHash) {
       $group.accountHashes += $event.accountHash
     }
-    if ($event.phase -eq "lease_granted" -or $event.phase -eq "stream_write") {
+    if ($event.phase -eq "lease_granted" -or $event.phase -eq "stream_write" -or $isStreamTerminalEvent) {
       $group.started = $true
     }
-    if ($event.phase -eq "stream_completed" -or ($event.phase -eq "lease_released" -and $event.outcome -eq "completed") -or ($event.phase -eq "final_response" -and $event.status -eq 200)) {
+    if ((Test-AuditStreamTerminalCompleted $event) -or ($event.phase -eq "final_response" -and $event.status -eq 200)) {
       $group.completed = $true
     }
     if ($event.phase -eq "final_response" -and $event.status -ge 400 -and -not $group.completed) {
@@ -1132,7 +1180,7 @@ function Get-AuditAcceptanceSummary {
     if ($group.started -and $event.phase -eq "model_cooldown_applied") {
       $group.interruptedByCooldown = $true
     }
-    if (($event.phase -eq "stream_completed" -or $event.phase -eq "lease_released" -or $event.phase -eq "final_response") -and ($group.completed -or $group.terminalError)) {
+    if (($isStreamTerminalEvent -or $event.phase -eq "lease_released" -or $event.phase -eq "final_response") -and ($group.completed -or $group.terminalError)) {
       [void]$activeStreamGroups.Remove($requestId)
     }
   }
@@ -1146,6 +1194,99 @@ function Get-AuditAcceptanceSummary {
   $clientAbortedBeforeFirstChunk = @($clientAbortedStreams | Where-Object { $_.phases -notcontains "stream_write" })
   $clientAbortedAfterFirstChunk = @($clientAbortedStreams | Where-Object { $_.phases -contains "stream_write" })
   $unclosedHardAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { -not $_.completedLocally -and -not $_.completedByUpstream -and -not $_.unrecoveredTerminal429 })
+  $stickyResetWaitRequests = @()
+  $stickyResetWaitRecovered = @()
+  $stickyResetWaitKilledByLocalTimeout = @()
+  foreach ($traceEvent in @($parsedEvents | Where-Object { $_.phase -eq "request_trace" -and (Get-AuditDetailBool -Event $_ -Name "hard_affinity_continuity") })) {
+    $requestId = [string]$traceEvent.requestId
+    $gatewayRequestId = Get-AuditGatewayRequestId $traceEvent
+    $normalRequestTimeoutMs = Get-AuditDetailInt64 -Event $traceEvent -Name "normal_request_timeout_ms"
+    $requestTimeoutMs = Get-AuditDetailInt64 -Event $traceEvent -Name "request_timeout_ms"
+    $timeoutExtended = [bool]($null -ne $normalRequestTimeoutMs -and $null -ne $requestTimeoutMs -and $requestTimeoutMs -gt $normalRequestTimeoutMs)
+    $sameEvents = @($parsedEvents | Where-Object {
+      $sameRequest = (-not [string]::IsNullOrWhiteSpace($requestId)) -and $_.requestId -eq $requestId
+      $sameGateway = $false
+      if (-not [string]::IsNullOrWhiteSpace($gatewayRequestId)) {
+        $sameGateway = (Get-AuditGatewayRequestId $_) -eq $gatewayRequestId
+      }
+      $sameRequest -or $sameGateway
+    })
+    $hardAffinityBlock = @($sameEvents | Where-Object { $_.phase -eq "fallback_blocked" -and $_.outcome -eq "hard_affinity" } | Select-Object -First 1)
+    $sameAccountRetryWait = @($sameEvents | Where-Object {
+      $_.phase -eq "pool_wait" -and
+      (Get-AuditDetailValue -Event $_ -Name "reason") -eq "hard_affinity_same_account_retry"
+    } | Select-Object -First 1)
+    $retryAfterMs = $null
+    $inlineWaitLimitMs = $null
+    foreach ($candidate in @($sameAccountRetryWait + $hardAffinityBlock)) {
+      if ($null -eq $retryAfterMs) {
+        foreach ($name in @("retry_after_ms", "retryAfterMs")) {
+          $value = Get-AuditDetailInt64 -Event $candidate -Name $name
+          if ($null -ne $value) {
+            $retryAfterMs = $value
+            break
+          }
+        }
+      }
+      if ($null -eq $inlineWaitLimitMs) {
+        foreach ($name in @("inline_wait_limit_ms", "hard_affinity_inline_retry_wait_limit_ms", "max_inline_wait_ms", "max_hard_affinity_inline_retry_wait_ms")) {
+          $value = Get-AuditDetailInt64 -Event $candidate -Name $name
+          if ($null -ne $value) {
+            $inlineWaitLimitMs = $value
+            break
+          }
+        }
+      }
+    }
+    $resetWaitExceedsNormalTimeout = [bool](
+      $null -ne $retryAfterMs -and
+      $null -ne $normalRequestTimeoutMs -and
+      $retryAfterMs -gt $normalRequestTimeoutMs
+    )
+    $requestTimeoutCoversResetWait = [bool](
+      $null -ne $retryAfterMs -and
+      $null -ne $requestTimeoutMs -and
+      $requestTimeoutMs -gt $retryAfterMs
+    )
+    $terminalSuccess = @($sameEvents | Where-Object {
+      (Test-AuditStreamTerminalCompleted $_) -or
+      ($_.phase -eq "final_response" -and $_.status -eq 200 -and -not (Test-LocalPoolUnavailableEvent $_))
+    } | Select-Object -First 1)
+    $localTimeoutTerminal = @($sameEvents | Where-Object {
+      $_.phase -eq "final_response" -and
+      $_.status -ge 400 -and
+      (
+        (Test-LocalPoolUnavailableEvent $_) -or
+        ($_.rawLine -match '请求超时|request timeout|timed out')
+      )
+    } | Select-Object -First 1)
+    $record = [ordered]@{
+      requestId = $requestId
+      gatewayRequestId = $gatewayRequestId
+      timestamp = $traceEvent.timestamp
+      normalRequestTimeoutMs = $normalRequestTimeoutMs
+      requestTimeoutMs = $requestTimeoutMs
+      timeoutExtended = [bool]$timeoutExtended
+      retryAfterMs = $retryAfterMs
+      inlineWaitLimitMs = $inlineWaitLimitMs
+      resetWaitExceedsNormalTimeout = [bool]$resetWaitExceedsNormalTimeout
+      requestTimeoutCoversResetWait = [bool]$requestTimeoutCoversResetWait
+      stickyBoundary = Get-AuditDetailValue -Event $traceEvent -Name "sticky_boundary"
+      turnLineageId = Get-AuditLineageId $traceEvent
+      hasHardAffinityBlock = [bool]($hardAffinityBlock.Count -gt 0)
+      hasSameAccountRetryWait = [bool]($sameAccountRetryWait.Count -gt 0)
+      terminalSuccess = [bool]($terminalSuccess.Count -gt 0)
+      localTimeoutTerminal = [bool]($localTimeoutTerminal.Count -gt 0)
+      terminalPhase = if ($terminalSuccess.Count -gt 0) { $terminalSuccess[0].phase } elseif ($localTimeoutTerminal.Count -gt 0) { $localTimeoutTerminal[0].phase } else { $null }
+      terminalStatus = if ($terminalSuccess.Count -gt 0) { $terminalSuccess[0].status } elseif ($localTimeoutTerminal.Count -gt 0) { $localTimeoutTerminal[0].status } else { $null }
+    }
+    $stickyResetWaitRequests += $record
+    if ($record.hasHardAffinityBlock -and $record.terminalSuccess -and ($record.timeoutExtended -or $record.requestTimeoutCoversResetWait)) {
+      $stickyResetWaitRecovered += $record
+    } elseif ($record.hasHardAffinityBlock -and $record.localTimeoutTerminal -and (-not $record.timeoutExtended -or ($null -ne $record.retryAfterMs -and $null -ne $record.requestTimeoutMs -and $record.retryAfterMs -ge $record.requestTimeoutMs))) {
+      $stickyResetWaitKilledByLocalTimeout += $record
+    }
+  }
   $responseAccountBindings = @{}
   foreach ($event in $parsedEvents) {
     if (-not (Test-ValidAccountHash $event.accountHash)) {
@@ -1312,6 +1453,13 @@ function Get-AuditAcceptanceSummary {
   $autoCompactReroutes = @($lineageSummaries | ForEach-Object { $_.autoCompactReroutes })
   $lineageLocalCompletionsAfterHardAffinity = @($lineageSummaries | ForEach-Object { $_.localCompletionAfterHardAffinity })
   $detailEvents = @($parsedEvents | Where-Object { $_.detail })
+  $requestTraceEvents = @($parsedEvents | Where-Object { $_.phase -eq "request_trace" })
+  $hardAffinityContinuityRequestTraceEvents = @($requestTraceEvents | Where-Object { Get-AuditDetailBool -Event $_ -Name "hard_affinity_continuity" })
+  $routingDecisionEvents = @($parsedEvents | Where-Object { $_.phase -eq "routing_decision" })
+  $quotaClassificationEvents = @($parsedEvents | Where-Object { $_.phase -eq "quota_classification" })
+  $streamTerminalEvents = @($parsedEvents | Where-Object { $_.phase -eq "stream_terminal" })
+  $streamTerminalResponseCompletedEvents = @($streamTerminalEvents | Where-Object { Get-AuditDetailBool -Event $_ -Name "response_completed_seen" })
+  $streamTerminalCompactionSummaryEvents = @($streamTerminalEvents | Where-Object { Get-AuditDetailBool -Event $_ -Name "compaction_summary_seen" })
   $eventsWithGatewayRequestId = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditDetailValue -Event $_ -Name "gateway_request_id")) })
   $eventsWithTurnLineageId = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditLineageId $_)) })
   $eventsWithExplicitTurnLineageId = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditDetailValue -Event $_ -Name "turn_lineage_id")) })
@@ -1344,8 +1492,7 @@ function Get-AuditAcceptanceSummary {
   foreach ($poolWaitRequestId in @($poolWaitEvents | ForEach-Object { $_.requestId } | Where-Object { $_ -and $_ -ne "-" } | Sort-Object -Unique)) {
     $requestEvents = @($parsedEvents | Where-Object { $_.requestId -eq $poolWaitRequestId })
     $hasPoolWaitTerminal = [bool]@($requestEvents | Where-Object {
-      $_.phase -eq "stream_completed" -or
-      ($_.phase -eq "lease_released" -and $_.outcome -eq "completed") -or
+      (Test-AuditStreamTerminalCompleted $_) -or
       $_.phase -eq "final_response" -or
       ($_.phase -eq "upstream_forward" -and $_.status -eq 200)
     }).Count
@@ -1382,6 +1529,32 @@ function Get-AuditAcceptanceSummary {
     sameTaskAffinityUnclosedBlockRequestIds = @($unclosedHardAffinityBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityFallbackBlockedRequestIds = @($sameTaskAffinityBlockTransitions | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityFallbackBlockedTransitions = @($sameTaskAffinityBlockTransitions)
+    requestTraceCount = $requestTraceEvents.Count
+    hardAffinityContinuityRequestTraceCount = $hardAffinityContinuityRequestTraceEvents.Count
+    routingDecisionCount = $routingDecisionEvents.Count
+    quotaClassificationCount = $quotaClassificationEvents.Count
+    streamTerminalCount = $streamTerminalEvents.Count
+    streamTerminalResponseCompletedCount = $streamTerminalResponseCompletedEvents.Count
+    streamTerminalCompactionSummaryCount = $streamTerminalCompactionSummaryEvents.Count
+    behaviorTraceCoverage = [ordered]@{
+      requestTraceCount = $requestTraceEvents.Count
+      hardAffinityContinuityRequestTraceCount = $hardAffinityContinuityRequestTraceEvents.Count
+      routingDecisionCount = $routingDecisionEvents.Count
+      quotaClassificationCount = $quotaClassificationEvents.Count
+      streamTerminalCount = $streamTerminalEvents.Count
+      streamTerminalResponseCompletedCount = $streamTerminalResponseCompletedEvents.Count
+      streamTerminalCompactionSummaryCount = $streamTerminalCompactionSummaryEvents.Count
+      hasStructuredBehaviorTrace = [bool]($requestTraceEvents.Count -gt 0 -or $routingDecisionEvents.Count -gt 0 -or $quotaClassificationEvents.Count -gt 0 -or $streamTerminalEvents.Count -gt 0)
+    }
+    stickyResetWaitRequestCount = $stickyResetWaitRequests.Count
+    stickyResetWaitRecoveredCount = $stickyResetWaitRecovered.Count
+    stickyResetWaitKilledByLocalTimeoutCount = $stickyResetWaitKilledByLocalTimeout.Count
+    stickyResetWaitRequestIds = @($stickyResetWaitRequests | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    stickyResetWaitRecoveredRequestIds = @($stickyResetWaitRecovered | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    stickyResetWaitKilledByLocalTimeoutRequestIds = @($stickyResetWaitKilledByLocalTimeout | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    stickyResetWaitRequests = @($stickyResetWaitRequests)
+    stickyResetWaitRecovered = @($stickyResetWaitRecovered)
+    stickyResetWaitKilledByLocalTimeout = @($stickyResetWaitKilledByLocalTimeout)
     distinctHealthyAccountCountAfterBlock = $distinctHealthyAccountHashesAfterBlock.Count
     distinctHealthyAccountHashesAfterBlock = @($distinctHealthyAccountHashesAfterBlock)
     first429AccountHash = $first429AccountHash
@@ -1563,6 +1736,45 @@ function New-AcceptanceResults {
     $results += Set-MonitorStatus $sameTask "blocked" "未在监测窗口内观察到同任务 429 -> cooldown -> fallback_blocked(hard_affinity)" $sameTaskEvidence
   } else {
     $results += Set-MonitorStatus $sameTask "skipped" "未要求 quota hard-affinity 必须出现；仅记录 audit 观察结果" $sameTaskEvidence
+  }
+
+  $stickyReset = New-MonitorResult "sticky_reset_wait_not_killed_by_local_timeout"
+  $stickyResetEvidence = @{
+    stickyResetWaitRequestCount = [int]$AuditSummary.stickyResetWaitRequestCount
+    stickyResetWaitRecoveredCount = [int]$AuditSummary.stickyResetWaitRecoveredCount
+    stickyResetWaitKilledByLocalTimeoutCount = [int]$AuditSummary.stickyResetWaitKilledByLocalTimeoutCount
+    stickyResetWaitRequestIds = @($AuditSummary.stickyResetWaitRequestIds)
+    stickyResetWaitRecoveredRequestIds = @($AuditSummary.stickyResetWaitRecoveredRequestIds)
+    stickyResetWaitKilledByLocalTimeoutRequestIds = @($AuditSummary.stickyResetWaitKilledByLocalTimeoutRequestIds)
+    stickyResetWaitRequests = @($AuditSummary.stickyResetWaitRequests)
+  }
+  if ($AuditSummary.stickyResetWaitKilledByLocalTimeoutCount -gt 0) {
+    $results += Set-MonitorStatus $stickyReset "fail" "hard-affinity continuation 已触发，但 request timeout 没有扩展到 cooldown 等待窗口，旧任务被本地超时提前打断" $stickyResetEvidence
+  } elseif ($AuditSummary.stickyResetWaitRecoveredCount -gt 0) {
+    $results += Set-MonitorStatus $stickyReset "pass" $null $stickyResetEvidence
+  } elseif ($AuditSummary.stickyResetWaitRequestCount -gt 0) {
+    $results += Set-MonitorStatus $stickyReset "blocked" "已观察到 hard-affinity continuation request_trace，但监测窗口内没有看到恢复完成或明确本地超时终止" $stickyResetEvidence
+  } else {
+    $results += Set-MonitorStatus $stickyReset "skipped" "未观察到 hard-affinity continuation request_trace；旧 audit 可能尚未包含该结构化追踪字段" $stickyResetEvidence
+  }
+
+  $behaviorTrace = New-MonitorResult "structured_behavior_trace_present"
+  $behaviorTraceEvidence = @{
+    behaviorTraceCoverage = $AuditSummary.behaviorTraceCoverage
+    requestTraceCount = [int]$AuditSummary.requestTraceCount
+    hardAffinityContinuityRequestTraceCount = [int]$AuditSummary.hardAffinityContinuityRequestTraceCount
+    routingDecisionCount = [int]$AuditSummary.routingDecisionCount
+    quotaClassificationCount = [int]$AuditSummary.quotaClassificationCount
+    streamTerminalCount = [int]$AuditSummary.streamTerminalCount
+    streamTerminalResponseCompletedCount = [int]$AuditSummary.streamTerminalResponseCompletedCount
+    streamTerminalCompactionSummaryCount = [int]$AuditSummary.streamTerminalCompactionSummaryCount
+  }
+  if ($AuditSummary.eventCount -eq 0) {
+    $results += Set-MonitorStatus $behaviorTrace "skipped" "监测窗口内没有 audit 事件，无法评估结构化行为追踪覆盖率" $behaviorTraceEvidence
+  } elseif ($AuditSummary.behaviorTraceCoverage.hasStructuredBehaviorTrace) {
+    $results += Set-MonitorStatus $behaviorTrace "pass" $null $behaviorTraceEvidence
+  } else {
+    $results += Set-MonitorStatus $behaviorTrace "warn" "当前 audit 仍是旧事件模型，缺少 request_trace/routing_decision/quota_classification/stream_terminal 结构化行为追踪" $behaviorTraceEvidence
   }
 
   $newRequest = New-MonitorResult "new_request_avoids_exhausted_account"
@@ -1921,6 +2133,16 @@ function New-ContinuitySummary {
       reason = $lineageReason
       evidence = $lineageEvidence
     }
+    stickyResetWaitNotKilledByLocalTimeout = [ordered]@{
+      status = if ($AuditSummary.stickyResetWaitKilledByLocalTimeoutCount -gt 0) { "fail" } elseif ($AuditSummary.stickyResetWaitRecoveredCount -gt 0) { "pass" } elseif ($AuditSummary.stickyResetWaitRequestCount -gt 0) { "blocked" } else { "skipped" }
+      reason = if ($AuditSummary.stickyResetWaitKilledByLocalTimeoutCount -gt 0) { "hard-affinity continuation reset wait hit local timeout before recovery" } elseif ($AuditSummary.stickyResetWaitRequestCount -gt 0 -and $AuditSummary.stickyResetWaitRecoveredCount -eq 0) { "hard-affinity continuation observed without terminal recovery in this window" } else { $null }
+      evidence = [ordered]@{
+        requestCount = [int]$AuditSummary.stickyResetWaitRequestCount
+        recoveredCount = [int]$AuditSummary.stickyResetWaitRecoveredCount
+        killedByLocalTimeoutCount = [int]$AuditSummary.stickyResetWaitKilledByLocalTimeoutCount
+        requests = @($AuditSummary.stickyResetWaitRequests)
+      }
+    }
   }
 }
 
@@ -2059,7 +2281,7 @@ do {
         Write-Host (Format-AuditRealtimeEventLine $event)
       }
       $summary = Get-AuditAcceptanceSummary $events
-      Write-Host ("events={0}; has429={1}; fallbackBlocked={2}; sameTaskLocalCompletion={3}; newRequestAvoidance={4}; healthyAccountsAfterBlock={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; localCompletionPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}; lineageSwitch={19}; continuationReroute={20}; autoCompactReroute={21}" -f $summary.eventCount, $summary.has429, $summary.sameTaskAffinityFallbackBlockedCount, $summary.sameTaskAffinityLocalCompletionCount, $summary.newRequestAvoidanceCount, $summary.distinctHealthyAccountCountAfterBlock, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.responsesLocalCompletionPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount, $summary.lineageAccountSwitchCount, $summary.continuationReroutedCount, $summary.autoCompactReroutedCount)
+      Write-Host ("events={0}; has429={1}; fallbackBlocked={2}; sameTaskLocalCompletion={3}; newRequestAvoidance={4}; healthyAccountsAfterBlock={5}; streams={6}/{7}; retryLimit={8}; poolWait={9}; heartbeatPoolWait={10}; activeDrainWait={11}; openPoolWait={12}; poolUnavailable={13}; localCompletionPoolUnavailable={14}; failedPoolUnavailable={15}; responses503={16}; parkedPoolWait={17}; sseIdle={18}; lineageSwitch={19}; continuationReroute={20}; autoCompactReroute={21}; behaviorTrace={22}; stickyResetRecovered={23}; stickyResetTimeoutKill={24}" -f $summary.eventCount, $summary.has429, $summary.sameTaskAffinityFallbackBlockedCount, $summary.sameTaskAffinityLocalCompletionCount, $summary.newRequestAvoidanceCount, $summary.distinctHealthyAccountCountAfterBlock, $summary.completedStreamCount, $summary.startedStreamCount, $summary.retryLimitErrorFound, $summary.poolWaitCount, $summary.heartbeatPoolWaitCount, $summary.activeDrainPoolWaitCount, $summary.openPoolWaitCount, $summary.localPoolUnavailableCount, $summary.responsesLocalCompletionPoolUnavailableCount, $summary.responsesFailedPoolUnavailableCount, $summary.responsesTransport503PoolUnavailableCount, $summary.parkedPoolWaitCount, $summary.sseIdleErrorCount, $summary.lineageAccountSwitchCount, $summary.continuationReroutedCount, $summary.autoCompactReroutedCount, $summary.behaviorTraceCoverage.hasStructuredBehaviorTrace, $summary.stickyResetWaitRecoveredCount, $summary.stickyResetWaitKilledByLocalTimeoutCount)
     }
   }
 
@@ -2095,7 +2317,8 @@ do {
     $failedStreamSatisfied = (-not $summaryNow.responsesFailedPoolUnavailableCount)
     $legacySyntheticTerminalSatisfied = (-not $summaryNow.inBandSyntheticPoolUnavailableCount)
     $poolWaitProgressSatisfied = (-not $summaryNow.openPoolWaitCount)
-    if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied) {
+    $stickyResetSatisfied = (-not $summaryNow.stickyResetWaitKilledByLocalTimeoutCount)
+    if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied -and $stickyResetSatisfied) {
       $terminationReason = "stop_when_satisfied"
       break
     }

@@ -204,6 +204,13 @@ export function getCodexQuotaIssueInfo(
   };
 }
 
+export function shouldShowCodexQuotaIssueNotice(
+  error?: CodexQuotaErrorInfo | null,
+): boolean {
+  const issueInfo = getCodexQuotaIssueInfo(error);
+  return issueInfo.kind !== "none" && !issueInfo.isQuotaLimitError;
+}
+
 export function isCodexAccountErrorState(account: CodexAccount): boolean {
   return Boolean(
     account.requires_reauth ||

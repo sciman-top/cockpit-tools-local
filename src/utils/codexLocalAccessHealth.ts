@@ -43,12 +43,19 @@ export function getCodexLocalAccessQuotaAccountRefreshKey(
 }
 
 export function isCodexLocalAccessQuotaHealthIssue(
-  health: Pick<
-    CodexLocalAccessAccountHealthView,
-    "lastStatus" | "lastErrorType"
-  > | null | undefined,
+  health:
+    | (Pick<
+        CodexLocalAccessAccountHealthView,
+        "lastStatus" | "lastErrorType"
+      > &
+        Partial<Pick<CodexLocalAccessAccountHealthView, "status">>)
+    | null
+    | undefined,
 ): boolean {
   if (!health) return false;
+  if (health.status === "healthy" || health.status === "estimated_available") {
+    return false;
+  }
   return (
     health.lastStatus === 429 ||
     QUOTA_SNAPSHOT_ERROR_TYPES.has(normalizeErrorType(health.lastErrorType))

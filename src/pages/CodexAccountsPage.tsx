@@ -100,6 +100,7 @@ import {
   isCodexExplicitFreePlanType,
   isCodexNewApiAccount,
   isCodexTeamLikePlan,
+  shouldShowCodexQuotaIssueNotice,
   type CodexApiProviderMode,
   type CodexQuotaErrorInfo,
 } from "../types/codex";
@@ -6135,17 +6136,29 @@ export function CodexAccountsPage() {
           : undefined,
       );
       const quotaErrorMeta = resolveQuotaErrorMeta(account.quota_error);
+      const shouldShowQuotaIssueNotice = shouldShowCodexQuotaIssueNotice(
+        account.quota_error,
+      );
       const accountIssueMeta = reauthErrorMeta.rawMessage
         ? reauthErrorMeta
-        : quotaErrorMeta;
+        : shouldShowQuotaIssueNotice
+          ? quotaErrorMeta
+          : {
+              statusCode: "",
+              errorCode: "",
+              displayText: "",
+              rawMessage: "",
+              isRefreshRequestFailure: false,
+              isQuotaLimitError: false,
+            };
       const hasQuotaError = Boolean(accountIssueMeta.rawMessage);
       const isQuotaRefreshNotice =
         !reauthErrorMeta.rawMessage &&
-        quotaErrorMeta.isRefreshRequestFailure &&
-        !quotaErrorMeta.statusCode &&
-        !quotaErrorMeta.errorCode;
+        accountIssueMeta.isRefreshRequestFailure &&
+        !accountIssueMeta.statusCode &&
+        !accountIssueMeta.errorCode;
       const isQuotaLimitNotice =
-        !reauthErrorMeta.rawMessage && quotaErrorMeta.isQuotaLimitError;
+        !reauthErrorMeta.rawMessage && accountIssueMeta.isQuotaLimitError;
       const accountIssueClass = isQuotaRefreshNotice
         ? "quota-refresh"
         : isQuotaLimitNotice
@@ -7413,17 +7426,29 @@ export function CodexAccountsPage() {
           : undefined,
       );
       const quotaErrorMeta = resolveQuotaErrorMeta(account.quota_error);
+      const shouldShowQuotaIssueNotice = shouldShowCodexQuotaIssueNotice(
+        account.quota_error,
+      );
       const accountIssueMeta = reauthErrorMeta.rawMessage
         ? reauthErrorMeta
-        : quotaErrorMeta;
+        : shouldShowQuotaIssueNotice
+          ? quotaErrorMeta
+          : {
+              statusCode: "",
+              errorCode: "",
+              displayText: "",
+              rawMessage: "",
+              isRefreshRequestFailure: false,
+              isQuotaLimitError: false,
+            };
       const hasQuotaError = Boolean(accountIssueMeta.rawMessage);
       const isQuotaRefreshNotice =
         !reauthErrorMeta.rawMessage &&
-        quotaErrorMeta.isRefreshRequestFailure &&
-        !quotaErrorMeta.statusCode &&
-        !quotaErrorMeta.errorCode;
+        accountIssueMeta.isRefreshRequestFailure &&
+        !accountIssueMeta.statusCode &&
+        !accountIssueMeta.errorCode;
       const isQuotaLimitNotice =
-        !reauthErrorMeta.rawMessage && quotaErrorMeta.isQuotaLimitError;
+        !reauthErrorMeta.rawMessage && accountIssueMeta.isQuotaLimitError;
       const accountIssueClass = isQuotaRefreshNotice
         ? "quota-refresh"
         : isQuotaLimitNotice

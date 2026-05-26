@@ -25,6 +25,7 @@ static CODEX_TOKEN_REFRESH_LOCKS: std::sync::LazyLock<
     Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 > = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 static CODEX_AUTO_SWITCH_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+static CODEX_STARTUP_QUOTA_SCAN_SCHEDULED: AtomicBool = AtomicBool::new(false);
 
 #[cfg(test)]
 thread_local! {
@@ -71,6 +72,9 @@ const CODEX_AUTO_SWITCH_ACCOUNT_SCOPE_SELECTED: &str = "selected_accounts";
 const DISK_FULL_ERROR_CODE: &str = "DISK_FULL";
 const CODEX_TOKEN_SOURCE_MANAGED: &str = "managed";
 const CODEX_LOCAL_ACCESS_HEALTH_FILE: &str = "codex_local_access_health.json";
+const CODEX_STARTUP_QUOTA_SCAN_STATE_FILE: &str = "codex_startup_quota_scan.json";
+const CODEX_STARTUP_QUOTA_SCAN_DELAY_SECONDS: u64 = 5;
+const CODEX_STARTUP_QUOTA_SCAN_MIN_INTERVAL_MS: i64 = 10 * 60 * 1000;
 const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
 const CODEX_PROACTIVE_REFRESH_INTERVAL_SECONDS: i64 = 8 * 24 * 60 * 60;
 const CODEX_AUTH_PROJECTION_FILE_NAME: &str = ".cockpit_codex_auth.json";
@@ -2022,7 +2026,7 @@ fn normalize_account_for_runtime(account: &mut CodexAccount) -> bool {
 }
 
 fn local_access_health_registry_path() -> Result<PathBuf, String> {
-    Ok(account::get_data_dir()?.join(CODEX_LOCAL_ACCESS_HEALTH_FILE))
+    Ok(get_codex_accounts_data_dir().join(CODEX_LOCAL_ACCESS_HEALTH_FILE))
 }
 
 fn load_local_access_health_registry() -> Option<CodexLocalAccessHealthRegistry> {
@@ -2151,9 +2155,9 @@ fn repair_account_quota_from_local_access_health(
     true
 }
 
-fn repair_accounts_quota_from_local_access_health(accounts: &mut [CodexAccount]) {
+fn repair_accounts_quota_from_local_access_health(accounts: &mut [CodexAccount]) -> usize {
     let Some(registry) = load_local_access_health_registry() else {
-        return;
+        return 0;
     };
     let now_seconds = chrono::Utc::now().timestamp();
     let mut repaired = 0usize;
@@ -2172,6 +2176,160 @@ fn repair_accounts_quota_from_local_access_health(accounts: &mut [CodexAccount])
         logger::log_warn(&format!(
             "[Codex Account][QuotaRepair] 已根据 local access health registry 修复历史 quota 缓存: repaired_accounts={}",
             repaired
+        ));
+    }
+    repaired
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct CodexStartupQuotaConsistencyScanReport {
+    #[serde(default)]
+    pub started_at_ms: i64,
+    #[serde(default)]
+    pub finished_at_ms: i64,
+    #[serde(default)]
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub scanned_accounts: usize,
+    #[serde(default)]
+    pub repaired_accounts: usize,
+    #[serde(default)]
+    pub skipped_recent: bool,
+}
+
+fn startup_quota_scan_state_path() -> PathBuf {
+    get_codex_accounts_data_dir().join(CODEX_STARTUP_QUOTA_SCAN_STATE_FILE)
+}
+
+fn load_startup_quota_scan_state() -> Option<CodexStartupQuotaConsistencyScanReport> {
+    let path = startup_quota_scan_state_path();
+    if !path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(path).ok()?;
+    serde_json::from_str::<CodexStartupQuotaConsistencyScanReport>(&content).ok()
+}
+
+fn save_startup_quota_scan_state(
+    report: &CodexStartupQuotaConsistencyScanReport,
+) -> Result<(), String> {
+    let path = startup_quota_scan_state_path();
+    let content = serde_json::to_string_pretty(report)
+        .map_err(|error| format!("序列化启动 quota 扫描状态失败: {}", error))?;
+    write_string_atomic(&path, &content)
+        .map_err(|error| format!("写入启动 quota 扫描状态失败: {}", error))
+}
+
+fn startup_quota_scan_recent(now_ms: i64) -> bool {
+    let Some(previous) = load_startup_quota_scan_state() else {
+        return false;
+    };
+    let finished_at_ms = previous.finished_at_ms;
+    if finished_at_ms <= 0 {
+        return false;
+    }
+    let age_ms = now_ms.saturating_sub(finished_at_ms);
+    age_ms >= 0 && age_ms < CODEX_STARTUP_QUOTA_SCAN_MIN_INTERVAL_MS
+}
+
+fn load_accounts_for_startup_quota_scan() -> (Vec<CodexAccount>, usize) {
+    let index = load_account_index();
+    let mut failed = 0usize;
+    let accounts = index
+        .accounts
+        .iter()
+        .filter_map(
+            |summary| match load_account_with_summary(&summary.id, Some(summary)) {
+                Ok(account) => account,
+                Err(error) => {
+                    failed += 1;
+                    logger::log_warn(&format!(
+                        "[Codex Account][QuotaStartupScan] 跳过无法读取的账号详情: account_id={}, error={}",
+                        summary.id, error
+                    ));
+                    None
+                }
+            },
+        )
+        .collect();
+    (accounts, failed)
+}
+
+fn run_startup_quota_consistency_scan_inner(
+    force: bool,
+) -> Result<CodexStartupQuotaConsistencyScanReport, String> {
+    let started_at_ms = chrono::Utc::now().timestamp_millis();
+    let started = std::time::Instant::now();
+    if !force && startup_quota_scan_recent(started_at_ms) {
+        return Ok(CodexStartupQuotaConsistencyScanReport {
+            started_at_ms,
+            finished_at_ms: chrono::Utc::now().timestamp_millis(),
+            duration_ms: started.elapsed().as_millis() as u64,
+            skipped_recent: true,
+            ..Default::default()
+        });
+    }
+
+    let (mut accounts, failed_accounts) = load_accounts_for_startup_quota_scan();
+    let scanned_accounts = accounts.len();
+    let repaired_accounts = repair_accounts_quota_from_local_access_health(&mut accounts);
+    let report = CodexStartupQuotaConsistencyScanReport {
+        started_at_ms,
+        finished_at_ms: chrono::Utc::now().timestamp_millis(),
+        duration_ms: started.elapsed().as_millis() as u64,
+        scanned_accounts,
+        repaired_accounts,
+        skipped_recent: false,
+    };
+
+    if let Err(error) = save_startup_quota_scan_state(&report) {
+        logger::log_warn(&format!(
+            "[Codex Account][QuotaStartupScan] 保存扫描状态失败: {}",
+            error
+        ));
+    }
+    logger::log_info(&format!(
+        "[Codex Account][QuotaStartupScan] 本机 quota 一致性扫描完成: scanned_accounts={}, repaired_accounts={}, failed_accounts={}, duration_ms={}",
+        report.scanned_accounts, report.repaired_accounts, failed_accounts, report.duration_ms
+    ));
+    Ok(report)
+}
+
+#[cfg(test)]
+fn run_startup_quota_consistency_scan_for_tests(
+    force: bool,
+) -> Result<CodexStartupQuotaConsistencyScanReport, String> {
+    run_startup_quota_consistency_scan_inner(force)
+}
+
+pub fn schedule_startup_quota_consistency_scan() {
+    if CODEX_STARTUP_QUOTA_SCAN_SCHEDULED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let spawn_result = std::thread::Builder::new()
+        .name("codex-quota-startup-scan".to_string())
+        .spawn(|| {
+            std::thread::sleep(std::time::Duration::from_secs(
+                CODEX_STARTUP_QUOTA_SCAN_DELAY_SECONDS,
+            ));
+            match run_startup_quota_consistency_scan_inner(false) {
+                Ok(report) if report.skipped_recent => {
+                    logger::log_info(
+                        "[Codex Account][QuotaStartupScan] 距离上次扫描不足 10 分钟，已跳过",
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => logger::log_warn(&format!(
+                    "[Codex Account][QuotaStartupScan] 后台扫描失败: {}",
+                    error
+                )),
+            }
+        });
+    if let Err(error) = spawn_result {
+        CODEX_STARTUP_QUOTA_SCAN_SCHEDULED.store(false, Ordering::SeqCst);
+        logger::log_warn(&format!(
+            "[Codex Account][QuotaStartupScan] 启动后台扫描线程失败: {}",
+            error
         ));
     }
 }
@@ -4305,8 +4463,8 @@ mod tests {
         load_account_index, parse_auth_file_last_refresh, parse_codex_account_compat,
         parse_line_delimited_json_values, read_api_provider_from_config_toml,
         read_quick_config_from_config_toml, repair_account_quota_from_local_access_health,
-        resolve_api_provider_config, save_account, save_account_index,
-        should_accept_authority_snapshot, sync_account_from_auth_dir,
+        resolve_api_provider_config, run_startup_quota_consistency_scan_for_tests, save_account,
+        save_account_index, should_accept_authority_snapshot, sync_account_from_auth_dir,
         sync_managed_projection_from_auth_dir, validate_api_key_credentials,
         write_api_key_provider_to_config_toml, write_api_provider_to_config_toml,
         write_managed_projection_to_dir, write_quick_config_to_config_toml, ApiProviderConfig,
@@ -4428,6 +4586,261 @@ mod tests {
                 .as_ref()
                 .map(|quota| (quota.hourly_percentage, quota.hourly_reset_time)),
             original_remaining
+        );
+    }
+
+    #[test]
+    fn startup_quota_consistency_scan_repairs_stale_positive_from_health_registry() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-startup-quota-scan-repair-test");
+        let now = chrono::Utc::now().timestamp();
+        let reset_at = now + 86_400;
+        let account = test_codex_account_with_quota(
+            "codex_startup_stale_97",
+            stale_weekly_in_hourly_quota(reset_at),
+        );
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("plus".to_string()),
+            subscription_active_until: None,
+            created_at: now,
+            last_used: now,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+
+        let mut registry = CodexLocalAccessHealthRegistry::default();
+        registry.accounts.insert(
+            account.id.clone(),
+            CodexLocalAccessAccountHealth {
+                last_error_type: Some("usage_limit_reached".to_string()),
+                estimated_reset_at_ms: Some(reset_at * 1000),
+                updated_at: (now - 60) * 1000,
+                ..Default::default()
+            },
+        );
+        fs::write(
+            guard
+                .home_dir
+                .join(".antigravity_cockpit")
+                .join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
+            serde_json::to_string_pretty(&registry).expect("registry should serialize"),
+        )
+        .expect("health registry should be saved");
+
+        let report = run_startup_quota_consistency_scan_for_tests(true)
+            .expect("startup quota scan should succeed");
+
+        assert_eq!(report.scanned_accounts, 1);
+        assert_eq!(report.repaired_accounts, 1);
+        assert!(!report.skipped_recent);
+        let repaired = load_account(&account.id).expect("repaired account should load");
+        let quota = repaired.quota.expect("repaired account should have quota");
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at));
+        assert_eq!(quota.hourly_window_present, Some(false));
+    }
+
+    #[test]
+    fn startup_quota_consistency_scan_skips_recent_success_marker() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _guard = TestEnvGuard::new("codex-startup-quota-scan-throttle-test");
+        let first = run_startup_quota_consistency_scan_for_tests(true)
+            .expect("first forced startup quota scan should succeed");
+        assert!(!first.skipped_recent);
+
+        let second = run_startup_quota_consistency_scan_for_tests(false)
+            .expect("second startup quota scan should use recent marker");
+        assert!(second.skipped_recent);
+        assert_eq!(second.scanned_accounts, 0);
+        assert_eq!(second.repaired_accounts, 0);
+    }
+
+    #[test]
+    fn startup_quota_consistency_scan_does_not_run_direct_session_quota_repair() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-startup-skip-direct-session-scan-test");
+        let local_access_root = guard.home_dir.join(".antigravity_cockpit");
+        let previous_local_access_root = std::env::var_os("COCKPIT_LOCAL_ACCESS_DATA_ROOT");
+        std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", &local_access_root);
+
+        let mut account = test_codex_account_with_quota(
+            "codex_startup_direct_scan",
+            CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 100,
+                weekly_reset_time: None,
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            },
+        );
+        account.last_used = 1;
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("plus".to_string()),
+            subscription_active_until: None,
+            created_at: 1,
+            last_used: 1,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+
+        fs::write(
+            local_access_root.join("codex_runtime_mode.json"),
+            serde_json::json!({
+                "mode": "direct_projection",
+                "accountKind": "oauth",
+                "currentAccountId": account.id,
+                "updatedAt": 0
+            })
+            .to_string(),
+        )
+        .expect("runtime mode should be written");
+        let sessions_dir = guard
+            .codex_home()
+            .join("sessions")
+            .join("2026")
+            .join("05")
+            .join("25");
+        fs::create_dir_all(&sessions_dir).expect("sessions dir should be created");
+        fs::write(
+            sessions_dir.join("session.jsonl"),
+            serde_json::json!({
+                "timestamp": "2030-05-25T11:42:31Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "error",
+                    "status": 429,
+                    "error": {
+                        "type": "usage_limit_reached",
+                        "reset_after_seconds": 120
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("direct session event should be written");
+
+        let report = run_startup_quota_consistency_scan_for_tests(true)
+            .expect("startup quota scan should succeed");
+        match previous_local_access_root {
+            Some(value) => std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", value),
+            None => std::env::remove_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT"),
+        }
+
+        assert_eq!(report.scanned_accounts, 1);
+        assert_eq!(report.repaired_accounts, 0);
+        let listed = load_account("codex_startup_direct_scan").expect("account should load");
+        assert!(
+            listed.quota_error.is_none(),
+            "startup scan must stay local-only and not inspect direct session logs"
+        );
+        assert_eq!(
+            listed.quota.as_ref().map(|quota| quota.weekly_percentage),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn list_accounts_checked_does_not_run_direct_session_quota_repair() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-list-skip-direct-session-scan-test");
+        let local_access_root = guard.home_dir.join(".antigravity_cockpit");
+        let previous_local_access_root = std::env::var_os("COCKPIT_LOCAL_ACCESS_DATA_ROOT");
+        std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", &local_access_root);
+
+        let mut account = test_codex_account_with_quota(
+            "codex_list_direct_scan",
+            CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 100,
+                weekly_reset_time: None,
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            },
+        );
+        account.last_used = 1;
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("plus".to_string()),
+            subscription_active_until: None,
+            created_at: 1,
+            last_used: 1,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+
+        fs::write(
+            local_access_root.join("codex_runtime_mode.json"),
+            serde_json::json!({
+                "mode": "direct_projection",
+                "accountKind": "oauth",
+                "currentAccountId": account.id,
+                "updatedAt": 0
+            })
+            .to_string(),
+        )
+        .expect("runtime mode should be written");
+        let sessions_dir = guard
+            .codex_home()
+            .join("sessions")
+            .join("2026")
+            .join("05")
+            .join("25");
+        fs::create_dir_all(&sessions_dir).expect("sessions dir should be created");
+        fs::write(
+            sessions_dir.join("session.jsonl"),
+            serde_json::json!({
+                "timestamp": "2030-05-25T11:42:31Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "error",
+                    "status": 429,
+                    "error": {
+                        "type": "usage_limit_reached",
+                        "reset_after_seconds": 120
+                    }
+                }
+            })
+            .to_string(),
+        )
+        .expect("direct session event should be written");
+
+        let accounts = list_accounts_checked().expect("accounts should list");
+        let listed = accounts
+            .iter()
+            .find(|item| item.id == "codex_list_direct_scan")
+            .expect("account should be listed")
+            .clone();
+        match previous_local_access_root {
+            Some(value) => std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", value),
+            None => std::env::remove_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT"),
+        }
+
+        assert!(
+            listed.quota_error.is_none(),
+            "account list must not synchronously repair quota from direct session logs"
+        );
+        assert_eq!(
+            listed.quota.as_ref().map(|quota| quota.weekly_percentage),
+            Some(100)
         );
     }
 

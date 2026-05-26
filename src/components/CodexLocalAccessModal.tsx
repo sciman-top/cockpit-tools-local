@@ -47,6 +47,7 @@ import {
   isCodexAccountErrorState,
   isCodexExplicitFreePlanType,
   isCodexApiKeyAccount,
+  shouldShowCodexQuotaIssueNotice,
 } from '../types/codex';
 import {
   buildCodexAccountPresentation,
@@ -960,6 +961,9 @@ export function CodexLocalAccessModal({
 
     const issueInfo = getCodexQuotaIssueInfo(account.quota_error);
     if (issueInfo.kind === 'none') {
+      return null;
+    }
+    if (!shouldShowCodexQuotaIssueNotice(account.quota_error)) {
       return null;
     }
 

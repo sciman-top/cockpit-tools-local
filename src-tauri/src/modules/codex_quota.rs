@@ -5,6 +5,7 @@ use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 // 使用 wham/usage 端点（Quotio 使用的）
@@ -16,6 +17,7 @@ const LEGACY_NEW_API_EXCLUSIVE_PLAN_TYPE: &str = "NEW_API_EXCLUSIVE";
 const COCKPIT_API_BASE_URL: &str = "https://chongcodex.cn/v1";
 const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
 const DIRECT_SESSION_SCAN_MAX_FILES: usize = 32;
+const DIRECT_SESSION_SCAN_MAX_BYTES_PER_FILE: u64 = 256 * 1024;
 
 fn get_header_value(headers: &HeaderMap, name: &str) -> String {
     headers
@@ -841,16 +843,24 @@ fn parse_direct_quota_observation_from_session_line(line: &str) -> Option<Direct
 
     let root: serde_json::Value = serde_json::from_str(line).ok()?;
     let observed_at = parse_session_timestamp_seconds(&root)?;
-    if let Some(rate_limits) = root
-        .get("payload")
-        .and_then(|payload| payload.get("rate_limits"))
-    {
+    if root.get("type").and_then(|item| item.as_str()) != Some("event_msg") {
+        return None;
+    }
+
+    let payload = root.get("payload")?;
+    let payload_type = payload.get("type").and_then(|item| item.as_str());
+    if payload_type == Some("token_count") {
+        let rate_limits = payload.get("rate_limits")?;
         if let Some(observation) = parse_direct_rate_limits_observation(rate_limits, observed_at) {
             return Some(observation);
         }
     }
 
-    parse_direct_error_observation(&root, observed_at)
+    if payload_type == Some("error") {
+        return parse_direct_error_observation(payload, observed_at);
+    }
+
+    None
 }
 
 fn collect_session_jsonl_files(root: &Path) -> Vec<PathBuf> {
@@ -882,13 +892,31 @@ fn collect_session_jsonl_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
+fn read_recent_session_text(path: &Path) -> Option<String> {
+    let mut file = fs::File::open(path).ok()?;
+    let size = file.metadata().ok()?.len();
+    let start = size.saturating_sub(DIRECT_SESSION_SCAN_MAX_BYTES_PER_FILE);
+    if start > 0 {
+        file.seek(SeekFrom::Start(start)).ok()?;
+    }
+
+    let mut content = String::new();
+    file.read_to_string(&mut content).ok()?;
+    if start == 0 {
+        return Some(content);
+    }
+
+    let newline = content.find('\n')?;
+    Some(content[newline + 1..].to_string())
+}
+
 fn latest_direct_quota_observation_from_sessions(
     codex_home: &Path,
     since_seconds: i64,
 ) -> Option<DirectQuotaObservation> {
     let mut best: Option<DirectQuotaObservation> = None;
     for path in collect_session_jsonl_files(codex_home) {
-        let Ok(content) = fs::read_to_string(&path) else {
+        let Some(content) = read_recent_session_text(&path) else {
             continue;
         };
         for line in content.lines().rev() {
@@ -1036,7 +1064,7 @@ fn should_apply_direct_quota_observation(
     observed_remaining < current_remaining
 }
 
-fn apply_latest_direct_oauth_observation_if_current(
+pub(crate) fn apply_latest_direct_oauth_observation_if_current(
     account: &mut CodexAccount,
 ) -> Result<bool, String> {
     let Ok(runtime_mode) = crate::modules::codex_local_access::load_runtime_mode_state() else {
@@ -1058,6 +1086,9 @@ fn apply_latest_direct_oauth_observation_if_current(
     ) else {
         return Ok(false);
     };
+    if !observation.exhausted {
+        return Ok(false);
+    }
 
     if should_keep_existing_quota_exhaustion(account, observation.observed_at)
         && account
@@ -1688,6 +1719,46 @@ mod tests {
     }
 
     #[test]
+    fn direct_session_parser_ignores_non_token_count_rate_limit_payloads() {
+        let line = serde_json::json!({
+            "timestamp": "2026-05-25T11:42:31Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "function_call_output",
+                "rate_limits": {
+                    "primary": {
+                        "used_percent": 100,
+                        "window_minutes": 10080,
+                        "resets_at": 1780314131
+                    },
+                    "rate_limit_reached_type": "usage_limit_reached"
+                }
+            }
+        })
+        .to_string();
+
+        assert!(parse_direct_quota_observation_from_session_line(&line).is_none());
+    }
+
+    #[test]
+    fn direct_session_parser_ignores_non_error_usage_limit_payloads() {
+        let line = serde_json::json!({
+            "timestamp": "2026-05-25T11:42:31Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "function_call_output",
+                "error": {
+                    "type": "usage_limit_reached",
+                    "reset_after_seconds": 120
+                }
+            }
+        })
+        .to_string();
+
+        assert!(parse_direct_quota_observation_from_session_line(&line).is_none());
+    }
+
+    #[test]
     fn direct_session_rate_limit_event_builds_quota_observation() {
         let line = serde_json::json!({
             "timestamp": "2026-05-25T11:42:31.809Z",
@@ -1898,6 +1969,45 @@ mod tests {
     }
 
     #[test]
+    fn direct_session_scan_ignores_large_file_prefix_outside_tail_window() {
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-direct-session-tail-window-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let sessions_dir = root.join("sessions").join("2026").join("05").join("26");
+        fs::create_dir_all(&sessions_dir).expect("sessions dir should be created");
+        let session_path = sessions_dir.join("rollover.jsonl");
+        let stale_prefix_observation = serde_json::json!({
+            "timestamp": "2026-05-25T11:42:31Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "error",
+                "status": 429,
+                "error": {
+                    "type": "usage_limit_reached",
+                    "reset_after_seconds": 120
+                }
+            }
+        })
+        .to_string();
+        let filler = " ".repeat((256 * 1024) + 128);
+        fs::write(
+            &session_path,
+            format!("{}\n{}", stale_prefix_observation, filler),
+        )
+        .expect("large session fixture should be written");
+
+        let observation = latest_direct_quota_observation_from_sessions(&root, 0);
+
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            observation.is_none(),
+            "startup repair must not scan large session file prefixes"
+        );
+    }
+
+    #[test]
     fn direct_session_error_event_parses_reset_hint() {
         let line = serde_json::json!({
             "timestamp": "2026-05-25T11:42:31Z",
@@ -1921,6 +2031,62 @@ mod tests {
         assert_eq!(observation.reset_at, Some(observation.observed_at + 120));
         assert_eq!(
             observation.error_type.as_deref(),
+            Some("usage_limit_reached")
+        );
+    }
+
+    #[test]
+    fn direct_session_error_observation_applies_zero_quota_snapshot_with_reset() {
+        let line = serde_json::json!({
+            "timestamp": "2026-05-25T11:42:31Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "error",
+                "status": 429,
+                "error": {
+                    "type": "usage_limit_reached",
+                    "message": "The usage limit has been reached",
+                    "reset_after_seconds": 120
+                }
+            }
+        })
+        .to_string();
+        let observation =
+            parse_direct_quota_observation_from_session_line(&line).expect("observation");
+        let mut account = test_account();
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 64,
+            hourly_reset_time: Some(111),
+            hourly_window_minutes: Some(300),
+            hourly_window_present: Some(true),
+            weekly_percentage: 27,
+            weekly_reset_time: Some(222),
+            weekly_window_minutes: Some(10080),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+
+        apply_direct_quota_observation(&mut account, &observation);
+
+        let quota = account.quota.as_ref().expect("quota snapshot");
+        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.hourly_reset_time, observation.reset_at);
+        assert_eq!(quota.weekly_reset_time, observation.reset_at);
+        assert_eq!(
+            quota
+                .raw_data
+                .as_ref()
+                .and_then(|value| value.get("reset_after_seconds"))
+                .and_then(|value| value.as_i64()),
+            Some(120)
+        );
+        assert_eq!(account.usage_updated_at, Some(observation.observed_at));
+        assert_eq!(
+            account
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
             Some("usage_limit_reached")
         );
     }

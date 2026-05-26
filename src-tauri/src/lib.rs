@@ -218,6 +218,7 @@ pub fn run() {
             tauri::async_runtime::spawn(async {
                 modules::codex_local_access::restore_local_access_gateway().await;
             });
+            modules::codex_account::schedule_startup_quota_consistency_scan();
 
             {
                 let app_handle = app.handle().clone();

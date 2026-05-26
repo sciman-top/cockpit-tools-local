@@ -17,6 +17,7 @@ await esbuild.build({
     floatingCardSelectors: path.join(root, 'src/utils/floatingCardSelectors.ts'),
     codexAccountSort: path.join(root, 'src/utils/codexAccountSort.ts'),
     codexLocalAccessUiState: path.join(root, 'src/utils/codexLocalAccessUiState.ts'),
+    codexLocalAccessHealth: path.join(root, 'src/utils/codexLocalAccessHealth.ts'),
     codexTypes: path.join(root, 'src/types/codex.ts'),
   },
   outdir,
@@ -32,6 +33,7 @@ const accountOrder = await import(pathToFileURL(path.join(outdir, 'accountOrder.
 const selectors = await import(pathToFileURL(path.join(outdir, 'floatingCardSelectors.mjs')).href);
 const sort = await import(pathToFileURL(path.join(outdir, 'codexAccountSort.mjs')).href);
 const localAccessUiState = await import(pathToFileURL(path.join(outdir, 'codexLocalAccessUiState.mjs')).href);
+const localAccessHealth = await import(pathToFileURL(path.join(outdir, 'codexLocalAccessHealth.mjs')).href);
 const codexTypes = await import(pathToFileURL(path.join(outdir, 'codexTypes.mjs')).href);
 
 function codexAccount(id, quota, extra = {}) {
@@ -327,6 +329,31 @@ assert.deepEqual(
     displayCode: 'usage_limit_reached',
   },
   'Codex quota issue presentation should keep usage_limit_reached out of the red error path',
+);
+
+assert.equal(
+  codexTypes.shouldShowCodexQuotaIssueNotice(quotaLimitedError),
+  false,
+  'Codex quota-limit snapshots should not render an account-card issue badge or notice',
+);
+
+assert.equal(
+  codexTypes.shouldShowCodexQuotaIssueNotice({
+    message: 'error sending request for url https://chatgpt.com/backend-api/wham/usage',
+    timestamp: 1,
+  }),
+  true,
+  'Codex quota refresh transport failures should still render a retry/manual-refresh notice',
+);
+
+assert.equal(
+  localAccessHealth.isCodexLocalAccessQuotaHealthIssue({
+    status: 'healthy',
+    lastStatus: 429,
+    lastErrorType: 'usage_limit_reached',
+  }),
+  false,
+  'Healthy model-scoped local access quota signals should not render an account quota issue badge',
 );
 
 assert.equal(
