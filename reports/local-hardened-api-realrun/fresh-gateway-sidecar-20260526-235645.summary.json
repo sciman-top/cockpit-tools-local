@@ -1,0 +1,85 @@
+{
+  "runId": "20260526-235645",
+  "probeRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-realrun-fresh-20260526-235645",
+  "smokeExitCode": 0,
+  "monitorExitCode": 1,
+  "monitorExitCodeFile": "1",
+  "smokeOverall": "fail",
+  "monitorOverall": "fail",
+  "smokeReportPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-smoke\\smoke-20260527-000744.json",
+  "monitorReportPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-live-monitor\\live-monitor-20260527-000403.json",
+  "monitorCheckpointPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-realrun-fresh-20260526-235645\\monitor.checkpoint.json",
+  "auditPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-realrun-fresh-20260526-235645\\codex_local_access_audit.jsonl",
+  "smokeStdout": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-realrun-fresh-20260526-235645\\smoke.stdout.json",
+  "smokeStderr": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-realrun-fresh-20260526-235645\\smoke.stderr.log",
+  "monitorStdout": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-realrun-fresh-20260526-235645\\monitor.stdout.json",
+  "monitorStderr": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-realrun-fresh-20260526-235645\\monitor.stderr.log",
+  "smokeStderrContainsStaleBuildGuard": false,
+  "structuredBehaviorTraceStatus": "pass",
+  "streamContinuityStatus": "pass",
+  "cliConfigUntouchedStatus": "fail",
+  "codexAppStableStatus": "pass",
+  "audit": {
+    "eventCount": 62,
+    "requestTraceCount": 4,
+    "quotaClassificationCount": 0,
+    "routingDecisionCount": 3,
+    "streamTerminalCount": 2,
+    "streamTerminalResponseCompletedCount": 2,
+    "completedStreamCount": 3,
+    "startedStreamCount": 3,
+    "clientAbortedStreamCount": 0
+  },
+  "smokeResultStatuses": [
+    {
+      "name": "config_fallback_probe_contract",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "name": "loopback_models_endpoint",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "name": "invalid_key_auth_guard",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "name": "single_account_upstream_chat",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "name": "quota_drain_until_hard_affinity_block",
+      "status": "skipped",
+      "reason": "未传入 -AutoDrainFirstFreeAccountUntilFallback；不主动消耗第一个 free 账号"
+    },
+    {
+      "name": "codex_exec_task_e2e",
+      "status": "pass",
+      "reason": null
+    },
+    {
+      "name": "same_task_affinity_fallback_blocked",
+      "status": "skipped",
+      "reason": "未传入 -RequireQuotaFallback；不强制要求本次 run 出现同任务 hard-affinity 429 闭合"
+    },
+    {
+      "name": "new_request_avoids_exhausted_account",
+      "status": "skipped",
+      "reason": "未传入 -RequireQuotaFallback；不强制要求观察后续新请求避开 exhausted/cooldown 账号"
+    },
+    {
+      "name": "codex_cli_config_auth_untouched",
+      "status": "fail",
+      "reason": "当前 Codex CLI 的 config.toml/auth.json 在 probe 期间发生变化"
+    },
+    {
+      "name": "codex_app_process_stable",
+      "status": "pass",
+      "reason": null
+    }
+  ]
+}

@@ -72,6 +72,7 @@ interface CodexAccountState {
   
   // Actions
   fetchAccounts: (options?: { silent?: boolean }) => Promise<void>;
+  syncLocalQuotaObservations: () => Promise<number>;
   fetchCurrentAccount: () => Promise<void>;
   switchAccount: (accountId: string) => Promise<CodexAccount>;
   deleteAccount: (accountId: string) => Promise<void>;
@@ -125,6 +126,15 @@ export const useCodexAccountStore = create<CodexAccountState>((set, get) => ({
     } catch (e) {
       set(options?.silent ? { error: String(e) } : { error: String(e), loading: false });
     }
+  },
+
+  syncLocalQuotaObservations: async () => {
+    const repairedCount = await codexService.syncCodexLocalQuotaObservations();
+    if (repairedCount > 0) {
+      await get().fetchAccounts({ silent: true });
+      await get().fetchCurrentAccount();
+    }
+    return repairedCount;
   },
   
   fetchCurrentAccount: async () => {

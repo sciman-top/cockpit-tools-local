@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-26T23:17:04.4534070+08:00",
+  "sourceReport": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\affinity-live-20260526-231529.json",
+  "auditPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-affinity-live-20260526-231529\\codex_local_access_audit.jsonl",
+  "overall": "pass_with_actual_second_account_429",
+  "notes": [
+    "真实 quota drain 未耗尽第一个账号；本探针改用 seeded cooldown 模拟第一个账号已耗尽后的健康注册表状态。",
+    "后续新请求确实避开 seeded cooldown 账号，并命中下一个账号；该下一个账号真实返回 usage_limit_reached 429。",
+    "同一 x-codex-turn-state continuation 仍回到原账号并获得 response.completed。"
+  ],
+  "hashes": {
+    "originalTurnAccount": "sha256:4088fbd68f24",
+    "newRequestAttemptedAccount": "sha256:7da0b917f263",
+    "sameTurnContinuationAccount": "sha256:4088fbd68f24"
+  },
+  "assertions": {
+    "newRequestAvoidedOriginalCooldownAccount": true,
+    "newRequestObservedActualUsageLimit429": true,
+    "sameTurnKeptOriginalAccount": true,
+    "sameTurnSelectedByRequestAffinity": true,
+    "sameTurnStreamCompleted": true,
+    "rawTurnStateNotPersisted": true
+  },
+  "keyEvents": {
+    "firstSelected": {
+      "phase": "selector",
+      "outcome": "selected",
+      "status": 200,
+      "accountHash": "sha256:4088fbd68f24",
+      "selectedReason": "fill_first_selected",
+      "requestId": "x-codex-turn-state:sha256:5a83f9115fd9"
+    },
+    "newPrepared": {
+      "phase": "auth_projection",
+      "outcome": "prepared",
+      "accountHash": "sha256:7da0b917f263",
+      "requestId": "cockpit-new-20260526-231529"
+    },
+    "new429": {
+      "phase": "account_quota_snapshot",
+      "status": 429,
+      "errorType": "usage_limit_reached",
+      "outcome": "recorded",
+      "accountHash": "sha256:7da0b917f263",
+      "retryAfterMs": "516219000",
+      "scope": "model"
+    },
+    "newFinal": {
+      "phase": "final_response",
+      "status": 200,
+      "errorType": "pool_unavailable",
+      "outcome": "in_band_local_completion",
+      "accountHash": "sha256:7da0b917f263",
+      "originalStatus": "503"
+    },
+    "sameSelected": {
+      "phase": "selector",
+      "outcome": "selected",
+      "status": 200,
+      "accountHash": "sha256:4088fbd68f24",
+      "selectedReason": "request_affinity_selected",
+      "candidateCount": "1",
+      "requestId": "x-codex-turn-state:sha256:5a83f9115fd9"
+    }
+  }
+}

@@ -533,6 +533,7 @@ pub fn run() {
             commands::group::get_display_groups,
             // Codex Commands
             commands::codex::list_codex_accounts,
+            commands::codex::sync_codex_local_quota_observations,
             commands::codex::get_current_codex_account,
             commands::codex::get_codex_config_toml_path,
             commands::codex::open_codex_config_toml,

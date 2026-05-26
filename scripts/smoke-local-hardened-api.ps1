@@ -1541,10 +1541,57 @@ function Get-EphemeralGatewayExePath {
   Join-Path (Get-Location) "target\debug\codex-local-access-gateway.exe"
 }
 
+function Get-NewestEphemeralGatewaySource {
+  $roots = @(
+    (Join-Path (Get-Location) "src-tauri\src"),
+    (Join-Path (Get-Location) "crates")
+  )
+  $items = @()
+  foreach ($root in $roots) {
+    if (Test-Path -LiteralPath $root) {
+      $items += @(Get-ChildItem -LiteralPath $root -Recurse -File -Include *.rs,*.toml -ErrorAction SilentlyContinue)
+    }
+  }
+  foreach ($path in @(
+      (Join-Path (Get-Location) "src-tauri\Cargo.toml"),
+      (Join-Path (Get-Location) "src-tauri\Cargo.lock"),
+      (Join-Path (Get-Location) "Cargo.toml"),
+      (Join-Path (Get-Location) "Cargo.lock")
+    )) {
+    if (Test-Path -LiteralPath $path) {
+      $items += Get-Item -LiteralPath $path
+    }
+  }
+
+  @($items | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1)
+}
+
+function Test-EphemeralGatewayExeFresh {
+  param([string]$Exe)
+  if (-not (Test-Path -LiteralPath $Exe)) {
+    return $false
+  }
+  $newestSource = Get-NewestEphemeralGatewaySource
+  if (-not $newestSource) {
+    return $true
+  }
+  $exeItem = Get-Item -LiteralPath $Exe
+  $exeItem.LastWriteTimeUtc -ge $newestSource.LastWriteTimeUtc
+}
+
 function Build-EphemeralGateway {
   $exe = Get-EphemeralGatewayExePath
-  if ($SkipEphemeralGatewayBuild -and (Test-Path -LiteralPath $exe)) {
+  if ($SkipEphemeralGatewayBuild -and (Test-EphemeralGatewayExeFresh $exe)) {
     return $exe
+  }
+  if ($SkipEphemeralGatewayBuild -and (Test-Path -LiteralPath $exe)) {
+    $newestSource = Get-NewestEphemeralGatewaySource
+    $sourceInfo = if ($newestSource) {
+      "{0} ({1})" -f $newestSource.FullName, $newestSource.LastWriteTime.ToString("o")
+    } else {
+      "unknown"
+    }
+    Write-Warning ("-SkipEphemeralGatewayBuild ignored because codex-local-access-gateway.exe is older than source; newest_source={0}; exe_time={1}" -f $sourceInfo, (Get-Item -LiteralPath $exe).LastWriteTime.ToString("o"))
   }
 
   $manifest = Join-Path (Get-Location) "src-tauri\Cargo.toml"

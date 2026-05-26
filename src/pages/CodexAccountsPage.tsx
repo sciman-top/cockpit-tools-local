@@ -281,6 +281,7 @@ const DEFAULT_CODEX_API_BASE_URL = COCKPIT_API_BASE_URL;
 const CODEX_LOCAL_ACCESS_FALLBACK_PORT = 54140;
 const CODEX_LOCAL_ACCESS_FALLBACK_BASE_URL = `http://127.0.0.1:${CODEX_LOCAL_ACCESS_FALLBACK_PORT}/v1`;
 const CODEX_LOCAL_ACCESS_FALLBACK_API_KEY_MASK = "agt_codex_••••••••••••";
+const CODEX_DIRECT_QUOTA_VISIBLE_SYNC_INTERVAL_MS = 60_000;
 const CODEX_FILTER_PERSISTENCE_SCOPE = normalizeAccountsOverviewScope("Codex");
 const FILTER_TYPES_FIELD = "filter_types";
 const EXPIRY_FILTER_FIELD = "expiry_filter";
@@ -1579,6 +1580,7 @@ export function CodexAccountsPage() {
     currentAccount,
     fetchAccounts,
     fetchCurrentAccount,
+    syncLocalQuotaObservations,
     switchAccount,
     refreshQuota,
     hydrateAccountProfilesIfNeeded,
@@ -1587,8 +1589,16 @@ export function CodexAccountsPage() {
     updateAccountAppSpeed,
   } = store;
   const lastLocalAccessQuotaAccountRefreshKeyRef = useRef<string | null>(null);
+  const directQuotaObservationSyncRunningRef = useRef(false);
+  const directQuotaObservationSyncLastRunRef = useRef(0);
   const localAccessQuotaAccountRefreshKey =
     getCodexLocalAccessQuotaAccountRefreshKey(localAccessState?.health);
+  const hasDirectOAuthAccount = useMemo(
+    () =>
+      accounts.some((account) => !isCodexApiKeyAccount(account)) ||
+      Boolean(currentAccount && !isCodexApiKeyAccount(currentAccount)),
+    [accounts, currentAccount],
+  );
 
   useEffect(() => {
     if (!localAccessQuotaAccountRefreshKey) {
@@ -1612,6 +1622,59 @@ export function CodexAccountsPage() {
     fetchCurrentAccount,
     localAccessQuotaAccountRefreshKey,
   ]);
+
+  useEffect(() => {
+    if (!hasDirectOAuthAccount) {
+      return;
+    }
+    let disposed = false;
+
+    const runIfDue = async () => {
+      if (
+        disposed ||
+        directQuotaObservationSyncRunningRef.current ||
+        document.visibilityState !== "visible"
+      ) {
+        return;
+      }
+      const now = Date.now();
+      if (
+        now - directQuotaObservationSyncLastRunRef.current <
+        CODEX_DIRECT_QUOTA_VISIBLE_SYNC_INTERVAL_MS
+      ) {
+        return;
+      }
+
+      directQuotaObservationSyncLastRunRef.current = now;
+      directQuotaObservationSyncRunningRef.current = true;
+      try {
+        await syncLocalQuotaObservations();
+      } catch (error) {
+        console.warn("[CodexAccountsPage] Direct OAuth quota 增量同步失败:", error);
+      } finally {
+        directQuotaObservationSyncRunningRef.current = false;
+      }
+    };
+
+    const intervalId = window.setInterval(
+      () => void runIfDue(),
+      CODEX_DIRECT_QUOTA_VISIBLE_SYNC_INTERVAL_MS,
+    );
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        void runIfDue();
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    void runIfDue();
+
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [hasDirectOAuthAccount, syncLocalQuotaObservations]);
 
   const editingAccountNoteAccount = useMemo(
     () =>

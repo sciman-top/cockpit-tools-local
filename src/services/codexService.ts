@@ -18,6 +18,11 @@ export async function listCodexAccounts(): Promise<CodexAccount[]> {
   return await invoke('list_codex_accounts');
 }
 
+/** 本地同步 Codex quota 观察结果，不触发上游请求 */
+export async function syncCodexLocalQuotaObservations(): Promise<number> {
+  return await invoke('sync_codex_local_quota_observations');
+}
+
 /** 获取当前激活的 Codex 账号 */
 export async function getCurrentCodexAccount(): Promise<CodexAccount | null> {
   return await invoke('get_current_codex_account');

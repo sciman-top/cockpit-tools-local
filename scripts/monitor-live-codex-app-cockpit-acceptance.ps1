@@ -1773,6 +1773,8 @@ function New-AcceptanceResults {
     $results += Set-MonitorStatus $behaviorTrace "skipped" "监测窗口内没有 audit 事件，无法评估结构化行为追踪覆盖率" $behaviorTraceEvidence
   } elseif ($AuditSummary.behaviorTraceCoverage.hasStructuredBehaviorTrace) {
     $results += Set-MonitorStatus $behaviorTrace "pass" $null $behaviorTraceEvidence
+  } elseif ($RequireQuotaFallback -or $RequireStreamCompletion) {
+    $results += Set-MonitorStatus $behaviorTrace "blocked" "当前 audit 仍是旧事件模型，缺少 request_trace/routing_decision/quota_classification/stream_terminal；请确认实跑使用的是当前源码构建出的 gateway，而不是过期 target/debug 二进制" $behaviorTraceEvidence
   } else {
     $results += Set-MonitorStatus $behaviorTrace "warn" "当前 audit 仍是旧事件模型，缺少 request_trace/routing_decision/quota_classification/stream_terminal 结构化行为追踪" $behaviorTraceEvidence
   }

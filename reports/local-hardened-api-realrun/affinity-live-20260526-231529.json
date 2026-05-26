@@ -1,0 +1,83 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-26T23:15:53.2391201+08:00",
+  "overall": "fail",
+  "probeRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-affinity-live-20260526-231529",
+  "auditPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-affinity-live-20260526-231529\\codex_local_access_audit.jsonl",
+  "healthPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-affinity-live-20260526-231529\\codex_local_access_health.json",
+  "baseUrl": "http://127.0.0.1:45335/v1",
+  "first": {
+    "label": "bind-old-turn",
+    "statusCode": 200,
+    "selectedAccountHash": "sha256:4088fbd68f24",
+    "hasResponseCompleted": true,
+    "hasRequestAffinity": false,
+    "eventCount": 13,
+    "phases": [
+      "listener",
+      "auth_projection",
+      "admission_attempt",
+      "upstream_forward",
+      "selector",
+      "upstream_admitted",
+      "lease_granted",
+      "stream_write"
+    ],
+    "rawLength": 5881,
+    "error": null,
+    "errorPreview": null
+  },
+  "newRequestAfterCooldown": {
+    "label": "new-request-after-cooldown",
+    "statusCode": 200,
+    "selectedAccountHash": null,
+    "hasResponseCompleted": true,
+    "hasRequestAffinity": false,
+    "eventCount": 11,
+    "phases": [
+      "listener",
+      "auth_projection",
+      "admission_attempt",
+      "upstream_forward",
+      "account_quota_snapshot",
+      "classifier",
+      "health_update",
+      "model_cooldown_applied",
+      "fallback_selected",
+      "final_response"
+    ],
+    "rawLength": 4744,
+    "error": null,
+    "errorPreview": null
+  },
+  "sameTurnAfterCooldown": {
+    "label": "same-turn-after-cooldown",
+    "statusCode": 200,
+    "selectedAccountHash": "sha256:4088fbd68f24",
+    "hasResponseCompleted": true,
+    "hasRequestAffinity": false,
+    "eventCount": 14,
+    "phases": [
+      "listener",
+      "local_backpressure",
+      "auth_projection",
+      "admission_attempt",
+      "upstream_forward",
+      "selector",
+      "upstream_admitted",
+      "lease_granted",
+      "stream_write"
+    ],
+    "rawLength": 5881,
+    "error": null,
+    "errorPreview": null
+  },
+  "assertions": {
+    "newRequestAvoidedSeededCooldownAccount": true,
+    "sameTurnKeptOriginalAccount": true,
+    "sameTurnHadHardAffinityEvidence": false,
+    "allRequestsCompleted": true
+  },
+  "gatewayStdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\affinity-live-20260526-231529.gateway.stdout.log",
+  "gatewayStderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\affinity-live-20260526-231529.gateway.stderr.log"
+}

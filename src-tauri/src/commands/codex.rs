@@ -45,6 +45,15 @@ pub fn list_codex_accounts() -> Result<Vec<CodexAccount>, String> {
     codex_account::list_accounts_checked()
 }
 
+#[tauri::command]
+pub fn sync_codex_local_quota_observations(app: AppHandle) -> Result<i32, String> {
+    let repaired = codex_account::sync_local_quota_observations()?;
+    if repaired > 0 {
+        let _ = crate::modules::tray::update_tray_menu(&app);
+    }
+    Ok(repaired as i32)
+}
+
 /// 获取当前激活的 Codex 账号
 #[tauri::command]
 pub fn get_current_codex_account() -> Result<Option<CodexAccount>, String> {

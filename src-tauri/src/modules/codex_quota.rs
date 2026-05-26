@@ -5,7 +5,7 @@ use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
 use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -21,6 +21,8 @@ const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
 const DIRECT_SESSION_SCAN_MAX_FILES: usize = 32;
 const DIRECT_SESSION_SCAN_MAX_BYTES_PER_FILE: u64 = 256 * 1024;
 const DIRECT_CODEX_LOG_SCAN_MAX_ROWS: i64 = 20_000;
+const DIRECT_CODEX_LOG_INCREMENTAL_BOOTSTRAP_ROWS: i64 = 5_000;
+const DIRECT_CODEX_LOG_INCREMENTAL_SCAN_MAX_ROWS: i64 = 5_000;
 const DIRECT_ERROR_RESET_BACKOFF_MAX_SECONDS: i64 = 60 * 60;
 
 fn get_header_value(headers: &HeaderMap, name: &str) -> String {
@@ -556,6 +558,14 @@ struct DirectCodexLogRow {
     ts: i64,
     thread_id: Option<String>,
     body: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct DirectCodexLogSyncState {
+    #[serde(default)]
+    last_log_id: i64,
+    #[serde(default)]
+    last_synced_at_ms: i64,
 }
 
 fn parse_session_timestamp_seconds(value: &serde_json::Value) -> Option<i64> {
@@ -1183,6 +1193,16 @@ fn latest_direct_quota_observations_from_codex_log_rows(
     let mut observations: HashMap<String, DirectQuotaObservation> = HashMap::new();
     let mut reset_hints: HashMap<String, i64> = HashMap::new();
 
+    // 官方 Codex 日志里身份事件可能早于或晚于 quota 事件；先按 thread 建索引，避免顺序差异漏配账号。
+    for row in &rows {
+        if let Some(thread_id) = row.thread_id.as_deref() {
+            if let Some(account_id) = account_id_from_codex_log_identity(&row.body, &identity_index)
+            {
+                thread_accounts.insert(thread_id.to_string(), account_id);
+            }
+        }
+    }
+
     for row in rows {
         if let Some(thread_id) = row.thread_id.as_deref() {
             if let Some(account_id) = account_id_from_codex_log_identity(&row.body, &identity_index)
@@ -1242,6 +1262,72 @@ fn latest_direct_quota_observations_from_codex_log_rows(
     observations
 }
 
+fn map_direct_codex_log_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<DirectCodexLogRow> {
+    Ok(DirectCodexLogRow {
+        id: row.get(0)?,
+        ts: row.get(1)?,
+        thread_id: row.get(2)?,
+        body: row.get(3)?,
+    })
+}
+
+fn direct_codex_log_body_may_contain_quota_observation(body: &str) -> bool {
+    body.contains("websocket event:")
+        && (body.contains(r#""type":"codex.rate_limits""#)
+            || body.contains("usage_limit_reached")
+            || body.contains("insufficient_quota")
+            || body.contains("credits_depleted"))
+}
+
+fn append_direct_codex_log_identity_rows(
+    connection: &Connection,
+    result: &mut Vec<DirectCodexLogRow>,
+    thread_ids: Vec<String>,
+) -> Result<(), String> {
+    if thread_ids.is_empty() {
+        return Ok(());
+    }
+
+    let mut identity_statement = connection
+        .prepare(
+            r#"
+            SELECT id, ts, thread_id, feedback_log_body
+            FROM logs
+            WHERE thread_id = ?1
+              AND (
+                    feedback_log_body LIKE '%user.account_id=%'
+                    OR feedback_log_body LIKE '%user.email=%'
+              )
+            ORDER BY id DESC
+            LIMIT 64
+            "#,
+        )
+        .map_err(|error| format!("读取 Codex Desktop 身份日志 schema 失败: {}", error))?;
+
+    for thread_id in thread_ids {
+        let mut identity_rows = identity_statement
+            .query_map([thread_id.as_str()], map_direct_codex_log_row)
+            .map_err(|error| format!("查询 Codex Desktop 身份日志失败: {}", error))?;
+        while let Some(row) = identity_rows
+            .next()
+            .transpose()
+            .map_err(|error| format!("解析 Codex Desktop 身份日志失败: {}", error))?
+        {
+            result.push(row);
+        }
+    }
+    Ok(())
+}
+
+fn direct_codex_log_thread_ids_for_identity_backfill(rows: &[DirectCodexLogRow]) -> Vec<String> {
+    rows.iter()
+        .filter(|row| direct_codex_log_body_may_contain_quota_observation(&row.body))
+        .filter_map(|row| row.thread_id.clone())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect()
+}
+
 fn read_recent_codex_log_rows(codex_home: &Path) -> Result<Vec<DirectCodexLogRow>, String> {
     let path = codex_home.join("logs_2.sqlite");
     if !path.exists() {
@@ -1253,53 +1339,131 @@ fn read_recent_codex_log_rows(codex_home: &Path) -> Result<Vec<DirectCodexLogRow
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|error| format!("打开 Codex Desktop 日志失败: {}", error))?;
-    let mut statement = connection
+    let mut event_statement = connection
         .prepare(
             r#"
             SELECT id, ts, thread_id, feedback_log_body
-            FROM (
-                SELECT id, ts, thread_id, feedback_log_body
-                FROM logs
-                ORDER BY id DESC
-                LIMIT ?1
-            )
-            WHERE feedback_log_body LIKE '%websocket event:%'
-               OR feedback_log_body LIKE '%user.account_id=%'
-               OR feedback_log_body LIKE '%user.email=%'
+            FROM logs
+            WHERE feedback_log_body LIKE '%websocket event: {"type":"codex.rate_limits"%'
+               OR (
+                    feedback_log_body LIKE '%websocket event:%'
+                    AND (
+                        feedback_log_body LIKE '%usage_limit_reached%'
+                        OR feedback_log_body LIKE '%insufficient_quota%'
+                        OR feedback_log_body LIKE '%credits_depleted%'
+                    )
+               )
             ORDER BY id DESC
+            LIMIT ?1
             "#,
         )
         .map_err(|error| format!("读取 Codex Desktop 日志 schema 失败: {}", error))?;
-    let mut rows = statement
-        .query_map([DIRECT_CODEX_LOG_SCAN_MAX_ROWS], |row| {
-            Ok(DirectCodexLogRow {
-                id: row.get(0)?,
-                ts: row.get(1)?,
-                thread_id: row.get(2)?,
-                body: row.get(3)?,
-            })
-        })
+    let mut event_rows = event_statement
+        .query_map([DIRECT_CODEX_LOG_SCAN_MAX_ROWS], map_direct_codex_log_row)
         .map_err(|error| format!("查询 Codex Desktop 日志失败: {}", error))?;
 
     let mut result = Vec::new();
-    while let Some(row) = rows
+    while let Some(row) = event_rows
         .next()
         .transpose()
         .map_err(|error| format!("解析 Codex Desktop 日志失败: {}", error))?
     {
         result.push(row);
     }
+
+    let thread_ids = direct_codex_log_thread_ids_for_identity_backfill(&result);
+    append_direct_codex_log_identity_rows(&connection, &mut result, thread_ids)?;
     Ok(result)
 }
 
-fn latest_direct_quota_observations_from_codex_logs(
+fn load_direct_codex_log_sync_state(path: &Path) -> DirectCodexLogSyncState {
+    let Ok(content) = fs::read_to_string(path) else {
+        return DirectCodexLogSyncState::default();
+    };
+    serde_json::from_str::<DirectCodexLogSyncState>(&content).unwrap_or_default()
+}
+
+fn save_direct_codex_log_sync_state(
+    path: &Path,
+    state: &DirectCodexLogSyncState,
+) -> Result<(), String> {
+    let content = serde_json::to_string_pretty(state)
+        .map_err(|error| format!("序列化 Direct OAuth 日志同步游标失败: {}", error))?;
+    crate::modules::atomic_write::write_string_atomic(path, &content)
+        .map_err(|error| format!("写入 Direct OAuth 日志同步游标失败: {}", error))
+}
+
+fn read_incremental_codex_log_rows(
     codex_home: &Path,
-    accounts: &[CodexAccount],
-) -> Result<HashMap<String, DirectQuotaObservation>, String> {
-    let rows = read_recent_codex_log_rows(codex_home)?;
-    Ok(latest_direct_quota_observations_from_codex_log_rows(
-        accounts, rows,
-    ))
+    last_log_id: i64,
+) -> Result<(Vec<DirectCodexLogRow>, i64), String> {
+    let path = codex_home.join("logs_2.sqlite");
+    if !path.exists() {
+        return Ok((Vec::new(), last_log_id.max(0)));
+    }
+
+    let connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("打开 Codex Desktop 日志失败: {}", error))?;
+    let max_log_id = connection
+        .query_row("SELECT COALESCE(MAX(id), 0) FROM logs", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(|error| format!("读取 Codex Desktop 日志游标失败: {}", error))?;
+    if max_log_id <= last_log_id {
+        return Ok((Vec::new(), last_log_id.max(max_log_id)));
+    }
+
+    let effective_last_log_id = if last_log_id > 0 {
+        last_log_id
+    } else {
+        max_log_id.saturating_sub(DIRECT_CODEX_LOG_INCREMENTAL_BOOTSTRAP_ROWS)
+    };
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, ts, thread_id, feedback_log_body
+            FROM logs
+            WHERE id > ?1
+            ORDER BY id ASC
+            LIMIT ?2
+            "#,
+        )
+        .map_err(|error| format!("读取 Codex Desktop 增量日志 schema 失败: {}", error))?;
+    let mut rows = statement
+        .query_map(
+            [
+                effective_last_log_id,
+                DIRECT_CODEX_LOG_INCREMENTAL_SCAN_MAX_ROWS,
+            ],
+            map_direct_codex_log_row,
+        )
+        .map_err(|error| format!("查询 Codex Desktop 增量日志失败: {}", error))?;
+
+    let mut result = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .transpose()
+        .map_err(|error| format!("解析 Codex Desktop 增量日志失败: {}", error))?
+    {
+        result.push(row);
+    }
+
+    let scanned_to_log_id = result
+        .last()
+        .map(|row| row.id)
+        .unwrap_or(effective_last_log_id);
+    let next_log_id = if result.len() < DIRECT_CODEX_LOG_INCREMENTAL_SCAN_MAX_ROWS as usize {
+        max_log_id
+    } else {
+        scanned_to_log_id
+    };
+
+    let thread_ids = direct_codex_log_thread_ids_for_identity_backfill(&result);
+    append_direct_codex_log_identity_rows(&connection, &mut result, thread_ids)?;
+    Ok((result, next_log_id.max(last_log_id)))
 }
 
 fn is_better_direct_quota_observation(
@@ -1575,22 +1739,43 @@ pub(crate) fn apply_latest_direct_oauth_observation_if_current(
     Ok(true)
 }
 
-pub(crate) fn repair_direct_oauth_observations_for_accounts(
+pub(crate) fn repair_direct_oauth_observations_for_accounts_incremental(
     accounts: &mut [CodexAccount],
+    state_path: &Path,
 ) -> usize {
     let codex_home = codex_account::get_codex_home();
-    let observations = match latest_direct_quota_observations_from_codex_logs(&codex_home, accounts)
+    let mut state = load_direct_codex_log_sync_state(state_path);
+    let (rows, next_log_id) = match read_incremental_codex_log_rows(&codex_home, state.last_log_id)
     {
         Ok(value) => value,
         Err(error) => {
             logger::log_warn(&format!(
-                "[Codex Direct OAuth][QuotaRepair] 读取官方 Codex Desktop 日志失败: {}",
+                "[Codex Direct OAuth][QuotaRepair] 读取官方 Codex Desktop 增量日志失败: {}",
                 error
             ));
             return 0;
         }
     };
 
+    let observations = latest_direct_quota_observations_from_codex_log_rows(accounts, rows);
+    let repaired = repair_direct_oauth_observations_from_map(accounts, &observations);
+    if next_log_id > state.last_log_id {
+        state.last_log_id = next_log_id;
+        state.last_synced_at_ms = chrono::Utc::now().timestamp_millis();
+        if let Err(error) = save_direct_codex_log_sync_state(state_path, &state) {
+            logger::log_warn(&format!(
+                "[Codex Direct OAuth][QuotaRepair] 写入官方日志增量游标失败: {}",
+                error
+            ));
+        }
+    }
+    repaired
+}
+
+fn repair_direct_oauth_observations_from_map(
+    accounts: &mut [CodexAccount],
+    observations: &HashMap<String, DirectQuotaObservation>,
+) -> usize {
     let mut repaired = 0usize;
     for account in accounts.iter_mut() {
         if account.is_api_key_auth() {
@@ -2233,6 +2418,88 @@ mod tests {
                 .and_then(|error| error.code.as_deref()),
             Some("usage_limit_reached")
         );
+    }
+
+    #[test]
+    fn direct_codex_log_sqlite_scan_keeps_quota_events_after_noisy_websocket_delta() {
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-direct-codex-log-sqlite-noise-test-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("codex home fixture should be created");
+        let db_path = root.join("logs_2.sqlite");
+        let connection = Connection::open(&db_path).expect("sqlite fixture should open");
+        connection
+            .execute_batch(
+                r#"
+                CREATE TABLE logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts INTEGER NOT NULL,
+                    ts_nanos INTEGER NOT NULL,
+                    level TEXT NOT NULL,
+                    target TEXT NOT NULL,
+                    feedback_log_body TEXT,
+                    thread_id TEXT,
+                    estimated_bytes INTEGER NOT NULL DEFAULT 0
+                );
+                "#,
+            )
+            .expect("logs table should be created");
+        connection
+            .execute(
+                "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (?1, 0, 'INFO', 'codex_otel.log_only', ?2, 'thread-noisy')",
+                (
+                    1_700_000_010i64,
+                    r#"codex_otel.log_only user.account_id="acc-direct" user.email="direct@example.com""#,
+                ),
+            )
+            .expect("identity row should be inserted");
+        connection
+            .execute(
+                "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (?1, 0, 'INFO', 'codex_api::endpoint::responses_websocket', ?2, 'thread-noisy')",
+                (
+                    1_700_000_020i64,
+                    r#"websocket.stream_request: websocket event: {"type":"codex.rate_limits","plan_type":"free","rate_limits":{"allowed":false,"limit_reached":true,"primary":{"used_percent":3,"window_minutes":10080,"reset_after_seconds":120,"reset_at":1700000140},"secondary":null}}"#,
+                ),
+            )
+            .expect("quota row should be inserted");
+        let noise_body = r#"websocket.stream_request: websocket event: {"type":"response.output_text.delta","delta":"noise"}"#;
+        let transaction = connection
+            .unchecked_transaction()
+            .expect("noise transaction should start");
+        {
+            let mut statement = transaction
+                .prepare(
+                    "INSERT INTO logs (ts, ts_nanos, level, target, feedback_log_body, thread_id) VALUES (?1, 0, 'INFO', 'codex_api::endpoint::responses_websocket', ?2, 'thread-other')",
+                )
+                .expect("noise insert should prepare");
+            for offset in 0..=DIRECT_CODEX_LOG_SCAN_MAX_ROWS {
+                statement
+                    .execute((1_700_000_100i64 + offset, noise_body))
+                    .expect("noise row should be inserted");
+            }
+        }
+        transaction
+            .commit()
+            .expect("noise transaction should commit");
+
+        let mut account = test_account();
+        account.id = "codex_direct_log_sqlite_noise".to_string();
+        account.email = "direct@example.com".to_string();
+        account.account_id = Some("acc-direct".to_string());
+        account.last_used = 1_700_000_000;
+        account.usage_updated_at = Some(1_700_000_000);
+
+        let rows = read_recent_codex_log_rows(&root).expect("sqlite logs should be read");
+        let observations = latest_direct_quota_observations_from_codex_log_rows(&[account], rows);
+
+        let _ = fs::remove_dir_all(&root);
+        let observation = observations
+            .get("codex_direct_log_sqlite_noise")
+            .expect("quota event must survive noisy websocket delta rows");
+        assert!(observation.exhausted);
     }
 
     #[test]

@@ -73,6 +73,7 @@ const DISK_FULL_ERROR_CODE: &str = "DISK_FULL";
 const CODEX_TOKEN_SOURCE_MANAGED: &str = "managed";
 const CODEX_LOCAL_ACCESS_HEALTH_FILE: &str = "codex_local_access_health.json";
 const CODEX_STARTUP_QUOTA_SCAN_STATE_FILE: &str = "codex_startup_quota_scan.json";
+const CODEX_DIRECT_QUOTA_LOG_SYNC_STATE_FILE: &str = "codex_direct_quota_log_sync.json";
 const CODEX_STARTUP_QUOTA_SCAN_DELAY_SECONDS: u64 = 5;
 const CODEX_STARTUP_QUOTA_SCAN_MIN_INTERVAL_MS: i64 = 10 * 60 * 1000;
 const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
@@ -2272,8 +2273,7 @@ fn run_startup_quota_consistency_scan_inner(
 
     let (mut accounts, failed_accounts) = load_accounts_for_startup_quota_scan();
     let scanned_accounts = accounts.len();
-    let repaired_accounts = repair_accounts_quota_from_local_access_health(&mut accounts)
-        + crate::modules::codex_quota::repair_direct_oauth_observations_for_accounts(&mut accounts);
+    let repaired_accounts = repair_accounts_quota_from_local_access_health(&mut accounts);
     let report = CodexStartupQuotaConsistencyScanReport {
         started_at_ms,
         finished_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -2414,7 +2414,6 @@ pub fn list_accounts() -> Vec<CodexAccount> {
         )
         .collect();
     repair_accounts_quota_from_local_access_health(&mut accounts);
-    crate::modules::codex_quota::repair_direct_oauth_observations_for_accounts(&mut accounts);
     accounts
 }
 
@@ -2448,9 +2447,43 @@ pub fn list_accounts_checked() -> Result<Vec<CodexAccount>, String> {
     }
 
     repair_accounts_quota_from_local_access_health(&mut accounts);
-    crate::modules::codex_quota::repair_direct_oauth_observations_for_accounts(&mut accounts);
 
     Ok(accounts)
+}
+
+pub fn sync_local_quota_observations() -> Result<usize, String> {
+    let index = load_account_index_checked()?;
+    let mut accounts = Vec::new();
+    let mut failed = Vec::new();
+
+    for summary in &index.accounts {
+        match load_account_with_summary(&summary.id, Some(summary)) {
+            Ok(Some(account)) => accounts.push(account),
+            Ok(None) => failed.push(format!("{}: 详情文件不存在", summary.id)),
+            Err(error) => failed.push(format!("{}: {}", summary.id, error)),
+        }
+    }
+
+    if !failed.is_empty() {
+        logger::log_warn(&format!(
+            "[Codex Account][QuotaSync] 部分账号详情无法读取，已跳过: loaded={}, failed={}",
+            accounts.len(),
+            failed.join("; ")
+        ));
+    }
+
+    if accounts.is_empty() {
+        return Ok(0);
+    }
+
+    let direct_log_sync_state_path =
+        get_codex_accounts_data_dir().join(CODEX_DIRECT_QUOTA_LOG_SYNC_STATE_FILE);
+
+    Ok(repair_accounts_quota_from_local_access_health(&mut accounts)
+        + crate::modules::codex_quota::repair_direct_oauth_observations_for_accounts_incremental(
+            &mut accounts,
+            &direct_log_sync_state_path,
+        ))
 }
 
 /// 刷新账号资料（团队名/结构）
@@ -4468,13 +4501,14 @@ mod tests {
         read_quick_config_from_config_toml, repair_account_quota_from_local_access_health,
         resolve_api_provider_config, run_startup_quota_consistency_scan_for_tests, save_account,
         save_account_index, should_accept_authority_snapshot, sync_account_from_auth_dir,
-        sync_managed_projection_from_auth_dir, validate_api_key_credentials,
-        write_api_key_provider_to_config_toml, write_api_provider_to_config_toml,
-        write_managed_projection_to_dir, write_quick_config_to_config_toml, ApiProviderConfig,
-        CodexAccountIndex, CodexAccountSummary, CodexAuthFile, CodexAuthTokens,
-        LocalCodexOAuthSnapshot, CODEX_AUTO_COMPACT_DEFAULT_LIMIT, CODEX_CONTEXT_WINDOW_1M_VALUE,
-        CODEX_PROFILE_SHARED_COCKPIT_API, CODEX_RUNTIME_MODEL_PROVIDER_ID,
-        WEEKLY_WINDOW_MINUTES_THRESHOLD,
+        sync_local_quota_observations, sync_managed_projection_from_auth_dir,
+        validate_api_key_credentials, write_api_key_provider_to_config_toml,
+        write_api_provider_to_config_toml, write_managed_projection_to_dir,
+        write_quick_config_to_config_toml, ApiProviderConfig, CodexAccountIndex,
+        CodexAccountSummary, CodexAuthFile, CodexAuthTokens, LocalCodexOAuthSnapshot,
+        CODEX_AUTO_COMPACT_DEFAULT_LIMIT, CODEX_CONTEXT_WINDOW_1M_VALUE,
+        CODEX_LOCAL_ACCESS_HEALTH_FILE, CODEX_PROFILE_SHARED_COCKPIT_API,
+        CODEX_RUNTIME_MODEL_PROVIDER_ID, WEEKLY_WINDOW_MINUTES_THRESHOLD,
     };
     use crate::models::codex::{
         CodexAccount, CodexApiProviderMode, CodexAuthMode, CodexQuota, CodexTokens,
@@ -4678,7 +4712,7 @@ mod tests {
     }
 
     #[test]
-    fn list_accounts_checked_repairs_direct_oauth_from_official_codex_logs() {
+    fn list_accounts_checked_does_not_replay_direct_oauth_official_logs() {
         let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         let guard = TestEnvGuard::new("codex-list-direct-websocket-log-repair-test");
         let local_access_root = guard.home_dir.join(".antigravity_cockpit");
@@ -4745,31 +4779,318 @@ mod tests {
             .iter()
             .find(|item| item.id == "codex_list_direct_websocket_log")
             .expect("account should be listed");
-        let quota = listed.quota.as_ref().expect("quota should be repaired");
-        assert_eq!(quota.hourly_percentage, 0);
-        assert_eq!(quota.weekly_percentage, 0);
-        assert_eq!(quota.weekly_reset_time, Some(reset_at));
-        assert_eq!(
-            listed
-                .quota_error
-                .as_ref()
-                .and_then(|error| error.code.as_deref()),
-            Some("usage_limit_reached")
-        );
+        let quota = listed.quota.as_ref().expect("quota should be preserved");
+        assert_eq!(quota.hourly_percentage, 100);
+        assert_eq!(quota.weekly_percentage, 97);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at + 10_000));
+        assert!(listed.quota_error.is_none());
 
         let persisted = load_account("codex_list_direct_websocket_log")
-            .expect("repaired account should be persisted");
+            .expect("listed account should still load");
         assert_eq!(
             persisted
                 .quota
                 .as_ref()
                 .map(|quota| quota.weekly_percentage),
-            Some(0)
+            Some(97)
         );
     }
 
     #[test]
-    fn list_accounts_checked_repairs_exhausted_direct_oauth_reset_from_rate_limit_logs() {
+    fn local_quota_sync_repairs_api_service_health_registry_without_list_refresh() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let _guard = TestEnvGuard::new("codex-local-quota-sync-health-test");
+
+        let now = chrono::Utc::now().timestamp();
+        let reset_at = now + 3_600;
+        let account = test_codex_account_with_quota(
+            "codex_api_service_local_sync",
+            CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 97,
+                weekly_reset_time: Some(reset_at + 10_000),
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            },
+        );
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("free".to_string()),
+            subscription_active_until: None,
+            created_at: now - 120,
+            last_used: account.last_used,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+
+        let mut registry = CodexLocalAccessHealthRegistry::default();
+        registry.accounts.insert(
+            account.id.clone(),
+            CodexLocalAccessAccountHealth {
+                last_error_type: Some("usage_limit_reached".to_string()),
+                estimated_reset_at_ms: Some(reset_at * 1000),
+                last_quota_exhausted_at_ms: Some(now * 1000),
+                updated_at: now * 1000,
+                ..Default::default()
+            },
+        );
+        let health_path =
+            get_accounts_storage_path().with_file_name(CODEX_LOCAL_ACCESS_HEALTH_FILE);
+        fs::write(
+            &health_path,
+            serde_json::to_string_pretty(&registry).expect("registry should serialize"),
+        )
+        .expect("health registry should be saved");
+
+        let repaired = sync_local_quota_observations().expect("local sync should complete");
+
+        assert_eq!(repaired, 1);
+        let persisted = load_account("codex_api_service_local_sync").expect("account should load");
+        let quota = persisted.quota.as_ref().expect("quota should be repaired");
+        assert_eq!(quota.hourly_percentage, 100);
+        assert_eq!(quota.hourly_window_present, Some(false));
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at));
+    }
+
+    #[test]
+    fn local_quota_sync_repairs_direct_oauth_logs_without_list_refresh() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-direct-oauth-local-sync-test");
+
+        let now = chrono::Utc::now().timestamp();
+        let reset_at = now + 3_600;
+        let mut account = test_codex_account_with_quota(
+            "codex_direct_oauth_local_sync",
+            CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 97,
+                weekly_reset_time: Some(reset_at + 10_000),
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            },
+        );
+        account.email = "direct-sync@example.com".to_string();
+        account.account_id = Some("acc-direct-sync".to_string());
+        account.last_used = now - 60;
+        account.usage_updated_at = Some(now - 60);
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("free".to_string()),
+            subscription_active_until: None,
+            created_at: now - 120,
+            last_used: account.last_used,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+        write_codex_logs_sqlite(
+            &guard.codex_home(),
+            &[
+                (
+                    1,
+                    now - 30,
+                    "thread-sync",
+                    r#"codex_otel.log_only user.account_id="acc-direct-sync" user.email="direct-sync@example.com""#,
+                ),
+                (
+                    2,
+                    now,
+                    "thread-sync",
+                    r#"websocket.stream_request: websocket event: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","reset_after_seconds":3600}}}"#,
+                ),
+            ],
+        );
+
+        let repaired = sync_local_quota_observations().expect("local sync should complete");
+
+        assert_eq!(repaired, 1);
+        let persisted = load_account("codex_direct_oauth_local_sync").expect("account should load");
+        let quota = persisted.quota.as_ref().expect("quota should be repaired");
+        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at));
+    }
+
+    #[test]
+    fn local_quota_sync_skips_direct_oauth_logs_at_or_before_cursor() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-direct-oauth-cursor-skip-test");
+
+        let now = chrono::Utc::now().timestamp();
+        let reset_at = now + 3_600;
+        let mut account = test_codex_account_with_quota(
+            "codex_direct_oauth_cursor_skip",
+            CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 97,
+                weekly_reset_time: Some(reset_at + 10_000),
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            },
+        );
+        account.email = "cursor-skip@example.com".to_string();
+        account.account_id = Some("acc-cursor-skip".to_string());
+        account.last_used = now - 60;
+        account.usage_updated_at = Some(now - 60);
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("free".to_string()),
+            subscription_active_until: None,
+            created_at: now - 120,
+            last_used: account.last_used,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+        write_codex_logs_sqlite(
+            &guard.codex_home(),
+            &[
+                (
+                    1,
+                    now - 30,
+                    "thread-cursor-skip",
+                    r#"codex_otel.log_only user.account_id="acc-cursor-skip" user.email="cursor-skip@example.com""#,
+                ),
+                (
+                    2,
+                    now,
+                    "thread-cursor-skip",
+                    r#"websocket.stream_request: websocket event: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","reset_after_seconds":3600}}}"#,
+                ),
+            ],
+        );
+        fs::write(
+            super::get_codex_accounts_data_dir().join("codex_direct_quota_log_sync.json"),
+            serde_json::json!({
+                "last_log_id": 2,
+                "last_synced_at_ms": now * 1000
+            })
+            .to_string(),
+        )
+        .expect("sync state should be written");
+
+        let repaired = sync_local_quota_observations().expect("local sync should complete");
+
+        assert_eq!(repaired, 0);
+        let persisted =
+            load_account("codex_direct_oauth_cursor_skip").expect("account should load");
+        let quota = persisted.quota.as_ref().expect("quota should be preserved");
+        assert_eq!(quota.weekly_percentage, 97);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at + 10_000));
+    }
+
+    #[test]
+    fn local_quota_sync_repairs_direct_oauth_logs_after_cursor_and_advances_cursor() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-direct-oauth-cursor-advance-test");
+
+        let now = chrono::Utc::now().timestamp();
+        let reset_at = now + 3_600;
+        let mut account = test_codex_account_with_quota(
+            "codex_direct_oauth_cursor_advance",
+            CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 97,
+                weekly_reset_time: Some(reset_at + 10_000),
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            },
+        );
+        account.email = "cursor-advance@example.com".to_string();
+        account.account_id = Some("acc-cursor-advance".to_string());
+        account.last_used = now - 60;
+        account.usage_updated_at = Some(now - 60);
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("free".to_string()),
+            subscription_active_until: None,
+            created_at: now - 120,
+            last_used: account.last_used,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+        write_codex_logs_sqlite(
+            &guard.codex_home(),
+            &[
+                (
+                    1,
+                    now - 40,
+                    "thread-old",
+                    r#"websocket.stream_request: websocket event: {"type":"response.output_text.delta","delta":"old"}"#,
+                ),
+                (
+                    3,
+                    now - 30,
+                    "thread-cursor-advance",
+                    r#"codex_otel.log_only user.account_id="acc-cursor-advance" user.email="cursor-advance@example.com""#,
+                ),
+                (
+                    4,
+                    now,
+                    "thread-cursor-advance",
+                    r#"websocket.stream_request: websocket event: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","reset_after_seconds":3600}}}"#,
+                ),
+            ],
+        );
+        fs::write(
+            super::get_codex_accounts_data_dir().join("codex_direct_quota_log_sync.json"),
+            serde_json::json!({
+                "last_log_id": 2,
+                "last_synced_at_ms": (now - 60) * 1000
+            })
+            .to_string(),
+        )
+        .expect("sync state should be written");
+
+        let repaired = sync_local_quota_observations().expect("local sync should complete");
+
+        assert_eq!(repaired, 1);
+        let persisted =
+            load_account("codex_direct_oauth_cursor_advance").expect("account should load");
+        let quota = persisted.quota.as_ref().expect("quota should be repaired");
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at));
+        let state_text = fs::read_to_string(
+            super::get_codex_accounts_data_dir().join("codex_direct_quota_log_sync.json"),
+        )
+        .expect("sync state should still exist");
+        let state: serde_json::Value =
+            serde_json::from_str(&state_text).expect("sync state should be valid json");
+        assert_eq!(
+            state.get("last_log_id").and_then(|value| value.as_i64()),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn local_quota_sync_repairs_exhausted_direct_oauth_reset_from_rate_limit_logs() {
         let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         let guard = TestEnvGuard::new("codex-list-direct-reset-hint-repair-test");
         let local_access_root = guard.home_dir.join(".antigravity_cockpit");
@@ -4835,16 +5156,16 @@ mod tests {
             ],
         );
 
-        let accounts = list_accounts_checked().expect("accounts should list");
+        let repaired =
+            sync_local_quota_observations().expect("local quota sync should repair reset hint");
         match previous_local_access_root {
             Some(value) => std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", value),
             None => std::env::remove_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT"),
         }
+        assert_eq!(repaired, 1);
 
-        let listed = accounts
-            .iter()
-            .find(|item| item.id == "codex_list_direct_reset_hint")
-            .expect("account should be listed");
+        let listed =
+            load_account("codex_list_direct_reset_hint").expect("account should be persisted");
         let quota = listed.quota.as_ref().expect("quota should be repaired");
         assert_eq!(quota.weekly_percentage, 0);
         assert_eq!(quota.weekly_reset_time, Some(reset_at));
@@ -4873,7 +5194,7 @@ mod tests {
     }
 
     #[test]
-    fn startup_quota_consistency_scan_does_not_run_direct_session_quota_repair() {
+    fn startup_quota_consistency_scan_does_not_run_direct_oauth_log_repair() {
         let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
         let guard = TestEnvGuard::new("codex-startup-skip-direct-session-scan-test");
         let local_access_root = guard.home_dir.join(".antigravity_cockpit");
@@ -4895,6 +5216,8 @@ mod tests {
             },
         );
         account.last_used = 1;
+        account.email = "startup-direct@example.com".to_string();
+        account.account_id = Some("acc-startup".to_string());
         let mut index = CodexAccountIndex::new();
         index.current_account_id = Some(account.id.clone());
         index.accounts.push(CodexAccountSummary {
@@ -4943,6 +5266,23 @@ mod tests {
             .to_string(),
         )
         .expect("direct session event should be written");
+        write_codex_logs_sqlite(
+            &guard.codex_home(),
+            &[
+                (
+                    1,
+                    2,
+                    "thread-startup",
+                    r#"codex_otel.log_only user.account_id="acc-startup" user.email="startup-direct@example.com""#,
+                ),
+                (
+                    2,
+                    3,
+                    "thread-startup",
+                    r#"websocket.stream_request: websocket event: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","reset_after_seconds":120}}}"#,
+                ),
+            ],
+        );
 
         let report = run_startup_quota_consistency_scan_for_tests(true)
             .expect("startup quota scan should succeed");
@@ -4956,7 +5296,7 @@ mod tests {
         let listed = load_account("codex_startup_direct_scan").expect("account should load");
         assert!(
             listed.quota_error.is_none(),
-            "startup scan must stay local-only and not inspect direct session logs"
+            "startup scan must stay local-only and not inspect direct OAuth session or Desktop logs"
         );
         assert_eq!(
             listed.quota.as_ref().map(|quota| quota.weekly_percentage),
