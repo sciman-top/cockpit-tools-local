@@ -1171,15 +1171,16 @@ export function getCodexQuotaWindows(
 /** 格式化重置时间显示（相对时间 + 绝对时间） */
 export function formatCodexResetTime(
   resetTime: number | undefined,
-  t: Translate,
+  _t: Translate,
 ): string {
   const normalizedResetTime = normalizeCodexUnixSeconds(resetTime);
   if (!normalizedResetTime) return "";
 
   const now = Math.floor(Date.now() / 1000);
   const diff = normalizedResetTime - now;
+  const absolute = formatCodexResetTimeAbsolute(normalizedResetTime);
 
-  if (diff <= 0) return t("common.shared.quota.resetDone");
+  if (diff <= 0) return absolute;
 
   const totalMinutes = Math.floor(diff / 60);
   const days = Math.floor(totalMinutes / (60 * 24));
@@ -1192,8 +1193,6 @@ export function formatCodexResetTime(
   if (minutes > 0) parts.push(`${minutes}m`);
 
   const relative = parts.length > 0 ? parts.join(" ") : "<1m";
-  const absolute = formatCodexResetTimeAbsolute(normalizedResetTime);
-
   return `${relative} (${absolute})`;
 }
 

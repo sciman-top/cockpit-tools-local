@@ -2,8 +2,10 @@ use crate::models::codex::{CodexAccount, CodexQuota, CodexQuotaErrorInfo};
 use crate::modules::{codex_account, logger};
 use chrono::{DateTime, Utc};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION};
+use rusqlite::{Connection, OpenFlags};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -18,6 +20,8 @@ const COCKPIT_API_BASE_URL: &str = "https://chongcodex.cn/v1";
 const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
 const DIRECT_SESSION_SCAN_MAX_FILES: usize = 32;
 const DIRECT_SESSION_SCAN_MAX_BYTES_PER_FILE: u64 = 256 * 1024;
+const DIRECT_CODEX_LOG_SCAN_MAX_ROWS: i64 = 20_000;
+const DIRECT_ERROR_RESET_BACKOFF_MAX_SECONDS: i64 = 60 * 60;
 
 fn get_header_value(headers: &HeaderMap, name: &str) -> String {
     headers
@@ -546,6 +550,14 @@ struct DirectQuotaObservation {
     exhausted: bool,
 }
 
+#[derive(Debug, Clone)]
+struct DirectCodexLogRow {
+    id: i64,
+    ts: i64,
+    thread_id: Option<String>,
+    body: String,
+}
+
 fn parse_session_timestamp_seconds(value: &serde_json::Value) -> Option<i64> {
     let raw = value.get("timestamp").and_then(|item| item.as_str())?;
     DateTime::parse_from_rfc3339(raw)
@@ -667,6 +679,14 @@ fn parse_direct_rate_limits_observation(
     let reached_type_exhausted = rate_limits
         .get("rate_limit_reached_type")
         .is_some_and(|value| is_exhausted_rate_limit_reached_type(Some(value)));
+    let limit_reached_exhausted = rate_limits
+        .get("limit_reached")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        || rate_limits
+            .get("allowed")
+            .and_then(|value| value.as_bool())
+            .is_some_and(|allowed| !allowed);
 
     let primary = rate_limits.get("primary");
     let secondary = rate_limits.get("secondary");
@@ -685,7 +705,7 @@ fn parse_direct_rate_limits_observation(
         .copied()
         .find(|window| direct_window_reset_at(window, observed_at).is_some());
 
-    let exhausted = reached_type_exhausted || exhausted_window.is_some();
+    let exhausted = reached_type_exhausted || limit_reached_exhausted || exhausted_window.is_some();
     let mut hourly = (100, None, None, false);
     let mut weekly = (100, None, None, false);
     for window in &windows {
@@ -935,6 +955,353 @@ fn latest_direct_quota_observation_from_sessions(
     best
 }
 
+fn direct_identity_key(kind: &str, value: &str) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(format!("{}:{}", kind, value.to_ascii_lowercase()))
+}
+
+fn insert_direct_identity_mapping(
+    index: &mut HashMap<String, Option<String>>,
+    key: Option<String>,
+    account_id: &str,
+) {
+    let Some(key) = key else {
+        return;
+    };
+    match index.get_mut(&key) {
+        Some(existing) if existing.as_deref() == Some(account_id) => {}
+        Some(existing) => {
+            *existing = None;
+        }
+        None => {
+            index.insert(key, Some(account_id.to_string()));
+        }
+    }
+}
+
+fn direct_account_identity_index(accounts: &[CodexAccount]) -> HashMap<String, String> {
+    let mut index: HashMap<String, Option<String>> = HashMap::new();
+    for account in accounts {
+        insert_direct_identity_mapping(
+            &mut index,
+            account
+                .account_id
+                .as_deref()
+                .and_then(|value| direct_identity_key("account_id", value)),
+            &account.id,
+        );
+        insert_direct_identity_mapping(
+            &mut index,
+            direct_identity_key("email", &account.email),
+            &account.id,
+        );
+        insert_direct_identity_mapping(
+            &mut index,
+            account
+                .user_id
+                .as_deref()
+                .and_then(|value| direct_identity_key("user_id", value)),
+            &account.id,
+        );
+    }
+    index
+        .into_iter()
+        .filter_map(|(key, value)| value.map(|account_id| (key, account_id)))
+        .collect()
+}
+
+fn extract_quoted_log_attribute(body: &str, name: &str) -> Option<String> {
+    let marker = format!("{}=\"", name);
+    let start = body.find(&marker)? + marker.len();
+    let tail = &body[start..];
+    let end = tail.find('"')?;
+    let value = tail[..end].trim();
+    if value.is_empty() {
+        None
+    } else {
+        Some(value.to_string())
+    }
+}
+
+fn account_id_from_codex_log_identity(
+    body: &str,
+    identity_index: &HashMap<String, String>,
+) -> Option<String> {
+    [
+        ("account_id", "user.account_id"),
+        ("email", "user.email"),
+        ("user_id", "user.id"),
+    ]
+    .into_iter()
+    .filter_map(|(kind, attr)| {
+        extract_quoted_log_attribute(body, attr).and_then(|value| direct_identity_key(kind, &value))
+    })
+    .find_map(|key| identity_index.get(&key).cloned())
+}
+
+fn extract_websocket_event_value(body: &str) -> Option<serde_json::Value> {
+    let marker = "websocket event:";
+    let start = body.find(marker)? + marker.len();
+    let tail = body[start..].trim_start();
+    let mut stream = serde_json::Deserializer::from_str(tail).into_iter::<serde_json::Value>();
+    stream.next()?.ok()
+}
+
+fn set_direct_observation_source(observation: &mut DirectQuotaObservation, source: &str) {
+    observation.source = source.to_string();
+    if let Some(quota) = observation.quota.as_mut() {
+        if let Some(raw_data) = quota
+            .raw_data
+            .as_mut()
+            .and_then(|value| value.as_object_mut())
+        {
+            raw_data.insert(
+                "source".to_string(),
+                serde_json::Value::String(source.to_string()),
+            );
+        }
+    }
+}
+
+fn parse_direct_quota_observation_from_websocket_event(
+    event: &serde_json::Value,
+    observed_at: i64,
+) -> Option<DirectQuotaObservation> {
+    let event_type = event.get("type").and_then(|value| value.as_str())?;
+    if event_type == "codex.rate_limits" {
+        let mut rate_limits = event.get("rate_limits")?.clone();
+        if let Some(object) = rate_limits.as_object_mut() {
+            for key in ["plan_type", "rate_limit_reached_type"] {
+                if !object.contains_key(key) {
+                    if let Some(value) = event.get(key) {
+                        object.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
+        }
+        let mut observation = parse_direct_rate_limits_observation(&rate_limits, observed_at)?;
+        set_direct_observation_source(&mut observation, "codex_official_websocket_rate_limits");
+        return Some(observation);
+    }
+
+    let lower_type = event_type.to_ascii_lowercase();
+    let error_like = lower_type.contains("error")
+        || lower_type.contains("failed")
+        || event.get("error").is_some()
+        || event
+            .get("response")
+            .and_then(|response| response.get("error"))
+            .is_some();
+    if error_like {
+        let mut observation = parse_direct_error_observation(event, observed_at)?;
+        set_direct_observation_source(&mut observation, "codex_official_websocket_error");
+        return Some(observation);
+    }
+
+    None
+}
+
+fn direct_observation_quota_reset_hint(observation: &DirectQuotaObservation) -> Option<i64> {
+    observation
+        .quota
+        .as_ref()
+        .and_then(quota_reset_time_for_preservation)
+        .or(observation.reset_at)
+}
+
+fn direct_error_reset_looks_like_short_backoff(observation: &DirectQuotaObservation) -> bool {
+    if observation.source != "codex_official_websocket_error" {
+        return false;
+    }
+
+    observation
+        .reset_after_seconds
+        .map(|seconds| seconds <= DIRECT_ERROR_RESET_BACKOFF_MAX_SECONDS)
+        .unwrap_or_else(|| {
+            observation
+                .reset_at
+                .map(|reset_at| {
+                    reset_at <= observation.observed_at + DIRECT_ERROR_RESET_BACKOFF_MAX_SECONDS
+                })
+                .unwrap_or(false)
+        })
+}
+
+fn apply_direct_observation_reset_hint(observation: &mut DirectQuotaObservation, reset_at: i64) {
+    observation.reset_at = Some(reset_at);
+    observation.reset_after_seconds = Some(reset_at.saturating_sub(observation.observed_at).max(0));
+    if let Some(quota) = observation.quota.as_mut() {
+        if quota.hourly_window_present.unwrap_or(false) && quota.hourly_percentage <= 0 {
+            quota.hourly_reset_time = Some(reset_at);
+        }
+        if quota.weekly_window_present.unwrap_or(false) && quota.weekly_percentage <= 0 {
+            quota.weekly_reset_time = Some(reset_at);
+        }
+        if let Some(raw_data) = quota
+            .raw_data
+            .as_mut()
+            .and_then(|value| value.as_object_mut())
+        {
+            raw_data.insert(
+                "reset_at".to_string(),
+                serde_json::Value::Number(reset_at.into()),
+            );
+            raw_data.insert(
+                "reset_source".to_string(),
+                serde_json::Value::String("codex_official_websocket_rate_limits".to_string()),
+            );
+        }
+    }
+}
+
+fn direct_observation_since_seconds(account: &CodexAccount) -> i64 {
+    account
+        .last_used
+        .max(account.usage_updated_at.unwrap_or(0))
+        .saturating_sub(3600)
+}
+
+fn latest_direct_quota_observations_from_codex_log_rows(
+    accounts: &[CodexAccount],
+    mut rows: Vec<DirectCodexLogRow>,
+) -> HashMap<String, DirectQuotaObservation> {
+    rows.sort_by_key(|row| row.id);
+    let identity_index = direct_account_identity_index(accounts);
+    let account_since: HashMap<&str, i64> = accounts
+        .iter()
+        .map(|account| {
+            (
+                account.id.as_str(),
+                direct_observation_since_seconds(account),
+            )
+        })
+        .collect();
+    let mut thread_accounts: HashMap<String, String> = HashMap::new();
+    let mut observations: HashMap<String, DirectQuotaObservation> = HashMap::new();
+    let mut reset_hints: HashMap<String, i64> = HashMap::new();
+
+    for row in rows {
+        if let Some(thread_id) = row.thread_id.as_deref() {
+            if let Some(account_id) = account_id_from_codex_log_identity(&row.body, &identity_index)
+            {
+                thread_accounts.insert(thread_id.to_string(), account_id);
+            }
+
+            let Some(account_id) = thread_accounts.get(thread_id) else {
+                continue;
+            };
+            let Some(event) = extract_websocket_event_value(&row.body) else {
+                continue;
+            };
+            let Some(observation) =
+                parse_direct_quota_observation_from_websocket_event(&event, row.ts)
+            else {
+                continue;
+            };
+            if observation.observed_at
+                < account_since
+                    .get(account_id.as_str())
+                    .copied()
+                    .unwrap_or_default()
+            {
+                continue;
+            }
+            if let Some(reset_at) = direct_observation_quota_reset_hint(&observation) {
+                if reset_at > observation.observed_at {
+                    reset_hints
+                        .entry(account_id.clone())
+                        .and_modify(|existing| *existing = (*existing).max(reset_at))
+                        .or_insert(reset_at);
+                }
+            }
+            if is_better_direct_quota_observation(&observation, observations.get(account_id)) {
+                observations.insert(account_id.clone(), observation);
+            }
+        }
+    }
+
+    for (account_id, observation) in observations.iter_mut() {
+        if !observation.exhausted || !direct_error_reset_looks_like_short_backoff(observation) {
+            continue;
+        }
+        let Some(reset_at) = reset_hints.get(account_id).copied() else {
+            continue;
+        };
+        if observation
+            .reset_at
+            .map(|current| reset_at > current)
+            .unwrap_or(true)
+        {
+            apply_direct_observation_reset_hint(observation, reset_at);
+        }
+    }
+
+    observations
+}
+
+fn read_recent_codex_log_rows(codex_home: &Path) -> Result<Vec<DirectCodexLogRow>, String> {
+    let path = codex_home.join("logs_2.sqlite");
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let connection = Connection::open_with_flags(
+        &path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|error| format!("打开 Codex Desktop 日志失败: {}", error))?;
+    let mut statement = connection
+        .prepare(
+            r#"
+            SELECT id, ts, thread_id, feedback_log_body
+            FROM (
+                SELECT id, ts, thread_id, feedback_log_body
+                FROM logs
+                ORDER BY id DESC
+                LIMIT ?1
+            )
+            WHERE feedback_log_body LIKE '%websocket event:%'
+               OR feedback_log_body LIKE '%user.account_id=%'
+               OR feedback_log_body LIKE '%user.email=%'
+            ORDER BY id DESC
+            "#,
+        )
+        .map_err(|error| format!("读取 Codex Desktop 日志 schema 失败: {}", error))?;
+    let mut rows = statement
+        .query_map([DIRECT_CODEX_LOG_SCAN_MAX_ROWS], |row| {
+            Ok(DirectCodexLogRow {
+                id: row.get(0)?,
+                ts: row.get(1)?,
+                thread_id: row.get(2)?,
+                body: row.get(3)?,
+            })
+        })
+        .map_err(|error| format!("查询 Codex Desktop 日志失败: {}", error))?;
+
+    let mut result = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .transpose()
+        .map_err(|error| format!("解析 Codex Desktop 日志失败: {}", error))?
+    {
+        result.push(row);
+    }
+    Ok(result)
+}
+
+fn latest_direct_quota_observations_from_codex_logs(
+    codex_home: &Path,
+    accounts: &[CodexAccount],
+) -> Result<HashMap<String, DirectQuotaObservation>, String> {
+    let rows = read_recent_codex_log_rows(codex_home)?;
+    Ok(latest_direct_quota_observations_from_codex_log_rows(
+        accounts, rows,
+    ))
+}
+
 fn is_better_direct_quota_observation(
     candidate: &DirectQuotaObservation,
     current: Option<&DirectQuotaObservation>,
@@ -976,7 +1343,7 @@ fn apply_direct_quota_observation(
     } else {
         account.quota = Some(build_exhausted_quota_snapshot_with_hint(
             account,
-            "codex_direct_oauth_upstream_error",
+            &observation.source,
             reset_at,
             observation.reset_after_seconds,
             observation.observed_at,
@@ -1064,6 +1431,89 @@ fn should_apply_direct_quota_observation(
     observed_remaining < current_remaining
 }
 
+fn account_has_direct_quota_exhaustion_snapshot(account: &CodexAccount) -> bool {
+    let Some(error) = account.quota_error.as_ref() else {
+        return false;
+    };
+    let code_or_message = error.code.as_deref().unwrap_or(error.message.as_str());
+    if !is_quota_exhaustion_error(code_or_message) && !is_quota_exhaustion_error(&error.message) {
+        return false;
+    }
+
+    account
+        .quota
+        .as_ref()
+        .and_then(quota_remaining_for_direct_observation)
+        == Some(0)
+}
+
+fn repair_exhausted_account_reset_from_direct_observation(
+    account: &mut CodexAccount,
+    observation: &DirectQuotaObservation,
+) -> bool {
+    if observation.exhausted || !account_has_direct_quota_exhaustion_snapshot(account) {
+        return false;
+    }
+    let Some(reset_at) = direct_observation_quota_reset_hint(observation) else {
+        return false;
+    };
+    if reset_at <= chrono::Utc::now().timestamp() {
+        return false;
+    }
+
+    let current_reset = account
+        .quota
+        .as_ref()
+        .and_then(quota_reset_time_for_preservation);
+    if current_reset
+        .map(|current| current >= reset_at)
+        .unwrap_or(false)
+    {
+        return false;
+    }
+
+    let Some(quota) = account.quota.as_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    if quota.hourly_percentage <= 0 && quota.hourly_window_present.unwrap_or(false) {
+        if quota.hourly_reset_time != Some(reset_at) {
+            quota.hourly_reset_time = Some(reset_at);
+            changed = true;
+        }
+    }
+    if quota.weekly_percentage <= 0 && quota.weekly_window_present.unwrap_or(false) {
+        if quota.weekly_reset_time != Some(reset_at) {
+            quota.weekly_reset_time = Some(reset_at);
+            changed = true;
+        }
+    }
+    if !changed && quota.weekly_percentage <= 0 {
+        quota.weekly_reset_time = Some(reset_at);
+        quota.weekly_window_present = Some(true);
+        changed = true;
+    }
+    if changed {
+        if let Some(raw_data) = quota
+            .raw_data
+            .as_mut()
+            .and_then(|value| value.as_object_mut())
+        {
+            raw_data.insert(
+                "reset_at".to_string(),
+                serde_json::Value::Number(reset_at.into()),
+            );
+            raw_data.insert(
+                "reset_source".to_string(),
+                serde_json::Value::String(observation.source.clone()),
+            );
+        }
+        account.usage_updated_at = Some(observation.observed_at);
+    }
+
+    changed
+}
+
 pub(crate) fn apply_latest_direct_oauth_observation_if_current(
     account: &mut CodexAccount,
 ) -> Result<bool, String> {
@@ -1123,6 +1573,78 @@ pub(crate) fn apply_latest_direct_oauth_observation_if_current(
         ));
     }
     Ok(true)
+}
+
+pub(crate) fn repair_direct_oauth_observations_for_accounts(
+    accounts: &mut [CodexAccount],
+) -> usize {
+    let codex_home = codex_account::get_codex_home();
+    let observations = match latest_direct_quota_observations_from_codex_logs(&codex_home, accounts)
+    {
+        Ok(value) => value,
+        Err(error) => {
+            logger::log_warn(&format!(
+                "[Codex Direct OAuth][QuotaRepair] 读取官方 Codex Desktop 日志失败: {}",
+                error
+            ));
+            return 0;
+        }
+    };
+
+    let mut repaired = 0usize;
+    for account in accounts.iter_mut() {
+        if account.is_api_key_auth() {
+            continue;
+        }
+        let Some(observation) = observations.get(&account.id) else {
+            continue;
+        };
+        if repair_exhausted_account_reset_from_direct_observation(account, observation) {
+            match codex_account::save_account(account) {
+                Ok(()) => {
+                    repaired += 1;
+                    logger::log_warn(&format!(
+                        "[Codex Direct OAuth][QuotaRepair] 已根据官方 Codex Desktop rate_limits 日志修复耗尽账号 reset 时间: account_id={}, source={}, reset_at={:?}",
+                        account.id, observation.source, direct_observation_quota_reset_hint(observation)
+                    ));
+                }
+                Err(error) => logger::log_warn(&format!(
+                    "[Codex Direct OAuth][QuotaRepair] 写回 quota reset 时间失败: account_id={}, error={}",
+                    account.id, error
+                )),
+            }
+            continue;
+        }
+        if should_keep_existing_quota_exhaustion(account, observation.observed_at)
+            && account
+                .quota_error
+                .as_ref()
+                .map(|error| error.timestamp >= observation.observed_at)
+                .unwrap_or(false)
+        {
+            continue;
+        }
+        if !should_apply_direct_quota_observation(account, observation) {
+            continue;
+        }
+
+        apply_direct_quota_observation(account, observation);
+        match codex_account::save_account(account) {
+            Ok(()) => {
+                repaired += 1;
+                logger::log_warn(&format!(
+                    "[Codex Direct OAuth][QuotaRepair] 已根据官方 Codex Desktop websocket 日志修复 quota 缓存: account_id={}, source={}, exhausted={}, reset_at={:?}",
+                    account.id, observation.source, observation.exhausted, observation.reset_at
+                ));
+            }
+            Err(error) => logger::log_warn(&format!(
+                "[Codex Direct OAuth][QuotaRepair] 写回 quota 缓存失败: account_id={}, error={}",
+                account.id, error
+            )),
+        }
+    }
+
+    repaired
 }
 
 fn is_new_api_account(account: &CodexAccount) -> bool {
@@ -1584,6 +2106,256 @@ mod tests {
         .expect("reset hint should parse string retry_after alias");
 
         assert_eq!(hint, (Some(1_700_000_045), Some(45)));
+    }
+
+    #[test]
+    fn direct_codex_log_error_observation_maps_identity_and_zeroes_quota() {
+        let mut account = test_account();
+        account.id = "codex_direct_log_error".to_string();
+        account.email = "direct@example.com".to_string();
+        account.account_id = Some("acc-direct".to_string());
+        account.last_used = 1_700_000_000;
+        account.usage_updated_at = Some(1_700_000_000);
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 100,
+            hourly_reset_time: None,
+            hourly_window_minutes: None,
+            hourly_window_present: Some(false),
+            weekly_percentage: 97,
+            weekly_reset_time: Some(1_700_010_000),
+            weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+        let rows = vec![
+            DirectCodexLogRow {
+                id: 1,
+                ts: 1_700_000_010,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"codex_otel.log_only user.account_id="acc-direct" user.email="direct@example.com""#
+                    .to_string(),
+            },
+            DirectCodexLogRow {
+                id: 2,
+                ts: 1_700_000_020,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"websocket.stream_request: websocket event: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","reset_after_seconds":120}}}"#
+                    .to_string(),
+            },
+        ];
+
+        let observations =
+            latest_direct_quota_observations_from_codex_log_rows(&[account.clone()], rows);
+        let observation = observations
+            .get("codex_direct_log_error")
+            .expect("direct websocket error should map to account");
+
+        assert!(observation.exhausted);
+        assert_eq!(observation.source, "codex_official_websocket_error");
+        assert_eq!(observation.reset_at, Some(1_700_000_140));
+        apply_direct_quota_observation(&mut account, observation);
+        let quota = account.quota.as_ref().expect("quota should be repaired");
+        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.hourly_reset_time, Some(1_700_000_140));
+        assert_eq!(quota.weekly_reset_time, Some(1_700_000_140));
+        assert_eq!(
+            account
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("usage_limit_reached")
+        );
+    }
+
+    #[test]
+    fn direct_codex_log_rate_limit_observation_maps_identity_and_zeroes_weekly_quota() {
+        let mut account = test_account();
+        account.id = "codex_direct_log_rate_limits".to_string();
+        account.email = "direct@example.com".to_string();
+        account.account_id = Some("acc-direct".to_string());
+        account.last_used = 1_700_000_000;
+        account.usage_updated_at = Some(1_700_000_000);
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 100,
+            hourly_reset_time: None,
+            hourly_window_minutes: None,
+            hourly_window_present: Some(false),
+            weekly_percentage: 97,
+            weekly_reset_time: Some(1_700_010_000),
+            weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+            weekly_window_present: Some(true),
+            raw_data: None,
+        });
+        let rows = vec![
+            DirectCodexLogRow {
+                id: 1,
+                ts: 1_700_000_010,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"codex_otel.log_only user.account_id="acc-direct" user.email="direct@example.com""#
+                    .to_string(),
+            },
+            DirectCodexLogRow {
+                id: 2,
+                ts: 1_700_000_020,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"websocket.stream_request: websocket event: {"type":"codex.rate_limits","plan_type":"free","rate_limits":{"allowed":false,"limit_reached":true,"primary":{"used_percent":3,"window_minutes":10080,"reset_after_seconds":120,"reset_at":1700000140},"secondary":null}}"#
+                    .to_string(),
+            },
+        ];
+
+        let observations =
+            latest_direct_quota_observations_from_codex_log_rows(&[account.clone()], rows);
+        let observation = observations
+            .get("codex_direct_log_rate_limits")
+            .expect("direct websocket rate_limits should map to account");
+
+        assert!(observation.exhausted);
+        assert_eq!(observation.source, "codex_official_websocket_rate_limits");
+        assert_eq!(observation.reset_at, Some(1_700_000_140));
+        apply_direct_quota_observation(&mut account, observation);
+        let quota = account.quota.as_ref().expect("quota should be repaired");
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(1_700_000_140));
+        assert_eq!(quota.weekly_window_present, Some(true));
+        assert_eq!(
+            quota
+                .raw_data
+                .as_ref()
+                .and_then(|value| value.get("source"))
+                .and_then(|value| value.as_str()),
+            Some("codex_official_websocket_rate_limits")
+        );
+        assert_eq!(
+            account
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("usage_limit_reached")
+        );
+    }
+
+    #[test]
+    fn direct_codex_log_error_uses_rate_limit_reset_over_short_retry_backoff() {
+        let mut account = test_account();
+        account.id = "codex_direct_log_error_with_window_reset".to_string();
+        account.email = "direct@example.com".to_string();
+        account.account_id = Some("acc-direct".to_string());
+        account.last_used = 1_700_000_000;
+        let rows = vec![
+            DirectCodexLogRow {
+                id: 1,
+                ts: 1_700_000_010,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"codex_otel.log_only user.account_id="acc-direct" user.email="direct@example.com""#
+                    .to_string(),
+            },
+            DirectCodexLogRow {
+                id: 2,
+                ts: 1_700_000_020,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"websocket.stream_request: websocket event: {"type":"codex.rate_limits","plan_type":"free","rate_limits":{"allowed":true,"limit_reached":false,"primary":{"used_percent":88,"window_minutes":10080,"reset_after_seconds":604800,"reset_at":1700604820},"secondary":null}}"#
+                    .to_string(),
+            },
+            DirectCodexLogRow {
+                id: 3,
+                ts: 1_700_000_030,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"websocket.stream_request: websocket event: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","reset_after_seconds":120}}}"#
+                    .to_string(),
+            },
+        ];
+
+        let observations = latest_direct_quota_observations_from_codex_log_rows(&[account], rows);
+        let observation = observations
+            .get("codex_direct_log_error_with_window_reset")
+            .expect("direct websocket error should map to account");
+
+        assert!(observation.exhausted);
+        assert_eq!(observation.source, "codex_official_websocket_error");
+        assert_eq!(
+            observation.reset_at,
+            Some(1_700_604_820),
+            "short websocket error retry/backoff must not replace the quota window reset"
+        );
+        assert_eq!(
+            observation.reset_after_seconds,
+            Some(604_790),
+            "reset_after_seconds should be recomputed from the selected quota window reset"
+        );
+    }
+
+    #[test]
+    fn direct_codex_log_parser_ignores_request_body_usage_limit_text_without_websocket_event() {
+        let mut account = test_account();
+        account.id = "codex_direct_log_false_positive".to_string();
+        account.email = "direct@example.com".to_string();
+        account.account_id = Some("acc-direct".to_string());
+        account.last_used = 1_700_000_000;
+        let rows = vec![
+            DirectCodexLogRow {
+                id: 1,
+                ts: 1_700_000_010,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"codex_otel.log_only user.account_id="acc-direct" user.email="direct@example.com""#
+                    .to_string(),
+            },
+            DirectCodexLogRow {
+                id: 2,
+                ts: 1_700_000_020,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"request_body={"prompt":"请检查 usage_limit_reached 是否出现"}"#.to_string(),
+            },
+            DirectCodexLogRow {
+                id: 3,
+                ts: 1_700_000_030,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"websocket.stream_request: websocket event: {"type":"response.output_text.delta","delta":"usage_limit_reached"}"#
+                    .to_string(),
+            },
+        ];
+
+        let observations = latest_direct_quota_observations_from_codex_log_rows(&[account], rows);
+
+        assert!(
+            observations.is_empty(),
+            "non-error websocket deltas and request bodies must not zero quota"
+        );
+    }
+
+    #[test]
+    fn direct_codex_log_parser_ignores_ambiguous_email_identity() {
+        let mut first = test_account();
+        first.id = "codex_direct_log_first".to_string();
+        first.email = "shared@example.com".to_string();
+        first.last_used = 1_700_000_000;
+        let mut second = test_account();
+        second.id = "codex_direct_log_second".to_string();
+        second.email = "shared@example.com".to_string();
+        second.last_used = 1_700_000_000;
+        let rows = vec![
+            DirectCodexLogRow {
+                id: 1,
+                ts: 1_700_000_010,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"codex_otel.log_only user.email="shared@example.com""#.to_string(),
+            },
+            DirectCodexLogRow {
+                id: 2,
+                ts: 1_700_000_020,
+                thread_id: Some("thread-a".to_string()),
+                body: r#"websocket.stream_request: websocket event: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","reset_after_seconds":120}}}"#
+                    .to_string(),
+            },
+        ];
+
+        let observations =
+            latest_direct_quota_observations_from_codex_log_rows(&[first, second], rows);
+
+        assert!(
+            observations.is_empty(),
+            "ambiguous email-only identity must not zero an arbitrary account"
+        );
     }
 
     #[test]

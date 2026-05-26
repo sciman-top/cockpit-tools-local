@@ -484,6 +484,15 @@ assert.equal(
 );
 
 assert.equal(
+  codexTypes.formatCodexResetTime(
+    1_700_000_360,
+    (key) => (key === 'common.shared.quota.resetDone' ? '已重置' : key),
+  ),
+  codexTypes.formatCodexResetTimeAbsolute(1_700_000_360),
+  'Codex quota reset formatter should keep showing the reset timestamp after it passes',
+);
+
+assert.equal(
   codexTypes.isCodexAccountErrorState(codexAccount('limited', quota(0, 0), {
     quota_error: quotaLimitedError,
   })),

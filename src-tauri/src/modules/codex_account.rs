@@ -2272,7 +2272,8 @@ fn run_startup_quota_consistency_scan_inner(
 
     let (mut accounts, failed_accounts) = load_accounts_for_startup_quota_scan();
     let scanned_accounts = accounts.len();
-    let repaired_accounts = repair_accounts_quota_from_local_access_health(&mut accounts);
+    let repaired_accounts = repair_accounts_quota_from_local_access_health(&mut accounts)
+        + crate::modules::codex_quota::repair_direct_oauth_observations_for_accounts(&mut accounts);
     let report = CodexStartupQuotaConsistencyScanReport {
         started_at_ms,
         finished_at_ms: chrono::Utc::now().timestamp_millis(),
@@ -2413,6 +2414,7 @@ pub fn list_accounts() -> Vec<CodexAccount> {
         )
         .collect();
     repair_accounts_quota_from_local_access_health(&mut accounts);
+    crate::modules::codex_quota::repair_direct_oauth_observations_for_accounts(&mut accounts);
     accounts
 }
 
@@ -2446,6 +2448,7 @@ pub fn list_accounts_checked() -> Result<Vec<CodexAccount>, String> {
     }
 
     repair_accounts_quota_from_local_access_health(&mut accounts);
+    crate::modules::codex_quota::repair_direct_oauth_observations_for_accounts(&mut accounts);
 
     Ok(accounts)
 }
@@ -4480,6 +4483,7 @@ mod tests {
         CodexLocalAccessAccountHealth, CodexLocalAccessHealthRegistry,
     };
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+    use rusqlite::Connection;
     use std::fs;
     use std::sync::{LazyLock, Mutex};
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -4511,6 +4515,35 @@ mod tests {
             weekly_window_minutes: None,
             weekly_window_present: Some(false),
             raw_data: None,
+        }
+    }
+
+    fn write_codex_logs_sqlite(codex_home: &std::path::Path, rows: &[(i64, i64, &str, &str)]) {
+        fs::create_dir_all(codex_home).expect("codex home should exist");
+        let connection =
+            Connection::open(codex_home.join("logs_2.sqlite")).expect("open test sqlite log");
+        connection
+            .execute(
+                r#"
+                CREATE TABLE logs (
+                    id INTEGER PRIMARY KEY,
+                    ts INTEGER NOT NULL,
+                    thread_id TEXT,
+                    feedback_log_body TEXT NOT NULL
+                )
+                "#,
+                [],
+            )
+            .expect("create logs table");
+        let mut statement = connection
+            .prepare(
+                "INSERT INTO logs (id, ts, thread_id, feedback_log_body) VALUES (?1, ?2, ?3, ?4)",
+            )
+            .expect("prepare insert logs");
+        for (id, ts, thread_id, body) in rows {
+            statement
+                .execute(rusqlite::params![id, ts, thread_id, body])
+                .expect("insert log row");
         }
     }
 
@@ -4642,6 +4675,186 @@ mod tests {
         assert_eq!(quota.weekly_percentage, 0);
         assert_eq!(quota.weekly_reset_time, Some(reset_at));
         assert_eq!(quota.hourly_window_present, Some(false));
+    }
+
+    #[test]
+    fn list_accounts_checked_repairs_direct_oauth_from_official_codex_logs() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-list-direct-websocket-log-repair-test");
+        let local_access_root = guard.home_dir.join(".antigravity_cockpit");
+        let previous_local_access_root = std::env::var_os("COCKPIT_LOCAL_ACCESS_DATA_ROOT");
+        std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", &local_access_root);
+
+        let now = chrono::Utc::now().timestamp();
+        let reset_at = now + 7_200;
+        let mut account = test_codex_account_with_quota(
+            "codex_list_direct_websocket_log",
+            CodexQuota {
+                hourly_percentage: 100,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 97,
+                weekly_reset_time: Some(reset_at + 10_000),
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            },
+        );
+        account.email = "direct@example.com".to_string();
+        account.account_id = Some("acc-direct".to_string());
+        account.last_used = now - 60;
+        account.usage_updated_at = Some(now - 60);
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("free".to_string()),
+            subscription_active_until: None,
+            created_at: now - 120,
+            last_used: account.last_used,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+        write_codex_logs_sqlite(
+            &guard.codex_home(),
+            &[
+                (
+                    1,
+                    now - 30,
+                    "thread-a",
+                    r#"codex_otel.log_only user.account_id="acc-direct" user.email="direct@example.com""#,
+                ),
+                (
+                    2,
+                    now,
+                    "thread-a",
+                    r#"websocket.stream_request: websocket event: {"type":"response.failed","response":{"error":{"type":"usage_limit_reached","reset_after_seconds":7200}}}"#,
+                ),
+            ],
+        );
+
+        let accounts = list_accounts_checked().expect("accounts should list");
+        match previous_local_access_root {
+            Some(value) => std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", value),
+            None => std::env::remove_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT"),
+        }
+
+        let listed = accounts
+            .iter()
+            .find(|item| item.id == "codex_list_direct_websocket_log")
+            .expect("account should be listed");
+        let quota = listed.quota.as_ref().expect("quota should be repaired");
+        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at));
+        assert_eq!(
+            listed
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("usage_limit_reached")
+        );
+
+        let persisted = load_account("codex_list_direct_websocket_log")
+            .expect("repaired account should be persisted");
+        assert_eq!(
+            persisted
+                .quota
+                .as_ref()
+                .map(|quota| quota.weekly_percentage),
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn list_accounts_checked_repairs_exhausted_direct_oauth_reset_from_rate_limit_logs() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-list-direct-reset-hint-repair-test");
+        let local_access_root = guard.home_dir.join(".antigravity_cockpit");
+        let previous_local_access_root = std::env::var_os("COCKPIT_LOCAL_ACCESS_DATA_ROOT");
+        std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", &local_access_root);
+
+        let now = chrono::Utc::now().timestamp();
+        let reset_at = now + 4 * 24 * 60 * 60;
+        let mut account = test_codex_account_with_quota(
+            "codex_list_direct_reset_hint",
+            CodexQuota {
+                hourly_percentage: 0,
+                hourly_reset_time: None,
+                hourly_window_minutes: None,
+                hourly_window_present: Some(false),
+                weekly_percentage: 0,
+                weekly_reset_time: Some(now - 60),
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: Some(serde_json::json!({
+                    "source": "codex_official_websocket_error",
+                    "quota_exhausted": true,
+                    "reset_after_seconds": 120
+                })),
+            },
+        );
+        account.email = "direct@example.com".to_string();
+        account.account_id = Some("acc-direct".to_string());
+        account.last_used = now - 120;
+        account.usage_updated_at = Some(now - 30);
+        account.quota_error = Some(crate::models::codex::CodexQuotaErrorInfo {
+            code: Some("usage_limit_reached".to_string()),
+            message: "Codex Direct OAuth upstream quota exhausted".to_string(),
+            timestamp: now - 30,
+        });
+        let mut index = CodexAccountIndex::new();
+        index.current_account_id = Some(account.id.clone());
+        index.accounts.push(CodexAccountSummary {
+            id: account.id.clone(),
+            email: account.email.clone(),
+            plan_type: Some("free".to_string()),
+            subscription_active_until: None,
+            created_at: now - 240,
+            last_used: account.last_used,
+        });
+        save_account_index(&index).expect("index should be saved");
+        save_account(&account).expect("account should be saved");
+        let rate_limit_log = format!(
+            r#"websocket.stream_request: websocket event: {{"type":"codex.rate_limits","plan_type":"free","rate_limits":{{"allowed":true,"limit_reached":false,"primary":{{"used_percent":88,"window_minutes":10080,"reset_after_seconds":{},"reset_at":{}}},"secondary":null}}}}"#,
+            reset_at - (now - 10),
+            reset_at
+        );
+        write_codex_logs_sqlite(
+            &guard.codex_home(),
+            &[
+                (
+                    1,
+                    now - 20,
+                    "thread-a",
+                    r#"codex_otel.log_only user.account_id="acc-direct" user.email="direct@example.com""#,
+                ),
+                (2, now - 10, "thread-a", rate_limit_log.as_str()),
+            ],
+        );
+
+        let accounts = list_accounts_checked().expect("accounts should list");
+        match previous_local_access_root {
+            Some(value) => std::env::set_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT", value),
+            None => std::env::remove_var("COCKPIT_LOCAL_ACCESS_DATA_ROOT"),
+        }
+
+        let listed = accounts
+            .iter()
+            .find(|item| item.id == "codex_list_direct_reset_hint")
+            .expect("account should be listed");
+        let quota = listed.quota.as_ref().expect("quota should be repaired");
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.weekly_reset_time, Some(reset_at));
+        assert_eq!(
+            listed
+                .quota_error
+                .as_ref()
+                .and_then(|error| error.code.as_deref()),
+            Some("usage_limit_reached")
+        );
     }
 
     #[test]
