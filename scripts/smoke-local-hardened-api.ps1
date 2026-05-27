@@ -795,11 +795,11 @@ function Get-QuotaFallbackAuditEvidence {
   }
   for ($i = 0; $i -lt $events.Count; $i++) {
     $event = $events[$i]
+    $isUsageLimitEvent = Test-SmokeUsageLimitEvent $event
     $isBlockingAccountEvent = (Test-SmokeValidAccountHash $event.accountHash) -and (
-      ($event.status -eq 429 -and (Test-SmokeUsageLimitEvent $event)) -or
+      ($event.status -eq 429 -and $isUsageLimitEvent) -or
       $event.phase -eq "model_cooldown_applied" -or
-      $event.phase -eq "fallback_selected" -or
-      $event.phase -eq "fallback_blocked"
+      (($event.phase -eq "fallback_selected" -or $event.phase -eq "fallback_blocked") -and $isUsageLimitEvent)
     )
     if ($isBlockingAccountEvent) {
       if ($firstBlockedAccountIndex -lt 0) {

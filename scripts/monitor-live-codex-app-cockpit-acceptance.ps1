@@ -876,11 +876,11 @@ function Get-AuditAcceptanceSummary {
       $firstFallbackIndex = $i
       $firstFallbackAccountHash = $event.accountHash
     }
+    $isUsageLimitEvent = Test-UsageLimitEvent $event
     $isBlockingAccountEvent = (Test-ValidAccountHash $event.accountHash) -and (
-      ($event.status -eq 429 -and (Test-UsageLimitEvent $event)) -or
+      ($event.status -eq 429 -and $isUsageLimitEvent) -or
       $event.phase -eq "model_cooldown_applied" -or
-      $event.phase -eq "fallback_selected" -or
-      $event.phase -eq "fallback_blocked"
+      (($event.phase -eq "fallback_selected" -or $event.phase -eq "fallback_blocked") -and $isUsageLimitEvent)
     )
     if ($isBlockingAccountEvent) {
       if ($firstBlockedAccountIndex -lt 0) {

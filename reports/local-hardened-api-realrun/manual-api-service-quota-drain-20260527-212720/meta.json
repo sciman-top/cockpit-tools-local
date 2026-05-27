@@ -1,0 +1,26 @@
+{
+  "mode": "manual_api_service_quota_drain_monitor",
+  "startedAt": "2026-05-27T21:27:20.3831131+08:00",
+  "runDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720",
+  "pid": 32752,
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720\\monitor-checkpoint.json",
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720\\monitor.stdout.json",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720\\monitor.stderr.log",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720\\monitor-exit-code.txt",
+  "stopSignal": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720\\monitor.stop",
+  "durationSeconds": 1800,
+  "pollIntervalSeconds": 2,
+  "requiredFallbackCycles": 1,
+  "requiredDistinctHealthyAccounts": 1,
+  "requiredCompletedStreams": 3,
+  "includeExistingAudit": false,
+  "safety": [
+    "read-only live monitor",
+    "does not switch providers",
+    "does not refresh quota",
+    "does not start/stop/restart/kill Codex App, Codex CLI, or Cockpit service",
+    "tracks only new audit events from startup offset"
+  ],
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 1800 -PollIntervalSeconds 2 -DataRoot C:\\Users\\sciman\\.antigravity_cockpit -CodexHome C:\\Users\\sciman\\.codex -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720 -ExitCodeFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720\\monitor-exit-code.txt -CheckpointPath D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720\\monitor-checkpoint.json -CheckpointIntervalSeconds 5 -StopSignalFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-20260527-212720\\monitor.stop -RequireQuotaFallback -RequireStreamCompletion -RequireCliConfigUntouched -RequireAppStable -RequiredFallbackCycles 1 -RequiredDistinctHealthyAccounts 1 -RequiredCompletedStreams 3 -WriteReport -Quiet"
+}

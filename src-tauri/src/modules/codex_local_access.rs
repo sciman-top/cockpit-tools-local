@@ -1990,7 +1990,7 @@ async fn local_backpressure_bypass_reason(request: &ParsedRequest) -> Option<&'s
                 return Some(reason);
             }
             OfficialCodexStickyRoutingBoundary::TurnState { .. } => {
-                if resolve_request_affinity_account(request).await.is_some() {
+                if active_stream_affinity_account_for_request(request).is_some() {
                     return Some(reason);
                 }
             }
@@ -10725,12 +10725,26 @@ async fn proxy_request_with_account_pool(
         .or_else(|| request_affinity_account_from_registry(&health_registry, request, now));
     let hard_affinity_account_id = active_stream_affinity_account_id
         .clone()
-        .or(response_affinity_account_id.clone())
-        .or(request_affinity_account_id.clone());
+        .or(response_affinity_account_id.clone());
     let affinity_account_id = hard_affinity_account_id
         .clone()
-        .or(response_affinity_account_id.clone())
         .or(request_affinity_account_id.clone());
+    let hard_affinity_source = if active_stream_affinity_account_id.is_some() {
+        "active_stream"
+    } else if response_affinity_account_id.is_some() {
+        "previous_response_id"
+    } else {
+        "none"
+    };
+    let request_affinity_mode = if request_affinity_account_id.is_some() {
+        if active_stream_affinity_account_id.is_some() {
+            "active_stream_hard"
+        } else {
+            "soft"
+        }
+    } else {
+        "absent"
+    };
     if let Some(account_id) = affinity_account_id
         .as_deref()
         .map(str::trim)
@@ -10815,8 +10829,8 @@ async fn proxy_request_with_account_pool(
             }
 
             let now = now_ms();
-            let is_affinity_continuation =
-                affinity_account_id.as_deref() == Some(account_id.as_str());
+            let is_hard_affinity_continuation =
+                hard_affinity_account_id.as_deref() == Some(account_id.as_str());
             let has_hard_block =
                 health_registry_account_has_hard_block(&health_registry, &account_id);
             // A bound continuation may still be accepted upstream even while
@@ -10827,13 +10841,13 @@ async fn proxy_request_with_account_pool(
                 Some(&routing_hint.model_key),
                 now,
             ) {
-                if !is_affinity_continuation || has_hard_block {
+                if !is_hard_affinity_continuation || has_hard_block {
                     round_cooldown_wait = min_cooldown_wait(round_cooldown_wait, wait);
                     continue;
                 }
             }
 
-            if (!is_affinity_continuation || has_hard_block)
+            if (!is_hard_affinity_continuation || has_hard_block)
                 && !health_registry_account_is_schedulable(
                     &health_registry,
                     &account_id,
@@ -10846,7 +10860,7 @@ async fn proxy_request_with_account_pool(
 
             if let Some(wait) = get_model_cooldown_wait(&account_id, &routing_hint.model_key).await
             {
-                if !is_affinity_continuation || has_hard_block {
+                if !is_hard_affinity_continuation || has_hard_block {
                     round_cooldown_wait = Some(match round_cooldown_wait {
                         Some(current) if current <= wait => current,
                         _ => wait,
@@ -11180,6 +11194,14 @@ async fn proxy_request_with_account_pool(
                     selector_detail.insert(
                         "request_affinity_present".to_string(),
                         request_affinity_account_id.is_some().to_string(),
+                    );
+                    selector_detail.insert(
+                        "request_affinity_mode".to_string(),
+                        request_affinity_mode.to_string(),
+                    );
+                    selector_detail.insert(
+                        "hard_affinity_source".to_string(),
+                        hard_affinity_source.to_string(),
                     );
                     record_audit_event_from_context(
                         &context,
@@ -11578,9 +11600,7 @@ fn request_has_codex_sticky_routing_boundary(request: &ParsedRequest) -> bool {
 }
 
 async fn request_has_resolved_hard_affinity(request: &ParsedRequest) -> bool {
-    if active_stream_affinity_account_for_request(request).is_some()
-        || resolve_request_affinity_account(request).await.is_some()
-    {
+    if active_stream_affinity_account_for_request(request).is_some() {
         return true;
     }
 
@@ -15453,7 +15473,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn gateway_generates_turn_state_for_responses_and_binds_followup_to_original_account() {
+    async fn gateway_generated_turn_state_soft_affinity_falls_back_after_completed_stream() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -15483,7 +15503,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("fake upstream should have addr");
         let upstream_seen_task = std::sync::Arc::clone(&upstream_seen);
         let upstream_server = tokio::spawn(async move {
-            for _ in 0..2 {
+            for _ in 0..3 {
                 let (mut socket, _) = upstream_listener
                     .accept()
                     .await
@@ -15547,11 +15567,11 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
 
                 let body = concat!(
                     "event: response.created\n",
-                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_current_unexpected\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_current_after_soft_affinity\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
                     "event: response.output_text.delta\n",
                     "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"CURRENT\"}\n\n",
                     "event: response.completed\n",
-                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_current_unexpected\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_current_after_soft_affinity\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
                     "data: [DONE]\n\n"
                 );
                 let response = format!(
@@ -15762,21 +15782,16 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let _ = fs::remove_dir_all(&root);
 
         assert!(
-            second_response_text.contains("HTTP/1.1 429 Too Many Requests"),
-            "same-turn followup should surface an upstream-shaped quota error instead of a local completion: {}",
+            second_response_text.contains("HTTP/1.1 200 OK")
+                && second_response_text.contains("resp_current_after_soft_affinity")
+                && second_response_text.contains("CURRENT"),
+            "completed-stream turn-state affinity should fall back instead of waiting forever on an exhausted old account: {}",
             second_response_text
         );
         assert!(
             !second_response_text.contains("resp_cockpit_pool_unavailable_")
-                && !second_response_text.contains("response.completed")
                 && !second_response_text.contains("synthetic_pool_unavailable_notice"),
-            "same-turn followup must not be closed by local pool_unavailable completion: {}",
-            second_response_text
-        );
-        assert!(
-            !second_response_text.contains("resp_current_unexpected")
-                && !second_response_text.contains("CURRENT"),
-            "same-turn followup must not switch to the replacement account: {}",
+            "completed-stream turn-state fallback must stay on real upstream output: {}",
             second_response_text
         );
         assert!(
@@ -15790,19 +15805,22 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             seen.iter()
                 .any(|request| request.contains("Bearer sk-local-old")
                     && request.to_ascii_lowercase().contains("x-codex-turn-state:")),
-            "followup should use old account with generated turn-state: {}",
+            "soft-affinity followup should try the old account first: {}",
             seen_text
         );
         assert!(
-            !seen
+            seen
                 .iter()
                 .any(|request| request.contains("Bearer sk-local-current")),
-            "same-turn followup must not be replayed on current account: {}",
+            "soft-affinity followup should fall back to the current account after old-account quota exhaustion: {}",
             seen_text
         );
 
-        assert!(audit.contains("\"phase\":\"fallback_blocked\""));
-        assert!(audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(audit.contains("\"phase\":\"fallback_selected\""));
+        assert!(audit.contains("\"outcome\":\"next_account\""));
+        assert!(audit.contains("\"request_affinity_mode\":\"soft\""));
+        assert!(audit.contains("\"hard_affinity_bound\":\"false\""));
+        assert!(!audit.contains("\"outcome\":\"hard_affinity\""));
         assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
         assert!(
             !audit.contains(turn_state.as_str()),
@@ -16000,9 +16018,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
             gateway_request_id: "gw-test-7".to_string(),
         };
+        let active_context = build_audit_context(&request, Some("api-old"));
+        let mut active_lease =
+            grant_active_stream_lease_for_request(&active_context, "api-old", &request);
         let err = proxy_request_with_account_pool(&request, &collection)
             .await
-            .expect_err("turn-state hard affinity should not fall back to replacement account");
+            .expect_err("active stream turn-state hard affinity should not fall back to replacement account");
         assert_eq!(err.account_id.as_deref(), Some("api-old"));
         assert_eq!(err.status, StatusCode::TOO_MANY_REQUESTS.as_u16());
 
@@ -16023,6 +16044,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         );
         assert!(!audit.contains("\"phase\":\"fallback_selected\""));
 
+        active_lease.release(ActiveStreamTerminal::Completed);
         {
             let mut runtime = gateway_runtime().lock().await;
             *runtime = super::GatewayRuntime::default();
@@ -16236,11 +16258,14 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
             gateway_request_id: "gw-test-7b".to_string(),
         };
+        let active_context = build_audit_context(&request, Some("api-old"));
+        let mut active_lease =
+            grant_active_stream_lease_for_request(&active_context, "api-old", &request);
 
         let success = proxy_request_with_account_pool(&request, &collection)
             .await
             .expect(
-                "turn-state hard affinity should retry the original account after a short reset",
+                "active stream hard affinity should retry the original account after a short reset",
             );
         assert_eq!(success.account_id, "api-old");
         let response_text = success
@@ -16281,6 +16306,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(audit.contains("\"outcome\":\"retrying\""));
         assert!(!audit.contains("\"phase\":\"fallback_selected\""));
 
+        active_lease.release(ActiveStreamTerminal::Completed);
         {
             let mut runtime = gateway_runtime().lock().await;
             *runtime = super::GatewayRuntime::default();
@@ -16518,6 +16544,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             &persisted_registry,
         )
         .expect("persistent turn-state affinity should be written");
+        let active_context = build_audit_context(&affinity_request, Some("api-old"));
+        let mut active_lease =
+            grant_active_stream_lease_for_request(&active_context, "api-old", &affinity_request);
         {
             let mut runtime = gateway_runtime().lock().await;
             runtime.request_affinity.clear();
@@ -16560,6 +16589,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let audit =
             fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE)).unwrap_or_default();
 
+        active_lease.release(ActiveStreamTerminal::Completed);
         {
             let mut runtime = gateway_runtime().lock().await;
             *runtime = super::GatewayRuntime::default();

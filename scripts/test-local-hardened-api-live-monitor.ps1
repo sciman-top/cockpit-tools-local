@@ -304,6 +304,34 @@ try {
   Assert-Equal $newRequestReuseSummary.continuitySummary.newRequestAvoidsExhaustedCooldown.status "fail" "expected new-request reuse summary fail"
   Assert-Equal $newRequestReuseSummary.audit.newRequestBlockedReuseCount 1 "expected one blocked-account reuse by a new request"
 
+  $dataRootTransientServerError = Join-Path $tempRoot "data-transient-server-error"
+  $auditTransientServerError = Join-Path $dataRootTransientServerError "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditTransientServerError @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-transient"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-transient" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-transient"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:transient"; status = 500; errorType = "server_error"; outcome = "failover"; detail = [ordered]@{ gateway_request_id = "gw-transient" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-transient"; phase = "fallback_selected"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:transient"; status = 500; errorType = "server_error"; outcome = "next_account"; detail = [ordered]@{ gateway_request_id = "gw-transient" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-quota"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ gateway_request_id = "gw-quota"; provider_code = "usage_limit_reached" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-quota"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded"; detail = [ordered]@{ gateway_request_id = "gw-quota" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-next" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-next"; phase = "routing_decision"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:transient"; status = 200; outcome = "selected"; detail = [ordered]@{ gateway_request_id = "gw-next"; selected_reason = "fill_first_selected" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "req-next"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:transient"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-next"; terminal_origin = "upstream_completed" } }
+  )
+  $transientServerErrorOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootTransientServerError `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "transient server-error fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $transientServerErrorSummary = Convert-JsonOutput $transientServerErrorOutput "transient server-error fixture"
+  Assert-True ($transientServerErrorSummary.audit.blockedAccountHashes -contains "sha256:exhausted") "expected usage-limit account to be tracked as blocked"
+  Assert-True ($transientServerErrorSummary.audit.blockedAccountHashes -notcontains "sha256:transient") "server_error fallback_selected must not mark a later-healthy account as exhausted"
+  Assert-Equal $transientServerErrorSummary.audit.newRequestBlockedReuseCount 0 "expected later healthy reuse of the transient-error account not to be counted as blocked reuse"
+
   $dataRootProcessFilter = Join-Path $tempRoot "data-process-filter"
   New-Item -ItemType Directory -Force -Path $dataRootProcessFilter | Out-Null
   $processFilterOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
