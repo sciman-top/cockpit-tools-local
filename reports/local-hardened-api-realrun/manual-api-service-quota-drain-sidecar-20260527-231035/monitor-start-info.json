@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-05-27T23:10:35.9159851+08:00",
+  "purpose": "manual api service quota drain sidecar live monitor",
+  "pid": 30956,
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\CODE\\external\\Cockpit-Tools-Local\\scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 3600 -PollIntervalSeconds 2 -CheckpointIntervalSeconds 5 -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035 -CheckpointPath D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035\\monitor-checkpoint.json -ExitCodeFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035\\monitor-exit-code.txt -StopSignalFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035\\monitor.stop -RequireQuotaFallback -RequireStreamCompletion -RequiredCompletedStreams 3 -WriteReport -Quiet",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035",
+  "stdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035\\monitor.stdout.json",
+  "stderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035\\monitor.stderr.log",
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035\\monitor-checkpoint.json",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035\\monitor-exit-code.txt",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260527-231035\\monitor.stop",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "safety": [
+    "read-only monitor",
+    "new audit lines only",
+    "does not start stop restart or kill Codex/Cockpit",
+    "does not switch provider or restore config"
+  ]
+}

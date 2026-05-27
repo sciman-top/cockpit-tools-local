@@ -838,6 +838,7 @@ function Get-QuotaFallbackAuditEvidence {
       $localCompletion = $null
       $terminalCompletion = $null
       $terminal429 = $null
+      $structuredTerminal429 = $null
       for ($j = $i + 1; $j -lt $events.Count; $j++) {
         $candidate = $events[$j]
         if ($candidate.requestId -ne $event.requestId) {
@@ -867,6 +868,9 @@ function Get-QuotaFallbackAuditEvidence {
           [int]$candidate.status -eq 429
         ) {
           $terminal429 = $candidate
+          if (Test-SmokeUsageLimitEvent $candidate) {
+            $structuredTerminal429 = $candidate
+          }
           break
         }
       }
@@ -878,6 +882,7 @@ function Get-QuotaFallbackAuditEvidence {
         completedLocally = [bool]($null -ne $localCompletion)
         terminalCompleted = [bool]($null -ne $terminalCompletion)
         terminal429 = [bool]($null -ne $terminal429)
+        structuredQuotaTerminal429 = [bool]($null -ne $structuredTerminal429)
       }
     }
   }
@@ -955,6 +960,8 @@ function Get-QuotaFallbackAuditEvidence {
   $completedSameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.completedLocally })
   $terminalCompletedSameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.terminalCompleted })
   $terminal429SameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.terminal429 })
+  $structuredTerminal429SameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.structuredQuotaTerminal429 })
+  $unstructuredTerminal429SameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.terminal429 -and -not $_.structuredQuotaTerminal429 })
   $distinctHealthyAccountHashesAfterBlock = @(
     $newRequestAvoidance |
       ForEach-Object { $_.healthyAccountHashes } |
@@ -964,9 +971,9 @@ function Get-QuotaFallbackAuditEvidence {
     $hasUsageLimit -and
     $hasModelCooldown -and
     $hasHardAffinityFallbackBlocked -and
-    $terminalCompletedSameTaskAffinityBlocks.Count -gt 0 -and
+    ($terminalCompletedSameTaskAffinityBlocks.Count + $structuredTerminal429SameTaskAffinityBlocks.Count) -gt 0 -and
     $completedSameTaskAffinityBlocks.Count -eq 0 -and
-    $terminal429SameTaskAffinityBlocks.Count -eq 0
+    $unstructuredTerminal429SameTaskAffinityBlocks.Count -eq 0
 
   [ordered]@{
     auditPath = $Path
@@ -986,9 +993,13 @@ function Get-QuotaFallbackAuditEvidence {
     sameTaskAffinityLocalCompletionCount = $completedSameTaskAffinityBlocks.Count
     sameTaskAffinityTerminalCompletionCount = $terminalCompletedSameTaskAffinityBlocks.Count
     sameTaskAffinityUnrecoveredTerminal429Count = $terminal429SameTaskAffinityBlocks.Count
+    sameTaskAffinityStructuredQuotaTerminal429Count = $structuredTerminal429SameTaskAffinityBlocks.Count
+    sameTaskAffinityUnstructuredTerminal429Count = $unstructuredTerminal429SameTaskAffinityBlocks.Count
     sameTaskAffinityFallbackBlockedRequestIds = @($sameTaskAffinityBlockTransitions | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityTerminalCompletionRequestIds = @($terminalCompletedSameTaskAffinityBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityUnrecoveredTerminal429RequestIds = @($terminal429SameTaskAffinityBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sameTaskAffinityStructuredQuotaTerminal429RequestIds = @($structuredTerminal429SameTaskAffinityBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sameTaskAffinityUnstructuredTerminal429RequestIds = @($unstructuredTerminal429SameTaskAffinityBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityFallbackBlockedTransitions = @($sameTaskAffinityBlockTransitions)
     distinctHealthyAccountCountAfterBlock = $distinctHealthyAccountHashesAfterBlock.Count
     distinctHealthyAccountHashesAfterBlock = @($distinctHealthyAccountHashesAfterBlock)
@@ -1030,12 +1041,12 @@ function Test-QuotaFallbackAudit {
     return $result
   }
 
-  if ($evidence.sameTaskAffinityUnrecoveredTerminal429Count -gt 0) {
-    Set-SmokeFail $result "同任务 hard-affinity block 后仍以 final 429 结束" $evidence
+  if ($evidence.sameTaskAffinityUnstructuredTerminal429Count -gt 0) {
+    Set-SmokeFail $result "同任务 hard-affinity block 后仍以非结构化 final 429 结束" $evidence
     return $result
   }
 
-  Set-SmokeBlocked $result "本次 run 未证明同任务额度耗尽后阻止切号并等到真实 upstream terminal completion" $evidence
+  Set-SmokeBlocked $result "本次 run 未证明同任务额度耗尽后阻止切号并完成真实 upstream terminal closure 或结构化 usage_limit_reached 429 closure" $evidence
   $result
 }
 
@@ -1086,9 +1097,13 @@ function New-SmokeContinuitySummary {
         sameTaskAffinityLocalCompletionCount = if ($AuditEvidence) { [int]$AuditEvidence.sameTaskAffinityLocalCompletionCount } else { 0 }
         sameTaskAffinityTerminalCompletionCount = if ($AuditEvidence) { [int]$AuditEvidence.sameTaskAffinityTerminalCompletionCount } else { 0 }
         sameTaskAffinityUnrecoveredTerminal429Count = if ($AuditEvidence) { [int]$AuditEvidence.sameTaskAffinityUnrecoveredTerminal429Count } else { 0 }
+        sameTaskAffinityStructuredQuotaTerminal429Count = if ($AuditEvidence) { [int]$AuditEvidence.sameTaskAffinityStructuredQuotaTerminal429Count } else { 0 }
+        sameTaskAffinityUnstructuredTerminal429Count = if ($AuditEvidence) { [int]$AuditEvidence.sameTaskAffinityUnstructuredTerminal429Count } else { 0 }
         sameTaskAffinityFallbackBlockedRequestIds = if ($AuditEvidence) { @($AuditEvidence.sameTaskAffinityFallbackBlockedRequestIds) } else { @() }
         sameTaskAffinityTerminalCompletionRequestIds = if ($AuditEvidence) { @($AuditEvidence.sameTaskAffinityTerminalCompletionRequestIds) } else { @() }
         sameTaskAffinityUnrecoveredTerminal429RequestIds = if ($AuditEvidence) { @($AuditEvidence.sameTaskAffinityUnrecoveredTerminal429RequestIds) } else { @() }
+        sameTaskAffinityStructuredQuotaTerminal429RequestIds = if ($AuditEvidence) { @($AuditEvidence.sameTaskAffinityStructuredQuotaTerminal429RequestIds) } else { @() }
+        sameTaskAffinityUnstructuredTerminal429RequestIds = if ($AuditEvidence) { @($AuditEvidence.sameTaskAffinityUnstructuredTerminal429RequestIds) } else { @() }
       }
     }
     newRequestAvoidsExhaustedCooldown = [ordered]@{
@@ -1862,7 +1877,7 @@ $report = [ordered]@{
     "staged rollout: single -> small_pool -> fallback_probe",
     "use -RunUpstreamSmoke only after API service is enabled and the current stage contract passes",
     "use -RunCodexExecSmoke for a task-level E2E probe through an isolated CODEX_HOME",
-    "use -RequireQuotaFallback when the acceptance target is real quota-exhaustion continuity; the report blocks unless audit shows 429, model cooldown, hard-affinity fallback_blocked, and real upstream terminal completion; same-task local completed Responses closure is a failure",
+    "use -RequireQuotaFallback when the acceptance target is real quota-exhaustion continuity; the report blocks unless audit shows 429, model cooldown, hard-affinity fallback_blocked, and real upstream terminal completion or structured usage_limit_reached 429 closure; same-task local completed Responses closure is a failure",
     "use -StartEphemeralGateway to exercise the same gateway code path without switching live Codex provider",
     "use -TemporaryFallbackConfig only with -StartEphemeralGateway; the original codex_local_access.json is restored afterward",
     "use -AppSafeIsolatedProbe to keep probe local access config, health, audit, and port allocation in an isolated temp data root; the probe copies the existing API service account pool and does not auto-populate accounts",

@@ -36,6 +36,15 @@ function Get-ResultByName {
   $result
 }
 
+function Write-AuditLines {
+  param([string]$Path, [object[]]$Events)
+  $parent = Split-Path -Parent $Path
+  New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  $Events |
+    ForEach-Object { $_ | ConvertTo-Json -Depth 10 -Compress } |
+    Set-Content -LiteralPath $Path -Encoding UTF8
+}
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $acceptScript = Join-Path $PSScriptRoot "accept-local-hardened-api-continuity.ps1"
 $smokeScript = Join-Path $PSScriptRoot "smoke-local-hardened-api.ps1"
@@ -134,9 +143,74 @@ param(
       "-AssertCodexCliConfigUntouched",
       "-AssertCodexAppProcessStable",
       "-WriteReport"
-    )) {
+  )) {
     Assert-True ([bool](@($args | Where-Object { $_ -eq $requiredArg }).Count)) "expected smoke arg $requiredArg"
   }
+
+  $structuredTerminalRoot = Join-Path $tempRoot "structured-terminal-429-data"
+  New-Item -ItemType Directory -Force -Path $structuredTerminalRoot | Out-Null
+  [ordered]@{
+    enabled = $true
+    port = 1
+    apiKey = "test-api-key"
+    accountIds = @(
+      "codex_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "codex_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    )
+    safetyConfig = [ordered]@{
+      schemaVersion = 1
+      hardenedLocalMode = $true
+      maxConcurrentRequests = 1
+      minRequestIntervalSeconds = 20
+      maxRetryAccounts = 2
+      fallbackMode = "disabled"
+    }
+  } | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $structuredTerminalRoot "codex_local_access.json") -Encoding UTF8
+  Write-AuditLines (Join-Path $structuredTerminalRoot "codex_local_access_audit.jsonl") @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-a"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-a"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; outcome = "response_received" },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-a"; phase = "quota_classification"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-a"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-a"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-a"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "error" },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-b"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-b"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-b"; status = 200; outcome = "response_received" },
+    [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "req-b"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy-b"; outcome = "completed" }
+  )
+  $structuredTerminalOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $smokeScript `
+    -Stage fallback_probe `
+    -DataRoot $structuredTerminalRoot `
+    -BaseUrl "http://127.0.0.1:1/v1" `
+    -ApiKey "test-api-key" `
+    -RequireQuotaFallback 2>$null
+
+  $structuredTerminalReport = Convert-JsonOutput $structuredTerminalOutput "structured terminal 429 smoke fixture"
+  $structuredTerminalSameTask = Get-ResultByName $structuredTerminalReport "same_task_affinity_fallback_blocked"
+  Assert-Equal $structuredTerminalSameTask.status "pass" "structured usage_limit_reached terminal 429 should satisfy same-task hard-affinity guard"
+  Assert-Equal $structuredTerminalSameTask.evidence.sameTaskAffinityStructuredQuotaTerminal429Count 1 "expected structured terminal 429 count"
+  Assert-Equal $structuredTerminalSameTask.evidence.sameTaskAffinityUnstructuredTerminal429Count 0 "expected no unstructured terminal 429"
+  Assert-Equal $structuredTerminalReport.continuitySummary.sameTaskAffinityFallbackBlocked.evidence.sameTaskAffinityStructuredQuotaTerminal429Count 1 "expected continuity summary to expose structured terminal 429 count"
+
+  $unstructuredTerminalRoot = Join-Path $tempRoot "unstructured-terminal-429-data"
+  New-Item -ItemType Directory -Force -Path $unstructuredTerminalRoot | Out-Null
+  Copy-Item -LiteralPath (Join-Path $structuredTerminalRoot "codex_local_access.json") -Destination (Join-Path $unstructuredTerminalRoot "codex_local_access.json") -Force
+  Write-AuditLines (Join-Path $unstructuredTerminalRoot "codex_local_access_audit.jsonl") @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-a"; phase = "quota_classification"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-a"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-a"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-a"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; outcome = "error" }
+  )
+  $unstructuredTerminalOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $smokeScript `
+    -Stage fallback_probe `
+    -DataRoot $unstructuredTerminalRoot `
+    -BaseUrl "http://127.0.0.1:1/v1" `
+    -ApiKey "test-api-key" `
+    -RequireQuotaFallback 2>$null
+
+  $unstructuredTerminalReport = Convert-JsonOutput $unstructuredTerminalOutput "unstructured terminal 429 smoke fixture"
+  $unstructuredTerminalSameTask = Get-ResultByName $unstructuredTerminalReport "same_task_affinity_fallback_blocked"
+  Assert-Equal $unstructuredTerminalSameTask.status "fail" "unstructured terminal 429 should still fail same-task hard-affinity guard"
+  Assert-Equal $unstructuredTerminalSameTask.evidence.sameTaskAffinityUnstructuredTerminal429Count 1 "expected unstructured terminal 429 count"
 
   $drainOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $acceptScript `
     -SmokeScriptPath $fakeSmoke `

@@ -1,0 +1,18 @@
+{
+  "previousRunDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-004647",
+  "previousStopped": false,
+  "previousReportStatus": "running",
+  "previousOverall": "fail",
+  "previousConfigChanged": true,
+  "runDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-behavior-sidecar-20260528-004952",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-behavior-sidecar-20260528-004952\\report",
+  "stdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-behavior-sidecar-20260528-004952\\live-monitor.stdout.log",
+  "stderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-behavior-sidecar-20260528-004952\\live-monitor.stderr.log",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-behavior-sidecar-20260528-004952\\live-monitor.exitcode.txt",
+  "checkpoint": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-behavior-sidecar-20260528-004952\\live-monitor.checkpoint.json",
+  "stopSignal": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-behavior-sidecar-20260528-004952\\stop.signal",
+  "processId": 34728,
+  "startedAt": "2026-05-28T00:49:52.9419178+08:00",
+  "durationSeconds": 3600,
+  "mode": "current-window behavior-only audit offset, read-only sidecar"
+}

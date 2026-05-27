@@ -122,6 +122,42 @@ try {
   Assert-Equal $nextTimeline.accountHashes[0] "sha256:healthy" "expected independent turn healthy account"
   Assert-Equal $nextTimeline.classification "independent_request_completed" "expected independent timeline classification"
 
+  $dataRootDisabledRuntime = Join-Path $tempRoot "data-disabled-runtime"
+  $auditDisabledRuntime = Join-Path $dataRootDisabledRuntime "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditDisabledRuntime @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "runtime-ok-history"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-disabled-runtime" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "runtime-ok-history"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-disabled-runtime"; turn_lineage_id = "turn:sha256:runtime" } }
+  )
+  [ordered]@{
+    enabled = $false
+    port = 45336
+    apiKey = "agt_test_disabled_runtime"
+    safetyConfig = [ordered]@{ requestTimeoutSeconds = 600 }
+    updatedAt = 1779906656679
+  } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $dataRootDisabledRuntime "codex_local_access.json") -Encoding UTF8
+  [ordered]@{
+    mode = "direct_projection"
+    accountKind = "oauth"
+    currentAccountId = "codex_direct_test"
+    updatedAt = 1779906518392
+  } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $dataRootDisabledRuntime "codex_runtime_mode.json") -Encoding UTF8
+
+  $disabledRuntimeOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootDisabledRuntime `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireApiServiceRuntimeAvailable `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 1) "expected disabled runtime fixture exit code 1"
+  $disabledRuntimeSummary = Convert-JsonOutput $disabledRuntimeOutput "disabled runtime fixture"
+  Assert-Equal $disabledRuntimeSummary.overall "fail" "expected disabled runtime fixture overall fail"
+  Assert-Equal (($disabledRuntimeSummary.results | Where-Object name -eq "api_service_runtime_available").status) "fail" "expected disabled API service runtime guard to fail"
+  Assert-Equal $disabledRuntimeSummary.apiServiceRuntime.localAccess.enabled $false "expected disabled local access to be recorded"
+  Assert-Equal $disabledRuntimeSummary.apiServiceRuntime.runtimeMode.mode "direct_projection" "expected direct projection mode to be recorded"
+
   $dataRootChatAdapter503 = Join-Path $tempRoot "data-chat-adapter-503"
   $auditChatAdapter503 = Join-Path $dataRootChatAdapter503 "codex_local_access_audit.jsonl"
   Write-AuditLines $auditChatAdapter503 @(
@@ -225,6 +261,40 @@ try {
   Assert-Equal (($sameTaskLocalCompletionSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "fail" "same-task local completion must fail hard-affinity guard"
   Assert-Equal (($sameTaskLocalCompletionSummary.results | Where-Object name -eq "responses_pool_unavailable_local_completion_explicit").status) "fail" "same-task local completion must fail local-completion guard"
   Assert-Equal $sameTaskLocalCompletionSummary.continuitySummary.sameTaskAffinityFallbackBlocked.status "fail" "expected same-task continuity summary fail"
+
+  $dataRootStructuredQuotaFromBlock = Join-Path $tempRoot "data-structured-quota-from-block"
+  $auditStructuredQuotaFromBlock = Join-Path $dataRootStructuredQuotaFromBlock "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditStructuredQuotaFromBlock @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:observed"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:observed"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; hard_affinity_continuity = "true"; hard_affinity_wait_limit_ms = "3000"; normal_request_timeout_ms = "600000"; request_timeout_ms = "600000"; timeout_extended = "false"; sticky_boundary = "codex_turn_state"; turn_lineage_id = "turn:sha256:observed"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:observed"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:observed"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; retry_after_ms = "604293000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:observed"; phase = "quota_classification"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "classified"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; reset_hint_present = "true"; retry_after_ms = "604293000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:observed"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; retry_after_ms = "604293000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:observed"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; retry_after_ms = "604293000"; hard_affinity_inline_retry_wait_limit_ms = "3000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:observed"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "rate_limited"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; retry_after_ms = "604293000"; message = "上游返回使用额度冷却，请稍后重试" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "turn:sha256:next-observed"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-observed-2"; turn_lineage_id = "turn:sha256:next-observed" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 10; requestId = "turn:sha256:next-observed"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-observed-2"; turn_lineage_id = "turn:sha256:next-observed" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 11; requestId = "turn:sha256:next-observed"; phase = "stream_terminal"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; outcome = "ok"; streamState = "finished"; detail = [ordered]@{ gateway_request_id = "gw-observed-2"; turn_lineage_id = "turn:sha256:next-observed"; response_completed_seen = "true" } }
+  )
+  $structuredQuotaFromBlockOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootStructuredQuotaFromBlock `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireQuotaFallback `
+    -RequireStreamCompletion `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor structured quota terminal from block fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $structuredQuotaFromBlockSummary = Convert-JsonOutput $structuredQuotaFromBlockOutput "structured quota terminal from block fixture"
+  Assert-Equal $structuredQuotaFromBlockSummary.overall "pass" "expected structured quota terminal from block fixture overall"
+  Assert-Equal $structuredQuotaFromBlockSummary.audit.sameTaskAffinityStructuredQuotaTerminal429Count 1 "expected hard-affinity quota terminal to be recovered from block classification"
+  Assert-Equal $structuredQuotaFromBlockSummary.audit.sameTaskAffinityUnstructuredTerminal429Count 0 "expected no unstructured terminal 429 after block correlation"
+  Assert-Equal (($structuredQuotaFromBlockSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "pass" "expected same-task quota terminal to pass"
 
   $dataRootClientAborted = Join-Path $tempRoot "data-client-aborted"
   $auditClientAborted = Join-Path $dataRootClientAborted "codex_local_access_audit.jsonl"
@@ -465,7 +535,7 @@ try {
   Write-AuditLines $auditCrossRequest @(
     [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-a"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
     [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-a"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; outcome = "response_received" },
-    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-a"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-a"; phase = "quota_classification"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-a"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
     [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-a"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
     [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-a"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted-a"; status = 429; errorType = "usage_limit_reached"; outcome = "error" },
@@ -485,13 +555,15 @@ try {
     -RequireStreamCompletion `
     -Quiet 2>$null
 
-  Assert-True ($LASTEXITCODE -eq 1) "expected cross-request fallback fixture exit code 1"
+  if ($LASTEXITCODE -ne 0) {
+    throw "structured sticky terminal 429 fixture failed with exit_code=$LASTEXITCODE"
+  }
   $crossRequestSummary = Convert-JsonOutput $crossRequestOutput "cross-request fallback fixture"
-  Assert-Equal $crossRequestSummary.overall "fail" "expected cross-request fallback fixture overall fail"
+  Assert-Equal $crossRequestSummary.overall "pass" "expected protocol-preserving sticky terminal fixture overall pass"
   Assert-Equal $crossRequestSummary.audit.sameTaskAffinityLocalCompletionCount 0 "cross-request 200 must not count as same-task local completion"
-  Assert-Equal $crossRequestSummary.audit.retryLimitErrorFound $true "hard-affinity final 429 must count as retry-limit regression"
-  Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "fail" "expected unrecovered same-task hard-affinity 429 to fail same-task contract"
-  Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "retry_limit_regression_absent").status) "fail" "expected unrecovered hard-affinity 429 to fail retry-limit regression"
+  Assert-Equal $crossRequestSummary.audit.retryLimitErrorFound $false "structured hard-affinity final 429 must not count as retry-limit regression"
+  Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "pass" "expected structured same-task hard-affinity 429 to preserve sticky contract"
+  Assert-Equal (($crossRequestSummary.results | Where-Object name -eq "retry_limit_regression_absent").status) "pass" "expected structured sticky quota terminal not to fail retry-limit guard"
 
   $dataRootBlocked = Join-Path $tempRoot "data-blocked"
   $auditBlocked = Join-Path $dataRootBlocked "codex_local_access_audit.jsonl"
@@ -576,6 +648,41 @@ try {
   Assert-Equal $responses503Summary.audit.responsesTransport503PoolUnavailableCount 1 "expected Codex-facing transport 503 to be counted"
   Assert-Equal (($responses503Summary.results | Where-Object name -eq "responses_pool_unavailable_transport_503_absent").status) "fail" "expected Codex-facing transport 503 regression guard to fail"
 
+  $dataRootAuditWindow = Join-Path $tempRoot "data-audit-window"
+  $auditAuditWindow = Join-Path $dataRootAuditWindow "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditAuditWindow @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "old-503"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-window-old" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "old-503"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; status = 503; errorType = "pool_unavailable"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-window-old"; message = "模型 gpt-5.5 的API 服务号池暂无可调度账号（冷却中 1 个）" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 100; requestId = "good-window"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-window-good"; turn_lineage_id = "turn:sha256:window" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 101; requestId = "good-window"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-window-good"; turn_lineage_id = "turn:sha256:window"; lease_id = "91" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 102; requestId = "good-window"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-window-good"; turn_lineage_id = "turn:sha256:window" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 103; requestId = "good-window"; phase = "stream_terminal"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "finished"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-window-good"; turn_lineage_id = "turn:sha256:window"; response_completed_seen = "true" } }
+  )
+  $auditWindowOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootAuditWindow `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -AuditSinceTimestampMs 100 `
+    -FocusGatewayRequestIds "gw-window-good" `
+    -RequireStreamCompletion `
+    -RequiredCompletedStreams 1 `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor audit-window fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $auditWindowSummary = Convert-JsonOutput $auditWindowOutput "audit window fixture"
+  Assert-Equal $auditWindowSummary.overall "pass" "expected audit-window fixture overall pass"
+  Assert-Equal $auditWindowSummary.audit.responsesTransport503PoolUnavailableCount 0 "old transport 503 outside the window must not pollute focused verdict"
+  Assert-Equal $auditWindowSummary.audit.completedStreamCount 1 "expected focused gateway request to retain stream completion"
+  Assert-Equal $auditWindowSummary.auditWindow.rawObservedEventCount 6 "expected raw observed events to include old history"
+  Assert-Equal $auditWindowSummary.auditWindow.filteredEventCount 4 "expected only focused current-window events in summary"
+  Assert-Equal $auditWindowSummary.auditWindow.droppedEventCount 2 "expected old history to be dropped by window filter"
+  Assert-Equal $auditWindowSummary.auditWindow.sinceTimestampMs 100 "expected since timestamp in report metadata"
+  Assert-Equal $auditWindowSummary.auditWindow.focusGatewayRequestIds[0] "gw-window-good" "expected focused gateway id in report metadata"
+
   $dataRootJsonCompleted = Join-Path $tempRoot "data-json-completed"
   $auditJsonCompleted = Join-Path $dataRootJsonCompleted "codex_local_access_audit.jsonl"
   Write-AuditLines $auditJsonCompleted @(
@@ -640,10 +747,10 @@ try {
   $auditStickyResetRecovered = Join-Path $dataRootStickyResetRecovered "codex_local_access_audit.jsonl"
   Write-AuditLines $auditStickyResetRecovered @(
     [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:sticky-recovered"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:sticky-recovered"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; normal_request_timeout_ms = "1000"; request_timeout_ms = "86401000"; hard_affinity_wait_limit_ms = "86400000"; timeout_extended = "true"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state"; turn_lineage_id = "turn:sha256:sticky-recovered"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:sticky-recovered"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; normal_request_timeout_ms = "1000"; request_timeout_ms = "4000"; hard_affinity_wait_limit_ms = "3000"; timeout_extended = "true"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state"; turn_lineage_id = "turn:sha256:sticky-recovered"; turn_lineage_source = "codex_turn_state" } },
     [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:sticky-recovered"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; retry_after_ms = "1500" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:sticky-recovered"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; retry_after_ms = "1500"; hard_affinity_inline_retry_wait_limit_ms = "86400000" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:sticky-recovered"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "sleeping"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; reason = "hard_affinity_same_account_retry"; retry_after_ms = "1500"; inline_wait_limit_ms = "86400000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:sticky-recovered"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; retry_after_ms = "1500"; hard_affinity_inline_retry_wait_limit_ms = "3000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:sticky-recovered"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "sleeping"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; reason = "hard_affinity_same_account_retry"; retry_after_ms = "1500"; inline_wait_limit_ms = "3000" } },
     [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:sticky-recovered"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "retrying"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered"; reason = "hard_affinity_same_account_retry"; slept_ms = "1500" } },
     [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:sticky-recovered"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered" } },
     [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:sticky-recovered"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-sticky-recovered"; turn_lineage_id = "turn:sha256:sticky-recovered" } }
@@ -665,18 +772,41 @@ try {
   Assert-Equal $stickyResetRecoveredSummary.overall "pass" "expected sticky reset recovered fixture overall"
   Assert-Equal $stickyResetRecoveredSummary.audit.stickyResetWaitRecoveredCount 1 "expected one sticky reset wait recovery"
   Assert-Equal $stickyResetRecoveredSummary.audit.stickyResetWaitKilledByLocalTimeoutCount 0 "expected no sticky reset wait timeout kill"
-  Assert-Equal $stickyResetRecoveredSummary.audit.stickyResetWaitRecovered[0].hardAffinityWaitLimitMs 86400000 "expected hard-affinity wait limit in sticky reset evidence"
+  Assert-Equal $stickyResetRecoveredSummary.audit.stickyResetWaitRecovered[0].hardAffinityWaitLimitMs 3000 "expected short hard-affinity wait limit in sticky reset evidence"
   Assert-Equal (($stickyResetRecoveredSummary.results | Where-Object name -eq "sticky_reset_wait_not_killed_by_local_timeout").status) "pass" "expected sticky reset recovered guard pass"
+
+  $dataRootStickyResetOversized = Join-Path $tempRoot "data-sticky-reset-oversized"
+  $auditStickyResetOversized = Join-Path $dataRootStickyResetOversized "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditStickyResetOversized @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:sticky-oversized"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-sticky-oversized"; normal_request_timeout_ms = "600000"; request_timeout_ms = "604283000"; hard_affinity_wait_limit_ms = "604282000"; timeout_extended = "true"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state"; turn_lineage_id = "turn:sha256:sticky-oversized"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:sticky-oversized"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-sticky-oversized"; turn_lineage_id = "turn:sha256:sticky-oversized"; retry_after_ms = "604282000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:sticky-oversized"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-sticky-oversized"; turn_lineage_id = "turn:sha256:sticky-oversized"; retry_after_ms = "604282000"; hard_affinity_inline_retry_wait_limit_ms = "604282000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:sticky-oversized"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "sleeping"; detail = [ordered]@{ gateway_request_id = "gw-sticky-oversized"; turn_lineage_id = "turn:sha256:sticky-oversized"; reason = "hard_affinity_same_account_retry"; retry_after_ms = "604282000"; inline_wait_limit_ms = "604282000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:sticky-oversized"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-sticky-oversized"; turn_lineage_id = "turn:sha256:sticky-oversized" } }
+  )
+  $stickyResetOversizedOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootStickyResetOversized `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 1) "expected oversized sticky reset wait fixture exit code 1"
+  $stickyResetOversizedSummary = Convert-JsonOutput $stickyResetOversizedOutput "oversized sticky reset wait fixture"
+  Assert-Equal $stickyResetOversizedSummary.overall "fail" "expected oversized sticky reset wait fixture overall fail"
+  Assert-Equal $stickyResetOversizedSummary.audit.stickyResetWaitExceededInlineBudgetCount 1 "expected oversized sticky wait budget to be flagged"
+  Assert-Equal (($stickyResetOversizedSummary.results | Where-Object name -eq "sticky_reset_wait_not_killed_by_local_timeout").status) "fail" "expected oversized sticky wait guard fail"
 
   $dataRootStructuredTrace = Join-Path $tempRoot "data-structured-trace"
   $auditStructuredTrace = Join-Path $dataRootStructuredTrace "codex_local_access_audit.jsonl"
   Write-AuditLines $auditStructuredTrace @(
     [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:trace"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-trace" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:trace"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-trace"; normal_request_timeout_ms = "1000"; request_timeout_ms = "86401000"; hard_affinity_wait_limit_ms = "86400000"; timeout_extended = "true"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state"; turn_lineage_id = "turn:sha256:trace"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:trace"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-trace"; normal_request_timeout_ms = "1000"; request_timeout_ms = "4000"; hard_affinity_wait_limit_ms = "3000"; timeout_extended = "true"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state"; turn_lineage_id = "turn:sha256:trace"; turn_lineage_source = "codex_turn_state" } },
     [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:trace"; phase = "quota_classification"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "exhausted"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; retry_after_ms = "1500"; reset_source = "retry_after" } },
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:trace"; phase = "routing_decision"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "selected"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; hard_affinity_bound = "true" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:trace"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; retry_after_ms = "1500"; hard_affinity_inline_retry_wait_limit_ms = "86400000" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:trace"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "sleeping"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; reason = "hard_affinity_same_account_retry"; retry_after_ms = "1500"; inline_wait_limit_ms = "86400000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:trace"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; retry_after_ms = "1500"; hard_affinity_inline_retry_wait_limit_ms = "3000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:trace"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "sleeping"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; reason = "hard_affinity_same_account_retry"; retry_after_ms = "1500"; inline_wait_limit_ms = "3000" } },
     [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:trace"; phase = "pool_wait"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "retrying"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; reason = "hard_affinity_same_account_retry"; slept_ms = "1500" } },
     [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:trace"; phase = "stream_terminal"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-trace"; turn_lineage_id = "turn:sha256:trace"; response_completed_seen = "true"; compaction_summary_seen = "true"; response_id_hash = "response:sha256:trace" } }
   )

@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-28T00:28:48.4776387+08:00",
+  "probeRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-sticky-affinity-probe-28888-20260528002827287",
+  "gatewayPid": 22792,
+  "baseUrl": "http://127.0.0.1:45335/v1",
+  "model": "gpt-5.5",
+  "requestAffinityKey": "x-codex-turn-state:sha256:76e474119fc6",
+  "pinnedAccountHash": "sha256:a3006672e6b9",
+  "observedAccountHashes": [
+    "sha256:a3006672e6b9"
+  ],
+  "distinctObservedAccountHashCount": 1,
+  "statusCode": 429,
+  "responsePreview": "{\"error\":{\"code\":\"usage_limit_reached\",\"message\":\"上游返回使用额度冷却，请稍后重试\",\"resets_at\":1780498946,\"resets_in_seconds\":599619,\"type\":\"usage_limit_reached\"}}",
+  "elapsedMs": 1250,
+  "hardAffinityFallbackBlockedCount": 1,
+  "attemptLimitFallbackBlockedCount": 0,
+  "admissionAttemptCount": 1,
+  "finalStatuses": [
+    429
+  ],
+  "requestAffinityModes": [
+    "turn_state_hard"
+  ],
+  "hardAffinityBoundFlags": [
+    "true"
+  ],
+  "secondAccountTouched": false,
+  "auditPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-sticky-affinity-probe-28888-20260528002827287\\codex_local_access_audit.jsonl",
+  "gatewayStdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-acceptance-20260528-001841\\sticky-probe.gateway.stdout.log",
+  "gatewayStderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-acceptance-20260528-001841\\sticky-probe.gateway.stderr.log",
+  "overall": "pass"
+}

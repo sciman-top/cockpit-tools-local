@@ -1,0 +1,432 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-28T02:45:53.1953005+08:00",
+  "overall": "pass",
+  "mode": "codex_exec_smoke",
+  "stage": "small_pool",
+  "baseUrl": "http://127.0.0.1:45335/v1",
+  "dataRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-appsafe-25036-20260528024509374",
+  "runUpstreamSmoke": true,
+  "runCodexExecSmoke": true,
+  "requireQuotaFallback": false,
+  "autoDrainFirstFreeAccountUntilFallback": false,
+  "autoDrainMaxRequests": 30,
+  "autoDrainRequestIntervalSeconds": 22,
+  "expect429": false,
+  "ephemeralGateway": {
+    "requested": true,
+    "status": "stopped",
+    "processId": 33024,
+    "exe": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe",
+    "tempDir": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-smoke-25036-20260528024509471",
+    "stdoutPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-smoke-25036-20260528024509471\\gateway.stdout.log",
+    "stderrPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-smoke-25036-20260528024509471\\gateway.stderr.log",
+    "backupPath": null,
+    "originalMissing": false,
+    "dataRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-appsafe-25036-20260528024509374",
+    "temporaryFallbackConfig": {
+      "requested": false,
+      "status": "not_applied"
+    },
+    "ready": {
+      "baseUrl": "http://127.0.0.1:45335/v1",
+      "statusCode": 200
+    },
+    "stopped": true,
+    "restoredConfig": true,
+    "removedConfigBackup": true
+  },
+  "appSafeProbe": {
+    "requested": true,
+    "status": "initialized",
+    "mode": "isolated_data_root",
+    "liveDataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+    "probeDataRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-appsafe-25036-20260528024509374",
+    "sourceConfigPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access.json",
+    "probeConfigPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-appsafe-25036-20260528024509374\\codex_local_access.json",
+    "port": 0
+  },
+  "temporaryFallbackConfig": {
+    "requested": false,
+    "status": "not_applied"
+  },
+  "codexCliGuard": {
+    "before": {
+      "root": "C:\\Users\\sciman\\.codex",
+      "files": {
+        "config.toml": {
+          "exists": true,
+          "length": 5232,
+          "lastWriteTime": "2026-05-28T02:40:27.4201406+08:00",
+          "sha256": "C8FCF4A8B40718C7347CC6FEC9125556B0D6199C22DCDCFA30B724BEF124849F"
+        },
+        "auth.json": {
+          "exists": true,
+          "length": 3584,
+          "lastWriteTime": "2026-05-28T02:28:33.9958440+08:00",
+          "sha256": "534084945E73A888371126C638016A49B9710ACC68A426DA9793BC223E4F89D7"
+        }
+      }
+    },
+    "after": {
+      "root": "C:\\Users\\sciman\\.codex",
+      "files": {
+        "config.toml": {
+          "exists": true,
+          "length": 5232,
+          "lastWriteTime": "2026-05-28T02:40:27.4201406+08:00",
+          "sha256": "C8FCF4A8B40718C7347CC6FEC9125556B0D6199C22DCDCFA30B724BEF124849F"
+        },
+        "auth.json": {
+          "exists": true,
+          "length": 3584,
+          "lastWriteTime": "2026-05-28T02:28:33.9958440+08:00",
+          "sha256": "534084945E73A888371126C638016A49B9710ACC68A426DA9793BC223E4F89D7"
+        }
+      }
+    },
+    "comparison": {
+      "unchanged": true,
+      "changedFiles": []
+    },
+    "asserted": true
+  },
+  "codexAppGuard": {
+    "before": {
+      "processNames": [
+        "Codex"
+      ],
+      "processes": [
+        {
+          "processName": "Codex",
+          "id": 17576,
+          "startTime": "2026-05-28T02:28:41.1551231+08:00"
+        },
+        {
+          "processName": "Codex",
+          "id": 20728,
+          "startTime": "2026-05-28T02:28:41.5673347+08:00"
+        },
+        {
+          "processName": "Codex",
+          "id": 26080,
+          "startTime": "2026-05-28T02:28:41.7118867+08:00"
+        },
+        {
+          "processName": "Codex",
+          "id": 28644,
+          "startTime": "2026-05-28T02:28:41.6677594+08:00"
+        },
+        {
+          "processName": "Codex",
+          "id": 32464,
+          "startTime": "2026-05-28T02:28:43.5821934+08:00"
+        }
+      ]
+    },
+    "after": {
+      "processNames": [
+        "Codex"
+      ],
+      "processes": [
+        {
+          "processName": "Codex",
+          "id": 17576,
+          "startTime": "2026-05-28T02:28:41.1551231+08:00"
+        },
+        {
+          "processName": "Codex",
+          "id": 20728,
+          "startTime": "2026-05-28T02:28:41.5673347+08:00"
+        },
+        {
+          "processName": "Codex",
+          "id": 26080,
+          "startTime": "2026-05-28T02:28:41.7118867+08:00"
+        },
+        {
+          "processName": "Codex",
+          "id": 28644,
+          "startTime": "2026-05-28T02:28:41.6677594+08:00"
+        },
+        {
+          "processName": "Codex",
+          "id": 32464,
+          "startTime": "2026-05-28T02:28:43.5821934+08:00"
+        }
+      ]
+    },
+    "comparison": {
+      "stable": true,
+      "beforeCount": 5,
+      "afterCount": 5
+    },
+    "asserted": true
+  },
+  "routing": {
+    "candidate_pool_count": 2,
+    "effective_max_retry_accounts": 2,
+    "attempted_account_count": 1,
+    "fallback_blocked_reason": "未传入 -RequireQuotaFallback；不强制要求本次 run 出现同任务 hard-affinity 429 闭合",
+    "stage": "small_pool",
+    "fallback_mode": "disabled"
+  },
+  "poolUnavailable": {
+    "nearest_retry_after_ms": null,
+    "blocking_status_counts": {
+      "cooling": 0,
+      "exhausted": 0,
+      "auth_suspect": 0,
+      "manual_required": 0,
+      "disabled": 0,
+      "model_cooldown": 0
+    }
+  },
+  "continuitySummary": {
+    "sameTaskAffinityFallbackBlocked": {
+      "status": "skipped",
+      "reason": "未传入 -RequireQuotaFallback；不强制要求本次 run 出现同任务 hard-affinity 429 闭合",
+      "evidence": {
+        "has429": false,
+        "hasUsageLimitReached": false,
+        "hasModelCooldownApplied": false,
+        "hasFallbackBlocked": false,
+        "hasHardAffinityFallbackBlocked": false,
+        "sameTaskAffinityFallbackBlockedCount": 0,
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "sameTaskAffinityTerminalCompletionCount": 0,
+        "sameTaskAffinityUnrecoveredTerminal429Count": 0,
+        "sameTaskAffinityStructuredQuotaTerminal429Count": 0,
+        "sameTaskAffinityUnstructuredTerminal429Count": 0,
+        "sameTaskAffinityFallbackBlockedRequestIds": null,
+        "sameTaskAffinityTerminalCompletionRequestIds": null,
+        "sameTaskAffinityUnrecoveredTerminal429RequestIds": null,
+        "sameTaskAffinityStructuredQuotaTerminal429RequestIds": null,
+        "sameTaskAffinityUnstructuredTerminal429RequestIds": null
+      }
+    },
+    "newRequestAvoidsExhaustedCooldown": {
+      "status": "skipped",
+      "reason": "未传入 -RequireQuotaFallback；不强制要求观察后续新请求避开 exhausted/cooldown 账号",
+      "evidence": {
+        "blockedAccountCount": 0,
+        "newRequestAvoidanceCount": 0,
+        "newRequestAvoidanceRequestIds": null,
+        "newRequestBlockedReuseCount": 0,
+        "newRequestBlockedReuseRequestIds": null
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "config_small_pool_contract",
+      "status": "pass",
+      "evidence": {
+        "accountHashes": [
+          "sha256:8e364e0fee71",
+          "sha256:9389c31b99f2"
+        ],
+        "minRequestIntervalSeconds": 20,
+        "enabled": true,
+        "maxConcurrentRequests": 1,
+        "accountCount": 2,
+        "port": 45335,
+        "maxRetryAccounts": 2,
+        "hardenedLocalMode": true,
+        "effectiveMaxRetryAccounts": 2,
+        "fallbackMode": "disabled"
+      },
+      "reason": null
+    },
+    {
+      "name": "loopback_models_endpoint",
+      "status": "pass",
+      "evidence": {
+        "uri": "http://127.0.0.1:45335/v1/models",
+        "statusCode": 200,
+        "contentType": [
+          "application/json; charset=utf-8"
+        ]
+      },
+      "reason": null
+    },
+    {
+      "name": "invalid_key_auth_guard",
+      "status": "pass",
+      "evidence": {
+        "uri": "http://127.0.0.1:45335/v1/models",
+        "statusCode": 401,
+        "contentType": [
+          "application/json; charset=utf-8"
+        ]
+      },
+      "reason": null
+    },
+    {
+      "name": "single_account_upstream_chat",
+      "status": "pass",
+      "evidence": {
+        "error": {
+          "type": null,
+          "code": null,
+          "param": null,
+          "message": null
+        },
+        "model": "gpt-5.5",
+        "bodyHasOK": true,
+        "statusCode": 200,
+        "retryAfter": null,
+        "uri": "http://127.0.0.1:45335/v1/chat/completions"
+      },
+      "reason": null
+    },
+    {
+      "name": "quota_drain_until_hard_affinity_block",
+      "status": "skipped",
+      "evidence": {},
+      "reason": "未传入 -AutoDrainFirstFreeAccountUntilFallback；不主动消耗第一个 free 账号"
+    },
+    {
+      "name": "codex_exec_task_e2e",
+      "status": "pass",
+      "evidence": {
+        "stderrPreview": "WARNING: proceeding, even though we could not update PATH: Refusing to create helper binaries under temporary dir \"C:\\\\Users\\\\sciman\\\\AppData\\\\Local\\\\Temp\\\\\" (codex_home: AbsolutePathBuf(\"C:\\\\Users\\\\sciman\\\\AppData\\\\Local\\\\Temp\\\\cockpit-codex-exec-e2e-25036-20260528024512926\\\\codex-home\"))\r\nReading additional input from stdin...\r\n2026-05-27T18:45:13.726964Z ...[truncated]",
+        "tempDir": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-codex-exec-e2e-25036-20260528024512926",
+        "codexHome": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-codex-exec-e2e-25036-20260528024512926\\codex-home",
+        "sandboxBypassForIsolatedWorkspace": true,
+        "providerId": "cockpit_exec_e2e",
+        "taskFile": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-codex-exec-e2e-25036-20260528024512926\\workspace\\cockpit-e2e-result.txt",
+        "baseUrl": "http://127.0.0.1:45335/v1",
+        "finalMessage": "CODEX_TASK_DONE",
+        "taskFileHasMarker": true,
+        "stdoutPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-codex-exec-e2e-25036-20260528024512926\\codex-events.jsonl",
+        "model": "gpt-5.5",
+        "stderrPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-codex-exec-e2e-25036-20260528024512926\\codex-stderr.log",
+        "finalMessagePath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-codex-exec-e2e-25036-20260528024512926\\codex-final.txt",
+        "workspace": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-codex-exec-e2e-25036-20260528024512926\\workspace",
+        "taskFileExists": true,
+        "sandboxMode": "danger-full-access",
+        "sandboxBypassReason": "nested codex exec smoke runs only in a temp CODEX_HOME and temp workspace; workspace-write is read-only in codex-cli 0.131 nested probes",
+        "exitCode": 0
+      },
+      "reason": null
+    },
+    {
+      "name": "same_task_affinity_fallback_blocked",
+      "status": "skipped",
+      "evidence": {},
+      "reason": "未传入 -RequireQuotaFallback；不强制要求本次 run 出现同任务 hard-affinity 429 闭合"
+    },
+    {
+      "name": "new_request_avoids_exhausted_account",
+      "status": "skipped",
+      "evidence": {},
+      "reason": "未传入 -RequireQuotaFallback；不强制要求观察后续新请求避开 exhausted/cooldown 账号"
+    },
+    {
+      "name": "codex_cli_config_auth_untouched",
+      "status": "pass",
+      "evidence": {
+        "changedFiles": [],
+        "unchanged": true
+      },
+      "reason": null
+    },
+    {
+      "name": "codex_app_process_stable",
+      "status": "pass",
+      "evidence": {
+        "afterCount": 5,
+        "stable": true,
+        "beforeCount": 5
+      },
+      "reason": null
+    }
+  ],
+  "health": {
+    "exists": true,
+    "scope": "current_config_account_ids",
+    "accountCount": 2,
+    "accountHashes": [
+      "sha256:8e364e0fee71",
+      "sha256:9389c31b99f2"
+    ],
+    "registryAccountCount": 1,
+    "registryModelCooldownCount": 0,
+    "healthyCount": 2,
+    "estimatedAvailableCount": 0,
+    "coolingCount": 0,
+    "exhaustedCount": 0,
+    "authSuspectCount": 0,
+    "manualRequiredCount": 0,
+    "disabledCount": 0,
+    "activeModelCooldownCount": 0,
+    "nearestCooldownUntilMs": null,
+    "lastErrorType": null,
+    "lastStatus": null,
+    "lastRequestId": null,
+    "lastGlobalError": null,
+    "length": 1622,
+    "lastWriteTime": "2026-05-28T02:45:51.2906175+08:00",
+    "schemaVersion": 1
+  },
+  "healthRegistry": {
+    "exists": true,
+    "length": 1622,
+    "lastWriteTime": "2026-05-28T02:45:51.2906175+08:00",
+    "schemaVersion": 1,
+    "accountCount": 1,
+    "modelCooldownCount": 0,
+    "stickyBindingCount": 1,
+    "lastGlobalError": null
+  },
+  "audit": {
+    "exists": true,
+    "length": 42479,
+    "lastWriteTime": "2026-05-28T02:45:52.3011974+08:00",
+    "phases": [
+      "final_response",
+      "listener",
+      "request_trace",
+      "auth_projection",
+      "admission_attempt",
+      "upstream_forward",
+      "selector",
+      "upstream_admitted",
+      "routing_decision",
+      "lease_granted",
+      "stream_completed",
+      "lease_released",
+      "response_affinity_bound",
+      "stream_write",
+      "stream_terminal",
+      "local_backpressure"
+    ],
+    "errorTypes": [
+      "auth_failed"
+    ],
+    "statuses": [
+      401,
+      200
+    ],
+    "attemptedAccountCount": 1,
+    "attemptedAccountHashes": [
+      "sha256:8e364e0fee71"
+    ],
+    "hasSensitiveMarkers": false
+  },
+  "safetyNotes": [
+    "report redacts API key and account identity",
+    "default mode does not call /v1/chat/completions",
+    "staged rollout: single -> small_pool -> fallback_probe",
+    "use -RunUpstreamSmoke only after API service is enabled and the current stage contract passes",
+    "use -RunCodexExecSmoke for a task-level E2E probe through an isolated CODEX_HOME",
+    "use -RequireQuotaFallback when the acceptance target is real quota-exhaustion continuity; the report blocks unless audit shows 429, model cooldown, hard-affinity fallback_blocked, and real upstream terminal completion or structured usage_limit_reached 429 closure; same-task local completed Responses closure is a failure",
+    "use -StartEphemeralGateway to exercise the same gateway code path without switching live Codex provider",
+    "use -TemporaryFallbackConfig only with -StartEphemeralGateway; the original codex_local_access.json is restored afterward",
+    "use -AppSafeIsolatedProbe to keep probe local access config, health, audit, and port allocation in an isolated temp data root; the probe copies the existing API service account pool and does not auto-populate accounts",
+    "use -AutoDrainFirstFreeAccountUntilFallback only for explicit quota-drain acceptance; it sends bounded low-rate real requests until audit proves same-task hard-affinity closure or max requests is reached",
+    "this script records hashes for ~/.codex/config.toml and ~/.codex/auth.json but does not read or write their contents"
+  ],
+  "reportPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-smoke\\smoke-20260528-024553.json"
+}

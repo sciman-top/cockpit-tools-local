@@ -1,0 +1,16 @@
+{
+  "startedAt": "2026-05-28T02:10:00.7964012+08:00",
+  "pid": 28752,
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\CODE\\external\\Cockpit-Tools-Local\\scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 1800 -PollIntervalSeconds 2 -CheckpointIntervalSeconds 5 -AuditPath C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl -AuditSinceTimestampMs 1779905400751 -CodexHome C:\\Users\\sciman\\.codex -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000 -CheckpointPath D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000\\monitor-checkpoint.json -ExitCodeFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000\\monitor-exit-code.txt -StopSignalFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000\\monitor.stop -RequireQuotaFallback -RequireStreamCompletion -RequireCliConfigUntouched -RequireAppStable -RequiredFallbackCycles 1 -RequiredDistinctHealthyAccounts 1 -RequiredCompletedStreams 3 -WriteReport -Quiet",
+  "runDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "auditSinceTimestampMs": 1779905400751,
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000\\monitor-checkpoint.json",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000\\monitor-exit-code.txt",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000\\monitor.stop",
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000\\monitor.stdout.log",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-quota-drain-sidecar-20260528-021000\\monitor.stderr.log",
+  "apiBaseUrl": "http://127.0.0.1:45336/v1",
+  "apiServiceOwningProcess": 34116,
+  "stopSemantics": "sidecar_only_stop_signal_file"
+}

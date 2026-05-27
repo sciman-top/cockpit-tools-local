@@ -50,8 +50,6 @@ const LITELLM_GATEWAY_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_HTTP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_INLINE_ACCOUNT_RETRY_WAIT: Duration = Duration::from_secs(3);
-const HARD_AFFINITY_MIN_EXTENDED_WAIT_BASE: Duration = Duration::from_secs(30);
-const HARD_AFFINITY_CONTINUITY_WAIT_LIMIT: Duration = Duration::from_secs(8 * 24 * 60 * 60);
 const MAX_POOL_UNAVAILABLE_PRE_ADMISSION_WAIT: Duration = Duration::from_secs(3);
 const UPSTREAM_SEND_RETRY_ATTEMPTS: usize = 3;
 const UPSTREAM_SEND_RETRY_BASE_DELAY: Duration = Duration::from_millis(200);
@@ -1990,7 +1988,7 @@ async fn local_backpressure_bypass_reason(request: &ParsedRequest) -> Option<&'s
                 return Some(reason);
             }
             OfficialCodexStickyRoutingBoundary::TurnState { .. } => {
-                if active_stream_affinity_account_for_request(request).is_some() {
+                if resolve_request_affinity_account(request).await.is_some() {
                     return Some(reason);
                 }
             }
@@ -9397,6 +9395,53 @@ fn build_proxy_dispatch_error_body(
     json!({ "error": message })
 }
 
+fn proxy_dispatch_final_error_type(
+    request: &ParsedRequest,
+    status: u16,
+    message: &str,
+) -> &'static str {
+    if status == StatusCode::TOO_MANY_REQUESTS.as_u16()
+        && request_has_codex_sticky_routing_boundary(request)
+    {
+        return CodexLocalAccessErrorType::UsageLimitReached.as_str();
+    }
+
+    classify_codex_api_failure(Some(status), message)
+}
+
+fn proxy_dispatch_final_error_detail(
+    request: &ParsedRequest,
+    status: u16,
+    message: &str,
+    retry_after: Option<Duration>,
+    latency_ms: u64,
+) -> BTreeMap<String, String> {
+    let mut detail = BTreeMap::from([("latency_ms".to_string(), latency_ms.to_string())]);
+    if let Some(retry_after) = retry_after {
+        detail.insert(
+            "retry_after_ms".to_string(),
+            retry_after.as_millis().to_string(),
+        );
+    }
+    detail.insert("message".to_string(), safe_log_field(Some(message), 512));
+
+    if status == StatusCode::TOO_MANY_REQUESTS.as_u16() {
+        if let Some(boundary) = official_codex_sticky_routing_boundary(request) {
+            detail.insert(
+                "provider_code".to_string(),
+                "usage_limit_reached".to_string(),
+            );
+            detail.insert(
+                "terminal_origin".to_string(),
+                "upstream_quota_error".to_string(),
+            );
+            detail.insert("sticky_boundary".to_string(), boundary.reason().to_string());
+        }
+    }
+
+    detail
+}
+
 async fn write_http_response(
     stream: &mut TcpStream,
     status: u16,
@@ -10503,15 +10548,8 @@ fn should_retry_single_account_upstream_status(status: StatusCode) -> bool {
     )
 }
 
-fn hard_affinity_inline_retry_wait_limit(config: &CodexLocalApiSafetyConfig) -> Duration {
-    let configured_timeout = Duration::from_secs(config.request_timeout_seconds.max(1));
-    let short_budget_limit = configured_timeout
-        .saturating_sub(Duration::from_secs(1))
-        .max(MAX_INLINE_ACCOUNT_RETRY_WAIT);
-    if configured_timeout < HARD_AFFINITY_MIN_EXTENDED_WAIT_BASE {
-        return short_budget_limit.min(HARD_AFFINITY_CONTINUITY_WAIT_LIMIT);
-    }
-    HARD_AFFINITY_CONTINUITY_WAIT_LIMIT
+fn hard_affinity_inline_retry_wait_limit(_config: &CodexLocalApiSafetyConfig) -> Duration {
+    MAX_INLINE_ACCOUNT_RETRY_WAIT
 }
 
 fn should_retry_hard_affinity_upstream_failure(
@@ -10725,14 +10763,15 @@ async fn proxy_request_with_account_pool(
         .or_else(|| request_affinity_account_from_registry(&health_registry, request, now));
     let hard_affinity_account_id = active_stream_affinity_account_id
         .clone()
-        .or(response_affinity_account_id.clone());
-    let affinity_account_id = hard_affinity_account_id
-        .clone()
+        .or(response_affinity_account_id.clone())
         .or(request_affinity_account_id.clone());
+    let affinity_account_id = hard_affinity_account_id.clone();
     let hard_affinity_source = if active_stream_affinity_account_id.is_some() {
         "active_stream"
     } else if response_affinity_account_id.is_some() {
         "previous_response_id"
+    } else if request_affinity_account_id.is_some() {
+        "codex_turn_state"
     } else {
         "none"
     };
@@ -10740,7 +10779,7 @@ async fn proxy_request_with_account_pool(
         if active_stream_affinity_account_id.is_some() {
             "active_stream_hard"
         } else {
-            "soft"
+            "turn_state_hard"
         }
     } else {
         "absent"
@@ -11303,6 +11342,18 @@ async fn proxy_request_with_account_pool(
                         hard_affinity_account_id.as_deref() == Some(account.id.as_str());
                     let hard_affinity_retry_wait_limit =
                         hard_affinity_inline_retry_wait_limit(&collection.safety_config);
+                    detail.insert(
+                        "hard_affinity_bound".to_string(),
+                        hard_affinity_bound.to_string(),
+                    );
+                    detail.insert(
+                        "hard_affinity_source".to_string(),
+                        hard_affinity_source.to_string(),
+                    );
+                    detail.insert(
+                        "request_affinity_mode".to_string(),
+                        request_affinity_mode.to_string(),
+                    );
                     if hard_affinity_bound {
                         detail.insert(
                             "max_hard_affinity_inline_retry_wait_ms".to_string(),
@@ -11363,14 +11414,19 @@ async fn proxy_request_with_account_pool(
                         );
                         continue;
                     }
+                    if hard_affinity_bound {
+                        return Err(ProxyDispatchError {
+                            status: status.as_u16(),
+                            message,
+                            account_id: Some(account.id.clone()),
+                            account_email: Some(account.email.clone()),
+                            retry_after: classified.retry_after,
+                            defer_until_pool_available: false,
+                        });
+                    }
                     last_status = status.as_u16();
                     last_error = if can_try_next_account {
                         format!("账号 {} 当前不可用，已尝试轮转: {}", account.email, message)
-                    } else if hard_affinity_bound {
-                        format!(
-                            "账号 {} 的 sticky 任务暂不可用，已保持原账号且不切号: {}",
-                            account.email, message
-                        )
                     } else {
                         format!(
                             "账号 {} 当前不可用，已达到本次请求切号上限: {}",
@@ -11611,7 +11667,7 @@ async fn request_has_resolved_hard_affinity(request: &ParsedRequest) -> bool {
             .is_some();
     }
 
-    false
+    resolve_request_affinity_account(request).await.is_some()
 }
 
 fn should_write_in_band_pool_unavailable_response(
@@ -12032,22 +12088,22 @@ async fn write_proxy_dispatch_error_response(
         message.as_str(),
     );
     let context = build_audit_context(request, account_id.as_deref());
-    let mut detail = BTreeMap::from([("latency_ms".to_string(), latency_ms.to_string())]);
-    if let Some(retry_after) = retry_after {
-        detail.insert(
-            "retry_after_ms".to_string(),
-            retry_after.as_millis().to_string(),
-        );
-    }
-    detail.insert(
-        "message".to_string(),
-        safe_log_field(Some(message.as_str()), 512),
+    let detail = proxy_dispatch_final_error_detail(
+        request,
+        status,
+        message.as_str(),
+        retry_after,
+        latency_ms,
     );
     record_audit_event_from_context(
         &context,
         "final_response",
         Some(status),
-        Some(classify_codex_api_failure(Some(status), message.as_str())),
+        Some(proxy_dispatch_final_error_type(
+            request,
+            status,
+            message.as_str(),
+        )),
         None,
         Some("error"),
         detail,
@@ -12580,10 +12636,12 @@ mod tests {
         now_ms, official_codex_sticky_routing_boundary, parse_codex_retry_after,
         parse_http_request, parse_responses_payload_from_upstream, parse_retry_after_header_value,
         pause_health_registry_account, pin_process_sticky_account, pool_wait_fits_request_budget,
-        prepare_gateway_request, proxy_request_with_account_pool, prune_process_sticky_binding,
-        record_manual_pause_audit_event, record_manual_recovery_audit_event,
-        recover_health_registry_account, request_affinity_account_from_registry,
-        request_affinity_key, request_lineage_id_with_source, reset_active_stream_leases_for_tests,
+        prepare_gateway_request, proxy_dispatch_final_error_detail,
+        proxy_dispatch_final_error_type, proxy_request_with_account_pool,
+        prune_process_sticky_binding, record_manual_pause_audit_event,
+        record_manual_recovery_audit_event, recover_health_registry_account,
+        request_affinity_account_from_registry, request_affinity_key,
+        request_lineage_id_with_source, reset_active_stream_leases_for_tests,
         reset_local_api_backpressure_for_tests, resolve_supported_model_alias,
         retry_failover_account_attempt_limit, retry_failover_max_retries,
         save_health_registry_to_path, selector_audit_detail, selector_selected_reason,
@@ -12823,14 +12881,14 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn hard_affinity_retry_should_allow_reset_window_inside_default_request_budget() {
+    fn hard_affinity_retry_allows_only_short_reset_window() {
         let classified = classify_codex_upstream_error(
             StatusCode::TOO_MANY_REQUESTS,
             None,
-            r#"{"error":{"type":"usage_limit_reached","reset_after_seconds":61}}"#,
+            r#"{"error":{"type":"usage_limit_reached","reset_after_seconds":2}}"#,
         );
 
-        assert_eq!(classified.retry_after, Some(Duration::from_secs(61)));
+        assert_eq!(classified.retry_after, Some(Duration::from_secs(2)));
         assert_eq!(
             should_retry_hard_affinity_upstream_failure(
                 true,
@@ -12839,12 +12897,12 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 1,
                 hard_affinity_inline_retry_wait_limit(&CodexLocalApiSafetyConfig::default())
             ),
-            Some(Duration::from_secs(61))
+            Some(Duration::from_secs(2))
         );
     }
 
     #[test]
-    fn hard_affinity_retry_should_cover_weekly_usage_limit_reset() {
+    fn hard_affinity_retry_refuses_weekly_usage_limit_reset_wait() {
         let classified = classify_codex_upstream_error(
             StatusCode::TOO_MANY_REQUESTS,
             None,
@@ -12856,14 +12914,14 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             hard_affinity_inline_retry_wait_limit(&CodexLocalApiSafetyConfig::default());
         assert_eq!(classified.retry_after, Some(reset_wait));
         assert!(
-            retry_limit >= reset_wait,
-            "hard-affinity continuation must not leak 429/retry-limit before the old account reset; limit={:?}, reset_wait={:?}",
+            retry_limit < reset_wait,
+            "hard-affinity continuation must not stall until a long quota reset; limit={:?}, reset_wait={:?}",
             retry_limit,
             reset_wait
         );
         assert_eq!(
             should_retry_hard_affinity_upstream_failure(true, &classified, 0, 1, retry_limit),
-            Some(reset_wait)
+            None
         );
     }
 
@@ -15473,7 +15531,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn gateway_generated_turn_state_soft_affinity_falls_back_after_completed_stream() {
+    async fn gateway_generated_turn_state_remains_hard_affinity_across_turn_requests() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -15503,7 +15561,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("fake upstream should have addr");
         let upstream_seen_task = std::sync::Arc::clone(&upstream_seen);
         let upstream_server = tokio::spawn(async move {
-            for _ in 0..3 {
+            for _ in 0..2 {
                 let (mut socket, _) = upstream_listener
                     .accept()
                     .await
@@ -15782,16 +15840,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let _ = fs::remove_dir_all(&root);
 
         assert!(
-            second_response_text.contains("HTTP/1.1 200 OK")
-                && second_response_text.contains("resp_current_after_soft_affinity")
-                && second_response_text.contains("CURRENT"),
-            "completed-stream turn-state affinity should fall back instead of waiting forever on an exhausted old account: {}",
-            second_response_text
-        );
-        assert!(
-            !second_response_text.contains("resp_cockpit_pool_unavailable_")
-                && !second_response_text.contains("synthetic_pool_unavailable_notice"),
-            "completed-stream turn-state fallback must stay on real upstream output: {}",
+            second_response_text.contains("HTTP/1.1 429 Too Many Requests")
+                && second_response_text.contains("usage_limit_reached"),
+            "same-turn followup must preserve original-account quota failure instead of consuming a replacement account: {}",
             second_response_text
         );
         assert!(
@@ -15805,22 +15856,21 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             seen.iter()
                 .any(|request| request.contains("Bearer sk-local-old")
                     && request.to_ascii_lowercase().contains("x-codex-turn-state:")),
-            "soft-affinity followup should try the old account first: {}",
+            "same-turn followup should use the original account: {}",
             seen_text
         );
         assert!(
-            seen
+            !seen
                 .iter()
                 .any(|request| request.contains("Bearer sk-local-current")),
-            "soft-affinity followup should fall back to the current account after old-account quota exhaustion: {}",
+            "same-turn followup must not consume the replacement account: {}",
             seen_text
         );
 
-        assert!(audit.contains("\"phase\":\"fallback_selected\""));
-        assert!(audit.contains("\"outcome\":\"next_account\""));
-        assert!(audit.contains("\"request_affinity_mode\":\"soft\""));
-        assert!(audit.contains("\"hard_affinity_bound\":\"false\""));
-        assert!(!audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(audit.contains("\"phase\":\"fallback_blocked\""));
+        assert!(audit.contains("\"outcome\":\"hard_affinity\""));
+        assert!(audit.contains("\"hard_affinity_bound\":\"true\""));
+        assert!(!audit.contains("\"phase\":\"fallback_selected\""));
         assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
         assert!(
             !audit.contains(turn_state.as_str()),
@@ -16018,14 +16068,34 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
             gateway_request_id: "gw-test-7".to_string(),
         };
-        let active_context = build_audit_context(&request, Some("api-old"));
-        let mut active_lease =
-            grant_active_stream_lease_for_request(&active_context, "api-old", &request);
         let err = proxy_request_with_account_pool(&request, &collection)
             .await
-            .expect_err("active stream turn-state hard affinity should not fall back to replacement account");
+            .expect_err("turn-state hard affinity should not fall back to replacement account");
         assert_eq!(err.account_id.as_deref(), Some("api-old"));
         assert_eq!(err.status, StatusCode::TOO_MANY_REQUESTS.as_u16());
+        assert_eq!(
+            proxy_dispatch_final_error_type(&request, err.status, err.message.as_str()),
+            "usage_limit_reached"
+        );
+        let final_detail = proxy_dispatch_final_error_detail(
+            &request,
+            err.status,
+            err.message.as_str(),
+            err.retry_after,
+            123,
+        );
+        assert_eq!(
+            final_detail.get("provider_code").map(String::as_str),
+            Some("usage_limit_reached")
+        );
+        assert_eq!(
+            final_detail.get("terminal_origin").map(String::as_str),
+            Some("upstream_quota_error")
+        );
+        assert_eq!(
+            final_detail.get("sticky_boundary").map(String::as_str),
+            Some("codex_turn_state")
+        );
 
         let seen = upstream_server
             .await
@@ -16044,7 +16114,6 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         );
         assert!(!audit.contains("\"phase\":\"fallback_selected\""));
 
-        active_lease.release(ActiveStreamTerminal::Completed);
         {
             let mut runtime = gateway_runtime().lock().await;
             *runtime = super::GatewayRuntime::default();
@@ -16258,14 +16327,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
             gateway_request_id: "gw-test-7b".to_string(),
         };
-        let active_context = build_audit_context(&request, Some("api-old"));
-        let mut active_lease =
-            grant_active_stream_lease_for_request(&active_context, "api-old", &request);
-
         let success = proxy_request_with_account_pool(&request, &collection)
             .await
             .expect(
-                "active stream hard affinity should retry the original account after a short reset",
+                "turn-state hard affinity should retry the original account after a short reset",
             );
         assert_eq!(success.account_id, "api-old");
         let response_text = success
@@ -16306,7 +16371,6 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(audit.contains("\"outcome\":\"retrying\""));
         assert!(!audit.contains("\"phase\":\"fallback_selected\""));
 
-        active_lease.release(ActiveStreamTerminal::Completed);
         {
             let mut runtime = gateway_runtime().lock().await;
             *runtime = super::GatewayRuntime::default();
@@ -16325,7 +16389,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn hard_affinity_followup_waits_past_normal_timeout_on_original_account() {
+    async fn hard_affinity_followup_retries_short_reset_on_original_account() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -16544,9 +16608,6 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             &persisted_registry,
         )
         .expect("persistent turn-state affinity should be written");
-        let active_context = build_audit_context(&affinity_request, Some("api-old"));
-        let mut active_lease =
-            grant_active_stream_lease_for_request(&active_context, "api-old", &affinity_request);
         {
             let mut runtime = gateway_runtime().lock().await;
             runtime.request_affinity.clear();
@@ -16589,7 +16650,6 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let audit =
             fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE)).unwrap_or_default();
 
-        active_lease.release(ActiveStreamTerminal::Completed);
         {
             let mut runtime = gateway_runtime().lock().await;
             *runtime = super::GatewayRuntime::default();
