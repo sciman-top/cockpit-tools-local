@@ -1155,9 +1155,11 @@ function Get-AuditAcceptanceSummary {
         completed = $false
         terminalError = $false
         interruptedByCooldown = $false
+        upstreamStreamError = $false
         firstAccountHash = $event.accountHash
         lastAccountHash = $event.accountHash
         phases = @()
+        streamStates = @()
         statuses = @()
         accountHashes = @()
       }
@@ -1177,9 +1179,11 @@ function Get-AuditAcceptanceSummary {
         completed = $false
         terminalError = $false
         interruptedByCooldown = $false
+        upstreamStreamError = $false
         firstAccountHash = $event.accountHash
         lastAccountHash = $event.accountHash
         phases = @()
+        streamStates = @()
         statuses = @()
         accountHashes = @()
       }
@@ -1195,6 +1199,9 @@ function Get-AuditAcceptanceSummary {
     $group.lastTimestamp = $event.timestamp
     $group.lastAccountHash = $event.accountHash
     $group.phases += $event.phase
+    if (-not [string]::IsNullOrWhiteSpace($event.streamState)) {
+      $group.streamStates += $event.streamState
+    }
     if ($null -ne $event.status) {
       $group.statuses += $event.status
     }
@@ -1210,6 +1217,14 @@ function Get-AuditAcceptanceSummary {
     if ($event.phase -eq "final_response" -and $event.status -ge 400 -and -not $group.completed) {
       $group.terminalError = $true
     }
+    if (
+      $event.phase -eq "stream_error" -or
+      ($event.phase -eq "stream_write" -and $event.streamState -eq "upstream_error") -or
+      ($event.phase -eq "stream_terminal" -and ($event.outcome -eq "error" -or $event.streamState -eq "upstream_error"))
+    ) {
+      $group.terminalError = $true
+      $group.upstreamStreamError = $true
+    }
     if ($group.started -and $event.phase -eq "model_cooldown_applied") {
       $group.interruptedByCooldown = $true
     }
@@ -1223,6 +1238,8 @@ function Get-AuditAcceptanceSummary {
   $completedStreams = @($startedStreams | Where-Object { $_.completed })
   $openStreams = @($startedStreams | Where-Object { -not $_.completed -and -not $_.terminalError })
   $interruptedStreams = @($startedStreams | Where-Object { $_.interruptedByCooldown })
+  $terminalErrorStreams = @($startedStreams | Where-Object { $_.terminalError })
+  $upstreamStreamErrorStreams = @($startedStreams | Where-Object { $_.upstreamStreamError -or ($_.streamStates -contains "upstream_error") -or ($_.phases -contains "stream_error") })
   $clientAbortedStreams = @($startedStreams | Where-Object { $_.phases -contains "client_aborted" })
   $clientAbortedBeforeFirstChunk = @($clientAbortedStreams | Where-Object { $_.phases -notcontains "stream_write" })
   $clientAbortedAfterFirstChunk = @($clientAbortedStreams | Where-Object { $_.phases -contains "stream_write" })
@@ -1679,6 +1696,23 @@ function Get-AuditAcceptanceSummary {
     completedStreamCount = $completedStreams.Count
     openStreamCount = $openStreams.Count
     interruptedStreamCount = $interruptedStreams.Count
+    terminalErrorStreamCount = $terminalErrorStreams.Count
+    upstreamStreamErrorCount = $upstreamStreamErrorStreams.Count
+    upstreamStreamErrorSummaries = @($upstreamStreamErrorStreams | ForEach-Object {
+      [ordered]@{
+        streamKey = $_.streamKey
+        requestId = $_.requestId
+        firstTimestamp = $_.firstTimestamp
+        lastTimestamp = $_.lastTimestamp
+        completed = [bool]$_.completed
+        terminalError = [bool]$_.terminalError
+        firstAccountHash = $_.firstAccountHash
+        lastAccountHash = $_.lastAccountHash
+        phases = @($_.phases | Select-Object -Unique)
+        streamStates = @($_.streamStates | Select-Object -Unique)
+        statuses = @($_.statuses | Select-Object -Unique)
+      }
+    })
     clientAbortedStreamCount = $clientAbortedStreams.Count
     clientAbortedBeforeFirstChunkCount = $clientAbortedBeforeFirstChunk.Count
     clientAbortedAfterFirstChunkCount = $clientAbortedAfterFirstChunk.Count
@@ -1714,6 +1748,7 @@ function Get-AuditAcceptanceSummary {
         lastAccountHash = $_.lastAccountHash
         accountHashes = @($_.accountHashes | Select-Object -Unique)
         statuses = @($_.statuses | Select-Object -Unique)
+        streamStates = @($_.streamStates | Select-Object -Unique)
         phases = @($_.phases | Select-Object -Unique)
       }
     })
@@ -1868,6 +1903,9 @@ function New-AcceptanceResults {
     requiredCompletedStreams = [int]$RequiredCompletedStreams
     openStreamCount = [int]$AuditSummary.openStreamCount
     interruptedStreamCount = [int]$AuditSummary.interruptedStreamCount
+    terminalErrorStreamCount = [int]$AuditSummary.terminalErrorStreamCount
+    upstreamStreamErrorCount = [int]$AuditSummary.upstreamStreamErrorCount
+    upstreamStreamErrorSummaries = @($AuditSummary.upstreamStreamErrorSummaries)
     clientAbortedStreamCount = [int]$AuditSummary.clientAbortedStreamCount
     clientAbortedBeforeFirstChunkCount = [int]$AuditSummary.clientAbortedBeforeFirstChunkCount
     clientAbortedAfterFirstChunkCount = [int]$AuditSummary.clientAbortedAfterFirstChunkCount
@@ -1875,6 +1913,8 @@ function New-AcceptanceResults {
   }
   if ($AuditSummary.interruptedStreamCount -gt 0) {
     $results += Set-MonitorStatus $stream "fail" "已开始的 stream 后续出现 model_cooldown_applied，中断边界异常" $streamEvidence
+  } elseif ($AuditSummary.upstreamStreamErrorCount -gt 0) {
+    $results += Set-MonitorStatus $stream "fail" "已开始的 stream 出现 upstream_error/stream_error；这会让 Codex turn 停在最后一个可见工具动作，必须以明确 terminal event 闭合并纳入故障统计" $streamEvidence
   } elseif ($AuditSummary.completedStreamCount -ge $RequiredCompletedStreams) {
     $results += Set-MonitorStatus $stream "pass" $null $streamEvidence
   } elseif ($RequireStreamCompletion) {

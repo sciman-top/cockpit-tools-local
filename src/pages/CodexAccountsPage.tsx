@@ -287,7 +287,7 @@ const FILTER_TYPES_FIELD = "filter_types";
 const EXPIRY_FILTER_FIELD = "expiry_filter";
 const GROUP_FILTER_FIELD = "group_filter";
 const ACTIVE_GROUP_ID_FIELD = "active_group_id";
-const codexSessionActivatedAccountIds = new Set<string>();
+let codexSessionActivatedAccountId: string | null = null;
 const CODEX_ACCOUNT_DRAG_MIME = "application/x-cockpit-codex-account-ids";
 const CODEX_API_SERVICE_DROP_TARGET = "api-service";
 
@@ -1859,9 +1859,9 @@ export function CodexAccountsPage() {
   const [oauthTokenExchangeRetryVisible, setOauthTokenExchangeRetryVisible] =
     useState(false);
   const [switching, setSwitching] = useState<string | null>(null);
-  const [sessionActivatedAccountIds, setSessionActivatedAccountIds] = useState<
-    Set<string>
-  >(() => new Set(codexSessionActivatedAccountIds));
+  const [sessionActivatedAccountId, setSessionActivatedAccountId] = useState<
+    string | null
+  >(() => codexSessionActivatedAccountId);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [apiKeyInputVisible, setApiKeyInputVisible] = useState(false);
   const [apiBaseUrlInput, setApiBaseUrlInput] = useState(
@@ -2873,8 +2873,8 @@ export function CodexAccountsPage() {
   const markSessionActivatedAccount = useCallback((accountId: string) => {
     const normalizedAccountId = accountId.trim();
     if (!normalizedAccountId) return;
-    codexSessionActivatedAccountIds.add(normalizedAccountId);
-    setSessionActivatedAccountIds(new Set(codexSessionActivatedAccountIds));
+    codexSessionActivatedAccountId = normalizedAccountId;
+    setSessionActivatedAccountId(normalizedAccountId);
   }, []);
 
   const executeCodexAccountSwitch = useCallback(
@@ -6025,7 +6025,7 @@ export function CodexAccountsPage() {
     items.map((account) => {
       const presentation = resolvePresentation(account);
       const isCurrent = overviewCurrentAccountId === account.id;
-      const isSessionActivated = sessionActivatedAccountIds.has(account.id);
+      const isSessionActivated = sessionActivatedAccountId === account.id;
       const isSelected = selected.has(account.id);
       const isApiKeyAccount = isCodexApiKeyAccount(account);
       const compactQuotaItems = resolveCompactQuotaItems(presentation);
@@ -6174,7 +6174,7 @@ export function CodexAccountsPage() {
       const presentation = resolvePresentation(account);
       const meta = resolveAccountMeta(account);
       const isCurrent = overviewCurrentAccountId === account.id;
-      const isSessionActivated = sessionActivatedAccountIds.has(account.id);
+      const isSessionActivated = sessionActivatedAccountId === account.id;
       const isApiKeyAccount = isCodexApiKeyAccount(account);
       const isNewApiAccount = isCodexNewApiAccount(account);
       const isEditingApiKeyName =
@@ -7465,7 +7465,7 @@ export function CodexAccountsPage() {
       const presentation = resolvePresentation(account);
       const meta = resolveAccountMeta(account);
       const isCurrent = overviewCurrentAccountId === account.id;
-      const isSessionActivated = sessionActivatedAccountIds.has(account.id);
+      const isSessionActivated = sessionActivatedAccountId === account.id;
       const isApiKeyAccount = isCodexApiKeyAccount(account);
       const isNewApiAccount = isCodexNewApiAccount(account);
       const isEditingApiKeyName =

@@ -9126,15 +9126,38 @@ fn record_stream_audit_event(
     outcome: &str,
     content_type: &str,
 ) {
+    record_stream_audit_event_with_detail(
+        context,
+        status,
+        None,
+        stream_state,
+        outcome,
+        content_type,
+        BTreeMap::new(),
+    );
+}
+
+fn record_stream_audit_event_with_detail(
+    context: Option<&AuditContext>,
+    status: StatusCode,
+    error_type: Option<&str>,
+    stream_state: &str,
+    outcome: &str,
+    content_type: &str,
+    mut detail: BTreeMap<String, String>,
+) {
     if let Some(context) = context {
+        detail
+            .entry("content_type".to_string())
+            .or_insert_with(|| content_type.to_string());
         record_audit_event_from_context(
             context,
             "stream_write",
             Some(status.as_u16()),
-            None,
+            error_type,
             Some(stream_state),
             Some(outcome),
-            BTreeMap::from([("content_type".to_string(), content_type.to_string())]),
+            detail,
         );
     }
 }
@@ -9185,6 +9208,35 @@ fn record_stream_terminal_audit_event(
             Some(stream_state),
             Some(outcome),
             stream_terminal_audit_detail(content_type, response_capture),
+        );
+    }
+}
+
+fn record_stream_terminal_error_audit_event(
+    context: Option<&AuditContext>,
+    status: StatusCode,
+    content_type: &str,
+    terminal_origin: &str,
+    message: &str,
+    response_capture: &ResponseCapture,
+    terminal_contract: &str,
+) {
+    if let Some(context) = context {
+        let mut detail = stream_terminal_audit_detail(content_type, response_capture);
+        detail.insert("terminal_origin".to_string(), terminal_origin.to_string());
+        detail.insert("message".to_string(), safe_log_field(Some(message), 512));
+        detail.insert(
+            "terminal_contract".to_string(),
+            terminal_contract.to_string(),
+        );
+        record_audit_event_from_context(
+            context,
+            "stream_terminal",
+            Some(status.as_u16()),
+            Some("upstream_stream_error"),
+            Some("upstream_error"),
+            Some("error"),
+            detail,
         );
     }
 }
@@ -10315,14 +10367,72 @@ async fn write_upstream_response_body_chunks(
         let chunk = match chunk_result {
             Ok(chunk) => chunk,
             Err(e) => {
-                record_stream_audit_event(
+                let message = format!("读取上游响应失败: {}", e);
+                let response_capture = usage_collector.finish();
+                let mut detail = stream_terminal_audit_detail(content_type, &response_capture);
+                detail.insert(
+                    "terminal_origin".to_string(),
+                    "upstream_stream_error".to_string(),
+                );
+                detail.insert(
+                    "message".to_string(),
+                    safe_log_field(Some(message.as_str()), 512),
+                );
+                detail.insert(
+                    "terminal_contract".to_string(),
+                    if is_stream {
+                        "response_failed_sse"
+                    } else {
+                        "transport_error"
+                    }
+                    .to_string(),
+                );
+                record_stream_audit_event_with_detail(
                     audit_context,
                     status,
+                    Some("upstream_stream_error"),
                     "upstream_error",
                     "error",
                     content_type,
+                    detail,
                 );
-                return Err(format!("读取上游响应失败: {}", e));
+                if is_stream {
+                    let terminal_sse = build_responses_upstream_stream_error_sse(&message);
+                    let write_result =
+                        match write_chunked_response_chunk(stream, &terminal_sse).await {
+                            Ok(()) => finish_chunked_response(stream).await,
+                            Err(err) => Err(err),
+                        };
+                    match write_result {
+                        Ok(()) => {
+                            record_stream_terminal_error_audit_event(
+                                audit_context,
+                                status,
+                                content_type,
+                                "upstream_stream_error",
+                                &message,
+                                &response_capture,
+                                "response_failed_sse",
+                            );
+                        }
+                        Err(write_err) => {
+                            record_stream_terminal_error_audit_event(
+                                audit_context,
+                                status,
+                                content_type,
+                                "upstream_stream_error",
+                                &format!(
+                                    "{}; 写入 downstream terminal SSE 失败: {}",
+                                    message, write_err
+                                ),
+                                &response_capture,
+                                "response_failed_sse_write_failed",
+                            );
+                            return Err(format!("{}; 写入下游失败: {}", message, write_err));
+                        }
+                    }
+                }
+                return Err(message);
             }
         };
         if chunk.is_empty() {
@@ -11724,6 +11834,41 @@ fn build_completed_pool_unavailable_sse(payload: &Value) -> Vec<u8> {
     stream_body.into_bytes()
 }
 
+fn build_responses_upstream_stream_error_sse(message: &str) -> Vec<u8> {
+    let created_at = chrono::Utc::now().timestamp();
+    let response_id = format!("resp_cockpit_upstream_stream_error_{}", now_ms());
+    let safe_message = safe_log_field(Some(message), 512);
+    let mut stream_body = String::from("\n\n");
+    push_named_sse_payload(
+        &mut stream_body,
+        "response.failed",
+        json!({
+            "type": "response.failed",
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "created_at": created_at,
+                "status": "failed",
+                "model": "unknown",
+                "output": [],
+                "error": {
+                    "type": "server_error",
+                    "code": "cockpit_upstream_stream_error",
+                    "message": safe_message
+                },
+                "incomplete_details": null,
+                "usage": null,
+                "metadata": {
+                    "cockpit_terminal_origin": "upstream_stream_error",
+                    "cockpit_completion_contract": "openai_codex_response_failed_with_done"
+                }
+            }
+        }),
+    );
+    stream_body.push_str("data: [DONE]\n\n");
+    stream_body.into_bytes()
+}
+
 async fn write_in_band_pool_unavailable_response(
     stream: &mut TcpStream,
     request: &ParsedRequest,
@@ -12397,8 +12542,9 @@ mod tests {
         build_health_summary_from_registry_for_accounts, build_images_api_payload,
         build_local_models_response, build_ordered_account_ids, build_pool_unavailable_message,
         build_projection_seed_local_access_account_ids, build_proxy_dispatch_error_body,
-        build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
-        build_runtime_mode_state, build_selector_audit_summary, cache_prepared_account,
+        build_request_routing_hint, build_responses_upstream_stream_error_sse,
+        build_routing_pool_account_ids, build_runtime_account, build_runtime_mode_state,
+        build_selector_audit_summary, cache_prepared_account,
         classify_active_stream_terminal_error, classify_codex_api_failure,
         classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
         extract_usage_capture, filter_local_access_account_ids, first_audit_timestamp_from_path,
@@ -20015,6 +20161,27 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let mut state = StreamWriteState::default();
         state.mark_first_chunk_written();
         assert!(!state.can_attempt_account_fallback());
+    }
+
+    #[test]
+    fn upstream_stream_error_sse_has_explicit_failed_terminal_event() {
+        let body = build_responses_upstream_stream_error_sse(
+            "读取上游响应失败: stream closed before response.completed",
+        );
+        let text = String::from_utf8(body).expect("failure SSE should be UTF-8");
+
+        assert!(text.contains("event: response.failed"));
+        assert!(text.contains("\"code\":\"cockpit_upstream_stream_error\""));
+        assert!(text.contains("openai_codex_response_failed_with_done"));
+        assert!(text.ends_with("data: [DONE]\n\n"));
+
+        let mut collector = ResponseUsageCollector::new(true);
+        collector.feed(text.as_bytes());
+        let capture = collector.finish();
+        assert!(
+            !capture.response_completed_seen,
+            "response.failed must not be reported as a successful completion"
+        );
     }
 
     #[test]

@@ -793,6 +793,34 @@ try {
   Assert-Equal $sseIdleSummary.audit.sseIdleErrorCount 1 "expected stream disconnected pool_unavailable text to be counted"
   Assert-Equal (($sseIdleSummary.results | Where-Object name -eq "sse_idle_pool_wait_regression_absent").status) "fail" "expected stream disconnected pool_unavailable text to fail regression guard"
 
+  $dataRootUpstreamStreamError = Join-Path $tempRoot "data-upstream-stream-error"
+  $auditUpstreamStreamError = Join-Path $dataRootUpstreamStreamError "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditUpstreamStreamError @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:stream-error"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-stream-error"; turn_lineage_id = "turn:sha256:stream-error" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:stream-error"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:active"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-stream-error"; turn_lineage_id = "turn:sha256:stream-error" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:stream-error"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:active"; status = 200; streamState = "first_chunk_written"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-stream-error"; turn_lineage_id = "turn:sha256:stream-error" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:stream-error"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:active"; status = 200; errorType = "upstream_stream_error"; streamState = "upstream_error"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-stream-error"; turn_lineage_id = "turn:sha256:stream-error"; terminal_origin = "upstream_stream_error"; response_completed_seen = "false"; terminal_contract = "response_failed_sse" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:stream-error"; phase = "stream_terminal"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:active"; status = 200; errorType = "upstream_stream_error"; streamState = "upstream_error"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-stream-error"; turn_lineage_id = "turn:sha256:stream-error"; terminal_origin = "upstream_stream_error"; response_completed_seen = "false"; terminal_contract = "response_failed_sse" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:stream-error"; phase = "stream_error"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:active"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-stream-error"; turn_lineage_id = "turn:sha256:stream-error" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:stream-error"; phase = "lease_released"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:active"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-stream-error"; turn_lineage_id = "turn:sha256:stream-error" } }
+  )
+
+  $upstreamStreamErrorOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootUpstreamStreamError `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireStreamCompletion `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 1) "expected upstream stream error fixture exit code 1"
+  $upstreamStreamErrorSummary = Convert-JsonOutput $upstreamStreamErrorOutput "upstream stream error fixture"
+  Assert-Equal $upstreamStreamErrorSummary.overall "fail" "expected upstream stream error fixture overall fail"
+  Assert-Equal $upstreamStreamErrorSummary.audit.upstreamStreamErrorCount 1 "expected upstream stream error to be counted"
+  Assert-Equal $upstreamStreamErrorSummary.audit.terminalErrorStreamCount 1 "expected upstream stream error to be terminal"
+  Assert-Equal (($upstreamStreamErrorSummary.results | Where-Object name -eq "accepted_stream_continuity").status) "fail" "expected upstream stream error to fail stream continuity"
+
   $dataRootFail = Join-Path $tempRoot "data-fail"
   $auditFail = Join-Path $dataRootFail "codex_local_access_audit.jsonl"
   New-Item -ItemType Directory -Force -Path $dataRootFail | Out-Null
