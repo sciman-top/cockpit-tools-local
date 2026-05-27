@@ -329,10 +329,32 @@ function Test-LocalPoolUnavailableEvent {
   $false
 }
 
+function Test-RouteIsCodexResponses {
+  param([string]$Route)
+  $route = [string]$Route
+  $route -eq "/v1/responses" -or $route -eq "/responses" -or $route.EndsWith("/responses")
+}
+
 function Test-CodexResponsesRoute {
   param([System.Collections.IDictionary]$Event)
-  $route = [string]$Event.route
-  $route -eq "/v1/responses" -or $route -eq "/responses" -or $route.EndsWith("/responses")
+  Test-RouteIsCodexResponses ([string]$Event.route)
+}
+
+function Test-CodexFacingResponsesRoute {
+  param(
+    [System.Collections.IDictionary]$Event,
+    [hashtable]$GatewayClientRoutes
+  )
+  if (-not (Test-CodexResponsesRoute $Event)) {
+    return $false
+  }
+
+  $gatewayRequestId = Get-AuditGatewayRequestId $Event
+  if ($gatewayRequestId -and $GatewayClientRoutes.ContainsKey($gatewayRequestId)) {
+    return Test-RouteIsCodexResponses ([string]$GatewayClientRoutes[$gatewayRequestId])
+  }
+
+  $true
 }
 
 function Test-AuditStreamTerminalCompleted {
@@ -792,6 +814,17 @@ function Format-AuditRealtimeEventLine {
 function Get-AuditAcceptanceSummary {
   param([object[]]$Events)
   $parsedEvents = @($Events | Where-Object { $_.parsed })
+  $gatewayClientRoutes = @{}
+  foreach ($event in $parsedEvents) {
+    $gatewayRequestId = Get-AuditGatewayRequestId $event
+    if (-not $gatewayRequestId) {
+      continue
+    }
+    $clientRoute = Get-AuditDetailValue -Event $event -Name "client_route"
+    if ($clientRoute) {
+      $gatewayClientRoutes[$gatewayRequestId] = $clientRoute
+    }
+  }
   $retryLimitEvents = @($Events | Where-Object {
     ($_.rawLine -match 'exceeded retry limit|last status:\s*429|429 Too Many Requests') -and -not (Test-LocalPoolUnavailableEvent $_)
   })
@@ -810,16 +843,16 @@ function Get-AuditAcceptanceSummary {
   })
   $localPoolUnavailableEvents = @($parsedEvents | Where-Object { (Test-LocalPoolUnavailableEvent $_) -and $_.phase -ne "pool_wait" })
   $inBandSyntheticPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
-    (Test-CodexResponsesRoute $_) -and $_.status -eq 200 -and $_.outcome -eq "in_band_synthetic"
+    (Test-CodexFacingResponsesRoute $_ $gatewayClientRoutes) -and $_.status -eq 200 -and $_.outcome -eq "in_band_synthetic"
   })
   $responsesFailedPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
-    (Test-CodexResponsesRoute $_) -and $_.status -eq 200 -and ($_.streamState -eq "failed" -or $_.outcome -eq "pool_unavailable_after_active_stream_drain" -or $_.rawLine -match 'response\.failed')
+    (Test-CodexFacingResponsesRoute $_ $gatewayClientRoutes) -and $_.status -eq 200 -and ($_.streamState -eq "failed" -or $_.outcome -eq "pool_unavailable_after_active_stream_drain" -or $_.rawLine -match 'response\.failed')
   })
   $responsesLocalCompletionPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
-    (Test-CodexResponsesRoute $_) -and $_.status -eq 200 -and ($_.streamState -eq "completed" -or $_.outcome -eq "in_band_local_completion" -or $_.rawLine -match 'response\.completed')
+    (Test-CodexFacingResponsesRoute $_ $gatewayClientRoutes) -and $_.status -eq 200 -and ($_.streamState -eq "completed" -or $_.outcome -eq "in_band_local_completion" -or $_.rawLine -match 'response\.completed')
   })
   $responsesTransport503PoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
-    (Test-CodexResponsesRoute $_) -and $_.status -eq 503 -and $_.outcome -ne "in_band_synthetic"
+    (Test-CodexFacingResponsesRoute $_ $gatewayClientRoutes) -and $_.status -eq 503 -and $_.outcome -ne "in_band_synthetic"
   })
   $responsesTransport503TextEvents = @($Events | Where-Object {
     $_.rawLine -match 'unexpected status 503 Service Unavailable' -and ($_.rawLine -match '/v1/responses|/responses|pool_unavailable|API 服务号池')

@@ -122,6 +122,26 @@ try {
   Assert-Equal $nextTimeline.accountHashes[0] "sha256:healthy" "expected independent turn healthy account"
   Assert-Equal $nextTimeline.classification "independent_request_completed" "expected independent timeline classification"
 
+  $dataRootChatAdapter503 = Join-Path $tempRoot "data-chat-adapter-503"
+  $auditChatAdapter503 = Join-Path $dataRootChatAdapter503 "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditChatAdapter503 @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:chat"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-chat-503"; client_route = "/v1/chat/completions"; response_adapter = "chat_completions"; turn_lineage_id = "turn:sha256:chat" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:chat"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-chat-503"; client_route = "/v1/chat/completions"; response_adapter = "chat_completions"; hard_affinity_continuity = "false"; request_timeout_ms = "600000"; normal_request_timeout_ms = "600000"; turn_lineage_id = "turn:sha256:chat" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:chat"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:chat"; status = 503; errorType = "pool_unavailable"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-chat-503"; message = "API 服务账号均在冷却中"; turn_lineage_id = "turn:sha256:chat" } }
+  )
+  $chatAdapter503Output = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootChatAdapter503 `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 0 -or $LASTEXITCODE -eq 2) "expected chat adapter 503 fixture to avoid fail exit code"
+  $chatAdapter503Summary = Convert-JsonOutput $chatAdapter503Output "chat adapter 503 fixture"
+  Assert-Equal (($chatAdapter503Summary.results | Where-Object name -eq "responses_pool_unavailable_transport_503_absent").status) "pass" "chat/completions adapter 503 must not be classified as Codex-facing Responses transport 503"
+  Assert-Equal $chatAdapter503Summary.audit.responsesTransport503PoolUnavailableCount 0 "expected chat adapter 503 to be excluded from Responses transport 503 count"
+
   $dataRootMissingFields = Join-Path $tempRoot "data-missing-fields"
   $auditMissingFields = Join-Path $dataRootMissingFields "codex_local_access_audit.jsonl"
   Write-AuditLines $auditMissingFields @(

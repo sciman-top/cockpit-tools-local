@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-27T19:39:14.0484872+08:00",
+  "overall": "pass",
+  "probeDataRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-hard-affinity-20260527193755604",
+  "auditPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-hard-affinity-20260527193755604\\codex_local_access_audit.jsonl",
+  "model": "gpt-5.5",
+  "selectedAccountHashes": [
+    "sha256:0a7db35b2db7",
+    "sha256:2c1f79315627"
+  ],
+  "firstStickyAccountHash": [
+    "sha256:0a7db35b2db7"
+  ],
+  "initialStickyResponse": {
+    "statusCode": 200,
+    "timedOut": false,
+    "retryAfter": null,
+    "error": null
+  },
+  "quotaObserved": true,
+  "quotaAccountHash": "sha256:0a7db35b2db7",
+  "quotaRetryAfterMs": 275811000,
+  "drainAttempts": [
+    {
+      "attempt": 1,
+      "statusCode": 503,
+      "timedOut": false,
+      "retryAfter": "275811",
+      "error": {
+        "type": null,
+        "code": null,
+        "message": null
+      },
+      "bodyHasOK": false
+    }
+  ],
+  "hardAffinityProbe": {
+    "attempted": true,
+    "startedAt": "2026-05-27T19:38:25.9823359+08:00",
+    "statusCode": null,
+    "timedOut": true,
+    "retryAfter": null,
+    "error": "timeout_or_cancelled",
+    "endedAt": "2026-05-27T19:39:10.9972639+08:00"
+  },
+  "noImmediateGeneric429WithinClientWindow": true,
+  "requestTraceCount": 2,
+  "lastRequestTrace": {
+    "body_bytes": "[redacted]",
+    "gateway_request_id": "gw-1779881905984-4",
+    "hard_affinity_continuity": "true",
+    "hard_affinity_wait_limit_ms": "691200000",
+    "is_auto_compact_candidate": "false",
+    "is_continuation": "false",
+    "method": "POST",
+    "normal_request_timeout_ms": "600000",
+    "request_id_source": "codex_turn_state",
+    "request_timeout_ms": "691201000",
+    "sticky_boundary": "codex_turn_state",
+    "timeout_extended": "true",
+    "turn_lineage_id": "x-codex-turn-state:sha256:81f69dbf3ecc",
+    "turn_lineage_source": "codex_turn_state"
+  },
+  "poolWaitCount": 1,
+  "lastPoolWait": {
+    "gateway_request_id": "gw-1779881905984-4",
+    "inline_wait_limit_ms": "691200000",
+    "is_auto_compact_candidate": "false",
+    "is_continuation": "false",
+    "max_inline_wait_ms": "691200000",
+    "message": "上游返回使用额度冷却，请稍后重试",
+    "reason": "hard_affinity_same_account_retry",
+    "request_id_source": "codex_turn_state",
+    "retry_after_ms": "275809000",
+    "turn_lineage_id": "x-codex-turn-state:sha256:81f69dbf3ecc",
+    "turn_lineage_source": "codex_turn_state"
+  },
+  "hardAffinityFallbackBlockedCount": 1,
+  "lastHardAffinityFallbackBlocked": {
+    "attempt": "1",
+    "failover_safe": "true",
+    "gateway_request_id": "gw-1779881905984-4",
+    "hard_affinity_inline_retry_wait_limit_ms": "691200000",
+    "is_auto_compact_candidate": "false",
+    "is_continuation": "false",
+    "manual_required": "false",
+    "max_credential_attempts": "2",
+    "max_hard_affinity_inline_retry_wait_ms": "691200000",
+    "provider_code": "usage_limit_reached",
+    "request_id_source": "codex_turn_state",
+    "retry_after_ms": "275809000",
+    "scope": "model",
+    "source": "upstream",
+    "turn_lineage_id": "x-codex-turn-state:sha256:81f69dbf3ecc",
+    "turn_lineage_source": "codex_turn_state"
+  },
+  "final429CountForTurn": 0,
+  "streamCompletedCountForTurn": 1,
+  "usageLimitEventCount": 19,
+  "fallbackSelectedCount": 1,
+  "newAccount200After429": false,
+  "auditTailEventCount": 53,
+  "monitor": {
+    "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-healthy-20260527-193754\\monitor-checkpoint.json",
+    "exitCodePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-healthy-20260527-193754\\monitor-exit-code.txt",
+    "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-healthy-20260527-193754\\monitor.stdout.log",
+    "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-healthy-20260527-193754\\monitor.stderr.log"
+  }
+}

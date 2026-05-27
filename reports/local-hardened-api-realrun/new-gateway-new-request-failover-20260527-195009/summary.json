@@ -1,0 +1,16 @@
+{
+  "exit": 0,
+  "smokeOverall": "fail",
+  "reportPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-smoke\\smoke-20260527-195019.json",
+  "probeDataRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-new-request-failover-20260527-195009",
+  "selectedAccountHashes": [
+    "sha256:d1dd34496121"
+  ],
+  "has429": true,
+  "hasUsageLimit": true,
+  "fallbackSelected": true,
+  "fallbackAccountHash": "sha256:0a7db35b2db7",
+  "next200OnDifferentAccount": false,
+  "next200AccountHash": null,
+  "auditEventCount": 24
+}

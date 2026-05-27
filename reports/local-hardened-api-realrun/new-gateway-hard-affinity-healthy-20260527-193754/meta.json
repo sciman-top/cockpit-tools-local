@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-27T19:38:02.0068541+08:00",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-healthy-20260527-193754",
+  "probeDataRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-hard-affinity-20260527193755604",
+  "liveRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+  "model": "gpt-5.5",
+  "selectedAccountHashes": [
+    "sha256:0a7db35b2db7",
+    "sha256:2c1f79315627"
+  ],
+  "gatewayExe": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe",
+  "gatewayExeSha256": "8513C253B76E2EE3EFDBC251340A0E46A996DB9CC0A0C3518F3839B2E4164587",
+  "maxDrainRequests": 30,
+  "drainIntervalSeconds": 22,
+  "hardAffinityClientTimeoutSeconds": 45
+}

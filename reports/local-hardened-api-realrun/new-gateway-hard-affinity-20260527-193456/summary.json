@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-27T19:35:19.5511810+08:00",
+  "overall": "fail",
+  "probeDataRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-hard-affinity-20260527193456833",
+  "auditPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-hard-affinity-20260527193456833\\codex_local_access_audit.jsonl",
+  "model": "gpt-5.5",
+  "selectedAccountHashes": [
+    "sha256:93ce58693775",
+    "sha256:ffd6ea289907"
+  ],
+  "firstStickyAccountHash": [
+    "sha256:ffd6ea289907"
+  ],
+  "initialStickyResponse": {
+    "statusCode": 400,
+    "timedOut": false,
+    "retryAfter": null,
+    "error": {
+      "type": null,
+      "code": null,
+      "message": null
+    }
+  },
+  "quotaObserved": false,
+  "quotaAccountHash": null,
+  "quotaRetryAfterMs": null,
+  "drainAttempts": [],
+  "hardAffinityProbe": {
+    "attempted": false
+  },
+  "noImmediateGeneric429WithinClientWindow": false,
+  "requestTraceCount": 1,
+  "lastRequestTrace": {
+    "body_bytes": "[redacted]",
+    "gateway_request_id": "gw-1779881716273-2",
+    "hard_affinity_continuity": "false",
+    "hard_affinity_wait_limit_ms": "691200000",
+    "is_auto_compact_candidate": "false",
+    "is_continuation": "false",
+    "method": "POST",
+    "normal_request_timeout_ms": "600000",
+    "request_id_source": "codex_turn_state",
+    "request_timeout_ms": "600000",
+    "sticky_boundary": "codex_turn_state",
+    "timeout_extended": "false",
+    "turn_lineage_id": "x-codex-turn-state:sha256:1545814f5448",
+    "turn_lineage_source": "codex_turn_state"
+  },
+  "poolWaitCount": 0,
+  "lastPoolWait": null,
+  "hardAffinityFallbackBlockedCount": 0,
+  "lastHardAffinityFallbackBlocked": null,
+  "final429CountForTurn": 0,
+  "streamCompletedCountForTurn": 0,
+  "usageLimitEventCount": 0,
+  "fallbackSelectedCount": 0,
+  "newAccount200After429": false,
+  "auditTailEventCount": 9,
+  "monitor": {
+    "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-20260527-193456\\monitor-checkpoint.json",
+    "exitCodePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-20260527-193456\\monitor-exit-code.txt",
+    "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-20260527-193456\\monitor.stdout.log",
+    "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-20260527-193456\\monitor.stderr.log"
+  }
+}

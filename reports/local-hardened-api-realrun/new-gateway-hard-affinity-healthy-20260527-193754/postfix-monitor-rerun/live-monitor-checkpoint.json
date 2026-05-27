@@ -1,0 +1,1988 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-27T19:45:42.3108312+08:00",
+  "overall": "fail",
+  "reportStatus": "completed",
+  "terminationReason": "duration_or_zero",
+  "mode": "live_codex_app_monitor",
+  "startedAt": "2026-05-27T19:45:41.3093704+08:00",
+  "endedAt": "2026-05-27T19:45:42.3108312+08:00",
+  "elapsedSeconds": 1.0,
+  "dataRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-hard-affinity-20260527193755604",
+  "auditPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-hard-affinity-20260527193755604\\codex_local_access_audit.jsonl",
+  "exitCodeFile": "",
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-healthy-20260527-193754\\postfix-monitor-rerun\\live-monitor-checkpoint.json",
+  "reportPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\new-gateway-hard-affinity-healthy-20260527-193754\\postfix-monitor-rerun\\live-monitor-20260527-194542.json",
+  "includeExistingAudit": true,
+  "requireQuotaFallback": true,
+  "requireStreamCompletion": true,
+  "requireCliConfigUntouched": false,
+  "requireAppStable": false,
+  "requiredFallbackCycles": 1,
+  "requiredDistinctHealthyAccounts": 1,
+  "requiredCompletedStreams": 1,
+  "retryLimitRegressionCheck": "always_on",
+  "responsesPoolUnavailableTransport503RegressionCheck": "always_on",
+  "responsesPoolUnavailableFailedStreamRegressionCheck": "always_on",
+  "responsesPoolUnavailableSyntheticCompletionRegressionCheck": "always_on",
+  "poolWaitTerminalProgressRegressionCheck": "always_on",
+  "temporaryConfig": {
+    "managedByThisScript": false,
+    "restored": "not_applicable",
+    "reason": "live monitor is read-only; provider switching/restoration is performed outside this script"
+  },
+  "codexCliGuard": {
+    "before": {
+      "root": "C:\\Users\\sciman\\.codex",
+      "files": {
+        "config.toml": {
+          "exists": true,
+          "length": 5232,
+          "lastWriteTime": "2026-05-27T19:12:52.4254726+08:00",
+          "sha256": "BAFBA6F9ED29E96B8C6A65832270B6F83FEC336B307A0DC12E1C5D245002F50B"
+        },
+        "auth.json": {
+          "exists": true,
+          "length": 4356,
+          "lastWriteTime": "2026-05-27T19:11:47.2349345+08:00",
+          "sha256": "025BDBDCB8DBD7E150647F9DABC3D78E86FC7E6FB319D16D16C9E2F15B4B268A"
+        }
+      }
+    },
+    "after": {
+      "root": "C:\\Users\\sciman\\.codex",
+      "files": {
+        "config.toml": {
+          "exists": true,
+          "length": 5232,
+          "lastWriteTime": "2026-05-27T19:12:52.4254726+08:00",
+          "sha256": "BAFBA6F9ED29E96B8C6A65832270B6F83FEC336B307A0DC12E1C5D245002F50B"
+        },
+        "auth.json": {
+          "exists": true,
+          "length": 4356,
+          "lastWriteTime": "2026-05-27T19:11:47.2349345+08:00",
+          "sha256": "025BDBDCB8DBD7E150647F9DABC3D78E86FC7E6FB319D16D16C9E2F15B4B268A"
+        }
+      }
+    },
+    "comparison": {
+      "unchanged": true,
+      "changedFiles": []
+    }
+  },
+  "codexAppGuard": {
+    "before": {
+      "processNames": [
+        "__cockpit_no_such_process__"
+      ],
+      "pathIncludePatterns": [
+        "*\\WindowsApps\\OpenAI.Codex_*\\app\\Codex.exe",
+        "*\\OpenAI.Codex_*\\app\\Codex.exe",
+        "*/Codex.app/Contents/MacOS/Codex"
+      ],
+      "pathExcludePatterns": [
+        "*\\node_modules\\@openai\\codex\\*",
+        "*\\@openai\\codex\\*",
+        "*\\vendor\\*\\codex\\codex.exe"
+      ],
+      "processes": []
+    },
+    "after": {
+      "processNames": [
+        "__cockpit_no_such_process__"
+      ],
+      "pathIncludePatterns": [
+        "*\\WindowsApps\\OpenAI.Codex_*\\app\\Codex.exe",
+        "*\\OpenAI.Codex_*\\app\\Codex.exe",
+        "*/Codex.app/Contents/MacOS/Codex"
+      ],
+      "pathExcludePatterns": [
+        "*\\node_modules\\@openai\\codex\\*",
+        "*\\@openai\\codex\\*",
+        "*\\vendor\\*\\codex\\codex.exe"
+      ],
+      "processes": []
+    },
+    "comparison": {
+      "stable": true,
+      "beforeCount": 0,
+      "afterCount": 0
+    }
+  },
+  "audit": {
+    "eventCount": 53,
+    "parsedEventCount": 53,
+    "parseErrorCount": 0,
+    "has429": true,
+    "hasUsageLimitReached": true,
+    "hasModelCooldownApplied": true,
+    "hasFallbackSelected": true,
+    "hasFallbackBlocked": true,
+    "hasHardAffinityFallbackBlocked": true,
+    "hasDifferentAccount200AfterFallback": false,
+    "fallbackSelectedCount": 1,
+    "fallbackBlockedCount": 2,
+    "fallbackCycleCount": 0,
+    "distinctHealthyAccountCountAfterFallback": 0,
+    "distinctHealthyAccountHashesAfterFallback": [],
+    "fallbackTransitions": [
+      {
+        "fallbackRequestId": "-",
+        "fallbackAccountHash": "sha256:0a7db35b2db7",
+        "fallbackTimestamp": 1779881903593,
+        "next200RequestId": null,
+        "next200AccountHash": null,
+        "next200Timestamp": null,
+        "next200Phase": null,
+        "terminal429Timestamp": null,
+        "terminal429AccountHash": null,
+        "sameRequest": false,
+        "completed": false,
+        "differentAccount": false
+      }
+    ],
+    "sameTaskAffinityFallbackBlockedCount": 1,
+    "sameTaskAffinityLocalCompletionCount": 0,
+    "sameTaskAffinityTerminalCompletionCount": 0,
+    "sameTaskAffinityTerminalCompletionRequestIds": [],
+    "sameTaskAffinityUnrecoveredTerminal429Count": 0,
+    "sameTaskAffinityUnrecoveredTerminal429RequestIds": [],
+    "sameTaskAffinityUnclosedBlockCount": 1,
+    "sameTaskAffinityUnclosedBlockRequestIds": [
+      "x-codex-turn-state:sha256:81f69dbf3ecc"
+    ],
+    "sameTaskAffinityFallbackBlockedRequestIds": [
+      "x-codex-turn-state:sha256:81f69dbf3ecc"
+    ],
+    "sameTaskAffinityFallbackBlockedTransitions": [
+      {
+        "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "blockedAccountHash": "sha256:0a7db35b2db7",
+        "blockedTimestamp": 1779881906840,
+        "localCompletionTimestamp": null,
+        "localCompletionAccountHash": null,
+        "terminalCompletionTimestamp": null,
+        "terminalCompletionAccountHash": null,
+        "terminal429Timestamp": null,
+        "completedLocally": false,
+        "completedByUpstream": false,
+        "unrecoveredTerminal429": false
+      }
+    ],
+    "requestTraceCount": 3,
+    "hardAffinityContinuityRequestTraceCount": 1,
+    "routingDecisionCount": 1,
+    "quotaClassificationCount": 3,
+    "streamTerminalCount": 0,
+    "streamTerminalResponseCompletedCount": 0,
+    "streamTerminalCompactionSummaryCount": 0,
+    "behaviorTraceCoverage": {
+      "requestTraceCount": 3,
+      "hardAffinityContinuityRequestTraceCount": 1,
+      "routingDecisionCount": 1,
+      "quotaClassificationCount": 3,
+      "streamTerminalCount": 0,
+      "streamTerminalResponseCompletedCount": 0,
+      "streamTerminalCompactionSummaryCount": 0,
+      "hasStructuredBehaviorTrace": true
+    },
+    "stickyResetWaitRequestCount": 1,
+    "stickyResetWaitRecoveredCount": 1,
+    "stickyResetWaitKilledByLocalTimeoutCount": 0,
+    "stickyResetWaitRequestIds": [
+      "x-codex-turn-state:sha256:81f69dbf3ecc"
+    ],
+    "stickyResetWaitRecoveredRequestIds": [
+      "x-codex-turn-state:sha256:81f69dbf3ecc"
+    ],
+    "stickyResetWaitKilledByLocalTimeoutRequestIds": [],
+    "stickyResetWaitRequests": [
+      {
+        "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "gatewayRequestId": "gw-1779881905984-4",
+        "timestamp": 1779881906024,
+        "normalRequestTimeoutMs": 600000,
+        "requestTimeoutMs": 691201000,
+        "timeoutExtended": true,
+        "retryAfterMs": 275809000,
+        "inlineWaitLimitMs": 691200000,
+        "hardAffinityWaitLimitMs": 691200000,
+        "resetWaitExceedsNormalTimeout": true,
+        "requestTimeoutCoversResetWait": true,
+        "stickyBoundary": "codex_turn_state",
+        "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "hasHardAffinityBlock": true,
+        "hasSameAccountRetryWait": true,
+        "terminalSuccess": true,
+        "localTimeoutTerminal": false,
+        "terminalPhase": "final_response",
+        "terminalStatus": 200
+      }
+    ],
+    "stickyResetWaitRecovered": [
+      {
+        "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "gatewayRequestId": "gw-1779881905984-4",
+        "timestamp": 1779881906024,
+        "normalRequestTimeoutMs": 600000,
+        "requestTimeoutMs": 691201000,
+        "timeoutExtended": true,
+        "retryAfterMs": 275809000,
+        "inlineWaitLimitMs": 691200000,
+        "hardAffinityWaitLimitMs": 691200000,
+        "resetWaitExceedsNormalTimeout": true,
+        "requestTimeoutCoversResetWait": true,
+        "stickyBoundary": "codex_turn_state",
+        "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "hasHardAffinityBlock": true,
+        "hasSameAccountRetryWait": true,
+        "terminalSuccess": true,
+        "localTimeoutTerminal": false,
+        "terminalPhase": "final_response",
+        "terminalStatus": 200
+      }
+    ],
+    "stickyResetWaitKilledByLocalTimeout": [],
+    "distinctHealthyAccountCountAfterBlock": 0,
+    "distinctHealthyAccountHashesAfterBlock": [],
+    "first429AccountHash": "sha256:0a7db35b2db7",
+    "firstFallbackAccountHash": "sha256:0a7db35b2db7",
+    "firstBlockedAccountHash": "sha256:0a7db35b2db7",
+    "blockedAccountCount": 2,
+    "blockedAccountHashes": [
+      "sha256:0a7db35b2db7",
+      "sha256:2c1f79315627"
+    ],
+    "newRequestAvoidanceCount": 0,
+    "newRequestAvoidanceRequestIds": [],
+    "newRequestAvoidance": [],
+    "newRequestBlockedReuseCount": 0,
+    "newRequestBlockedReuseRequestIds": [],
+    "newRequestBlockedReuse": [],
+    "retryLimitErrorFound": false,
+    "retryLimitErrorCount": 0,
+    "retryLimitTextMatchCount": 0,
+    "unrecoveredFallback429Count": 0,
+    "unrecoveredFallback429RequestIds": [],
+    "poolWaitCount": 1,
+    "poolWaitSleepingCount": 1,
+    "poolWaitRetryingCount": 0,
+    "poolWaitRequestIds": [
+      "x-codex-turn-state:sha256:81f69dbf3ecc"
+    ],
+    "heartbeatPoolWaitCount": 0,
+    "heartbeatPoolWaitRequestIds": [],
+    "activeDrainPoolWaitCount": 0,
+    "activeDrainPoolWaitRequestIds": [],
+    "openPoolWaitCount": 0,
+    "openPoolWaitRequestIds": [],
+    "parkedPoolWaitCount": 0,
+    "parkedPoolWaitRequestIds": [],
+    "sseIdleErrorCount": 0,
+    "sseIdleRequestIds": [],
+    "localPoolUnavailableCount": 1,
+    "localPoolUnavailableRequestIds": [
+      "-"
+    ],
+    "inBandSyntheticPoolUnavailableCount": 0,
+    "inBandSyntheticPoolUnavailableRequestIds": [],
+    "responsesFailedPoolUnavailableCount": 0,
+    "responsesFailedPoolUnavailableRequestIds": [],
+    "responsesLocalCompletionPoolUnavailableCount": 0,
+    "responsesLocalCompletionPoolUnavailableRequestIds": [],
+    "responsesTransport503PoolUnavailableCount": 1,
+    "responsesTransport503PoolUnavailableAuditCount": 1,
+    "responsesTransport503PoolUnavailableTextCount": 0,
+    "responsesTransport503PoolUnavailableRequestIds": [
+      "-"
+    ],
+    "lineageCount": 1,
+    "lineageAccountSwitchCount": 0,
+    "lineageAccountSwitches": [],
+    "hardAffinityLineageAccountSwitchCount": 0,
+    "hardAffinityLineageAccountSwitches": [],
+    "metadataOnlyLineageAccountSwitchCount": 0,
+    "metadataOnlyLineageAccountSwitches": [],
+    "continuationReroutedCount": 0,
+    "continuationReroutes": [],
+    "autoCompactReroutedCount": 0,
+    "autoCompactReroutes": [],
+    "localCompletionAfterHardAffinityLineageCount": 0,
+    "localCompletionAfterHardAffinityLineages": [],
+    "lineageSummaries": [
+      {
+        "lineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "firstTimestamp": 1779881882767,
+        "lastTimestamp": 1779881906851,
+        "eventCount": 30,
+        "requestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "gatewayRequestIds": [
+          "gw-1779881882730-2",
+          "gw-1779881905984-4"
+        ],
+        "lineageSources": [
+          "codex_turn_state"
+        ],
+        "accountHashes": [
+          "sha256:0a7db35b2db7"
+        ],
+        "accountSwitchCount": 0,
+        "accountTransitions": [],
+        "hardAffinityAccountSwitchCount": 0,
+        "hardAffinityAccountTransitions": [],
+        "metadataAccountSwitchCount": 0,
+        "metadataAccountTransitions": [],
+        "previousResponseIdHashes": [],
+        "upstreamResponseIdHashes": [
+          "response:sha256:3666b92046ac"
+        ],
+        "continuationReroutes": [],
+        "autoCompactReroutes": [],
+        "localCompletionAfterHardAffinity": [],
+        "terminalOrigins": []
+      }
+    ],
+    "auditFieldCoverage": {
+      "parsedEventCount": 53,
+      "detailEventCount": 53,
+      "gatewayRequestIdCount": 53,
+      "turnLineageIdCount": 30,
+      "explicitTurnLineageIdCount": 30,
+      "previousResponseIdHashCount": 0,
+      "upstreamResponseIdHashCount": 1,
+      "continuationFlagCount": 53,
+      "autoCompactFlagCount": 53,
+      "autoCompactCandidateCount": 0,
+      "lineageDiagnosticReady": true,
+      "continuationDiagnosticReady": false,
+      "autoCompactDiagnosticReady": true,
+      "presentFieldNames": [
+        "gateway_request_id",
+        "turn_lineage_id",
+        "upstream_response_id_hash",
+        "is_continuation",
+        "is_auto_compact_candidate"
+      ],
+      "missingFieldNames": [
+        "previous_response_id_hash"
+      ]
+    },
+    "requestTimelineCount": 3,
+    "requestTimelines": [
+      {
+        "timelineKey": "gateway:gw-1779881882730-2",
+        "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "firstTimestamp": 1779881882767,
+        "lastTimestamp": 1779881886455,
+        "eventCount": 16,
+        "classification": "independent_request_completed",
+        "gatewayRequestIds": [
+          "gw-1779881882730-2"
+        ],
+        "leaseIds": [
+          "1"
+        ],
+        "accountHashes": [
+          "sha256:0a7db35b2db7"
+        ],
+        "phases": [
+          "listener",
+          "request_trace",
+          "auth_projection",
+          "admission_attempt",
+          "upstream_forward",
+          "selector",
+          "upstream_admitted",
+          "routing_decision",
+          "lease_granted",
+          "final_response",
+          "stream_completed",
+          "lease_released",
+          "response_affinity_bound"
+        ],
+        "statuses": [
+          "200"
+        ],
+        "admissionAttempts": [
+          "1"
+        ],
+        "turnLineageIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "turnLineageSources": [
+          "codex_turn_state"
+        ],
+        "previousResponseIdHashes": [],
+        "upstreamResponseIdHashes": [
+          "response:sha256:3666b92046ac"
+        ],
+        "terminalOrigins": [],
+        "hasContinuation": false,
+        "hasAutoCompactCandidate": false,
+        "has429": false,
+        "usageLimitReachedCount": 0,
+        "modelCooldownCount": 0,
+        "fallbackSelectedCount": 0,
+        "fallbackBlockedCount": 0,
+        "hardAffinityBlockedCount": 0,
+        "upstreamForward200Count": 1,
+        "upstreamForward429Count": 0,
+        "final200Count": 1,
+        "final429Count": 0,
+        "terminalUpstreamCompletionCount": 3,
+        "localCompletionCount": 0,
+        "clientAbortedCount": 0,
+        "poolWaitCount": 0,
+        "streamWriteCount": 0,
+        "streamCompletedCount": 1,
+        "leaseGrantedCount": 1,
+        "leaseReleasedCount": 1,
+        "keyEvents": [
+          {
+            "timestamp": 1779881882767,
+            "phase": "listener",
+            "accountHash": "-",
+            "status": null,
+            "errorType": null,
+            "outcome": "accepted",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881882768,
+            "phase": "request_trace",
+            "accountHash": "-",
+            "status": null,
+            "errorType": null,
+            "outcome": "prepared",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881882828,
+            "phase": "auth_projection",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "prepared",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881882830,
+            "phase": "admission_attempt",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "started",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": "1",
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881882838,
+            "phase": "upstream_forward",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "send_started",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881884098,
+            "phase": "upstream_forward",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 200,
+            "errorType": null,
+            "outcome": "response_received",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881884102,
+            "phase": "selector",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "sticky_bound",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881884111,
+            "phase": "upstream_admitted",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 200,
+            "errorType": null,
+            "outcome": "admitted",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881884119,
+            "phase": "routing_decision",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 200,
+            "errorType": null,
+            "outcome": "selected",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881884129,
+            "phase": "selector",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 200,
+            "errorType": null,
+            "outcome": "selected",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881884144,
+            "phase": "selector",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "request_affinity_bound",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881884147,
+            "phase": "lease_granted",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "active",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": "1",
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881886434,
+            "phase": "final_response",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 200,
+            "errorType": null,
+            "outcome": "ok",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881886435,
+            "phase": "stream_completed",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "completed",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": "1",
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881886445,
+            "phase": "lease_released",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "completed",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": "1",
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881886455,
+            "phase": "response_affinity_bound",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "bound",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881882730-2",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": "response:sha256:3666b92046ac",
+            "terminalOrigin": null
+          }
+        ]
+      },
+      {
+        "timelineKey": "gateway:gw-1779881888478-3",
+        "requestId": "-",
+        "firstTimestamp": 1779881888516,
+        "lastTimestamp": 1779881904900,
+        "eventCount": 23,
+        "classification": "observed",
+        "gatewayRequestIds": [
+          "gw-1779881888478-3"
+        ],
+        "leaseIds": [],
+        "accountHashes": [
+          "sha256:0a7db35b2db7",
+          "sha256:2c1f79315627"
+        ],
+        "phases": [
+          "listener",
+          "request_trace",
+          "auth_projection",
+          "admission_attempt",
+          "upstream_forward",
+          "account_quota_snapshot",
+          "classifier",
+          "quota_classification",
+          "health_update",
+          "model_cooldown_applied",
+          "fallback_selected",
+          "fallback_blocked",
+          "final_response"
+        ],
+        "statuses": [
+          "429",
+          "503"
+        ],
+        "admissionAttempts": [
+          "1",
+          "2"
+        ],
+        "turnLineageIds": [],
+        "turnLineageSources": [
+          "none"
+        ],
+        "previousResponseIdHashes": [],
+        "upstreamResponseIdHashes": [],
+        "terminalOrigins": [],
+        "hasContinuation": false,
+        "hasAutoCompactCandidate": false,
+        "has429": true,
+        "usageLimitReachedCount": 12,
+        "modelCooldownCount": 2,
+        "fallbackSelectedCount": 1,
+        "fallbackBlockedCount": 1,
+        "hardAffinityBlockedCount": 0,
+        "upstreamForward200Count": 0,
+        "upstreamForward429Count": 2,
+        "final200Count": 0,
+        "final429Count": 0,
+        "terminalUpstreamCompletionCount": 0,
+        "localCompletionCount": 0,
+        "clientAbortedCount": 0,
+        "poolWaitCount": 0,
+        "streamWriteCount": 0,
+        "streamCompletedCount": 0,
+        "leaseGrantedCount": 0,
+        "leaseReleasedCount": 0,
+        "keyEvents": [
+          {
+            "timestamp": 1779881888516,
+            "phase": "listener",
+            "accountHash": "-",
+            "status": null,
+            "errorType": null,
+            "outcome": "accepted",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881888518,
+            "phase": "request_trace",
+            "accountHash": "-",
+            "status": null,
+            "errorType": null,
+            "outcome": "prepared",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881902784,
+            "phase": "auth_projection",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "prepared",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881902786,
+            "phase": "admission_attempt",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "started",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": "1",
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881902803,
+            "phase": "upstream_forward",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "send_started",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903513,
+            "phase": "upstream_forward",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": null,
+            "outcome": "response_received",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903523,
+            "phase": "account_quota_snapshot",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903529,
+            "phase": "classifier",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "failover",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903543,
+            "phase": "quota_classification",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "classified",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903571,
+            "phase": "health_update",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903578,
+            "phase": "model_cooldown_applied",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903593,
+            "phase": "fallback_selected",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "next_account",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": "1",
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903676,
+            "phase": "auth_projection",
+            "accountHash": "sha256:2c1f79315627",
+            "status": null,
+            "errorType": null,
+            "outcome": "prepared",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903678,
+            "phase": "admission_attempt",
+            "accountHash": "sha256:2c1f79315627",
+            "status": null,
+            "errorType": null,
+            "outcome": "started",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": "2",
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881903691,
+            "phase": "upstream_forward",
+            "accountHash": "sha256:2c1f79315627",
+            "status": null,
+            "errorType": null,
+            "outcome": "send_started",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881904831,
+            "phase": "upstream_forward",
+            "accountHash": "sha256:2c1f79315627",
+            "status": 429,
+            "errorType": null,
+            "outcome": "response_received",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881904843,
+            "phase": "account_quota_snapshot",
+            "accountHash": "sha256:2c1f79315627",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881904849,
+            "phase": "classifier",
+            "accountHash": "sha256:2c1f79315627",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "failover",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881904858,
+            "phase": "quota_classification",
+            "accountHash": "sha256:2c1f79315627",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "classified",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881904874,
+            "phase": "health_update",
+            "accountHash": "sha256:2c1f79315627",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881904878,
+            "phase": "model_cooldown_applied",
+            "accountHash": "sha256:2c1f79315627",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881904890,
+            "phase": "fallback_blocked",
+            "accountHash": "sha256:2c1f79315627",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "attempt_limit",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": "2",
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881904900,
+            "phase": "final_response",
+            "accountHash": "sha256:2c1f79315627",
+            "status": 503,
+            "errorType": "pool_unavailable",
+            "outcome": "error",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881888478-3",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": null,
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          }
+        ]
+      },
+      {
+        "timelineKey": "gateway:gw-1779881905984-4",
+        "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "firstTimestamp": 1779881906023,
+        "lastTimestamp": 1779881906851,
+        "eventCount": 14,
+        "classification": "observed",
+        "gatewayRequestIds": [
+          "gw-1779881905984-4"
+        ],
+        "leaseIds": [],
+        "accountHashes": [
+          "sha256:0a7db35b2db7"
+        ],
+        "phases": [
+          "listener",
+          "request_trace",
+          "local_backpressure",
+          "auth_projection",
+          "admission_attempt",
+          "upstream_forward",
+          "account_quota_snapshot",
+          "classifier",
+          "quota_classification",
+          "health_update",
+          "model_cooldown_applied",
+          "fallback_blocked",
+          "pool_wait"
+        ],
+        "statuses": [
+          "429"
+        ],
+        "admissionAttempts": [
+          "1"
+        ],
+        "turnLineageIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "turnLineageSources": [
+          "codex_turn_state"
+        ],
+        "previousResponseIdHashes": [],
+        "upstreamResponseIdHashes": [],
+        "terminalOrigins": [],
+        "hasContinuation": false,
+        "hasAutoCompactCandidate": false,
+        "has429": true,
+        "usageLimitReachedCount": 7,
+        "modelCooldownCount": 1,
+        "fallbackSelectedCount": 0,
+        "fallbackBlockedCount": 1,
+        "hardAffinityBlockedCount": 1,
+        "upstreamForward200Count": 0,
+        "upstreamForward429Count": 1,
+        "final200Count": 0,
+        "final429Count": 0,
+        "terminalUpstreamCompletionCount": 0,
+        "localCompletionCount": 0,
+        "clientAbortedCount": 0,
+        "poolWaitCount": 1,
+        "streamWriteCount": 0,
+        "streamCompletedCount": 0,
+        "leaseGrantedCount": 0,
+        "leaseReleasedCount": 0,
+        "keyEvents": [
+          {
+            "timestamp": 1779881906023,
+            "phase": "listener",
+            "accountHash": "-",
+            "status": null,
+            "errorType": null,
+            "outcome": "accepted",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906024,
+            "phase": "request_trace",
+            "accountHash": "-",
+            "status": null,
+            "errorType": null,
+            "outcome": "prepared",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906036,
+            "phase": "local_backpressure",
+            "accountHash": "-",
+            "status": null,
+            "errorType": null,
+            "outcome": "bypassed",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906053,
+            "phase": "auth_projection",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "prepared",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906057,
+            "phase": "admission_attempt",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "started",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": "1",
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906067,
+            "phase": "upstream_forward",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": null,
+            "errorType": null,
+            "outcome": "send_started",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906774,
+            "phase": "upstream_forward",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": null,
+            "outcome": "response_received",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906783,
+            "phase": "account_quota_snapshot",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906790,
+            "phase": "classifier",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "failover",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906804,
+            "phase": "quota_classification",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "classified",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906822,
+            "phase": "health_update",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906826,
+            "phase": "model_cooldown_applied",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "recorded",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906840,
+            "phase": "fallback_blocked",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "hard_affinity",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": "1",
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          },
+          {
+            "timestamp": 1779881906851,
+            "phase": "pool_wait",
+            "accountHash": "sha256:0a7db35b2db7",
+            "status": 429,
+            "errorType": "usage_limit_reached",
+            "outcome": "sleeping",
+            "streamState": null,
+            "gatewayRequestId": "gw-1779881905984-4",
+            "leaseId": null,
+            "admissionAttempt": null,
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "previousResponseIdHash": null,
+            "upstreamResponseIdHash": null,
+            "terminalOrigin": null
+          }
+        ]
+      }
+    ],
+    "startedStreamCount": 2,
+    "completedStreamCount": 2,
+    "openStreamCount": 0,
+    "interruptedStreamCount": 0,
+    "clientAbortedStreamCount": 0,
+    "clientAbortedBeforeFirstChunkCount": 0,
+    "clientAbortedAfterFirstChunkCount": 0,
+    "clientAbortedStreamSummaries": [],
+    "streamSummaries": [
+      {
+        "streamKey": "x-codex-turn-state:sha256:81f69dbf3ecc#1",
+        "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "firstTimestamp": 1779881884147,
+        "lastTimestamp": 1779881886434,
+        "eventCount": 2,
+        "started": true,
+        "completed": true,
+        "terminalError": false,
+        "interruptedByCooldown": false,
+        "firstAccountHash": "sha256:0a7db35b2db7",
+        "lastAccountHash": "sha256:0a7db35b2db7",
+        "accountHashes": [
+          "sha256:0a7db35b2db7"
+        ],
+        "statuses": [
+          200
+        ],
+        "phases": [
+          "lease_granted",
+          "final_response"
+        ]
+      },
+      {
+        "streamKey": "x-codex-turn-state:sha256:81f69dbf3ecc#2",
+        "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "firstTimestamp": 1779881886435,
+        "lastTimestamp": 1779881886435,
+        "eventCount": 1,
+        "started": true,
+        "completed": true,
+        "terminalError": false,
+        "interruptedByCooldown": false,
+        "firstAccountHash": "sha256:0a7db35b2db7",
+        "lastAccountHash": "sha256:0a7db35b2db7",
+        "accountHashes": [
+          "sha256:0a7db35b2db7"
+        ],
+        "statuses": [],
+        "phases": [
+          "stream_completed"
+        ]
+      },
+      {
+        "streamKey": "x-codex-turn-state:sha256:81f69dbf3ecc#3",
+        "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+        "firstTimestamp": 1779881886445,
+        "lastTimestamp": 1779881886445,
+        "eventCount": 1,
+        "started": false,
+        "completed": true,
+        "terminalError": false,
+        "interruptedByCooldown": false,
+        "firstAccountHash": "sha256:0a7db35b2db7",
+        "lastAccountHash": "sha256:0a7db35b2db7",
+        "accountHashes": [
+          "sha256:0a7db35b2db7"
+        ],
+        "statuses": [],
+        "phases": [
+          "lease_released"
+        ]
+      }
+    ],
+    "accountSummaries": [
+      {
+        "accountHash": "sha256:0a7db35b2db7",
+        "firstTimestamp": 1779881882828,
+        "lastTimestamp": 1779881906851,
+        "eventCount": 35,
+        "status200Count": 5,
+        "status429Count": 15,
+        "fallbackSelectedCount": 1,
+        "modelCooldownCount": 2,
+        "completedStreamCount": 2,
+        "requestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "phases": [
+          "auth_projection",
+          "admission_attempt",
+          "upstream_forward",
+          "selector",
+          "upstream_admitted",
+          "routing_decision",
+          "lease_granted",
+          "final_response",
+          "stream_completed",
+          "lease_released",
+          "response_affinity_bound",
+          "account_quota_snapshot",
+          "classifier",
+          "quota_classification",
+          "health_update",
+          "model_cooldown_applied",
+          "fallback_selected",
+          "fallback_blocked",
+          "pool_wait"
+        ]
+      },
+      {
+        "accountHash": "sha256:2c1f79315627",
+        "firstTimestamp": 1779881903676,
+        "lastTimestamp": 1779881904900,
+        "eventCount": 11,
+        "status200Count": 0,
+        "status429Count": 7,
+        "fallbackSelectedCount": 0,
+        "modelCooldownCount": 1,
+        "completedStreamCount": 0,
+        "requestIds": [],
+        "phases": [
+          "auth_projection",
+          "admission_attempt",
+          "upstream_forward",
+          "account_quota_snapshot",
+          "classifier",
+          "quota_classification",
+          "health_update",
+          "model_cooldown_applied",
+          "fallback_blocked",
+          "final_response"
+        ]
+      }
+    ]
+  },
+  "continuitySummary": {
+    "sameTaskAffinityFallbackBlocked": {
+      "status": "blocked",
+      "reason": "hard-affinity block 已出现但监测窗口内没有 terminal/local completion",
+      "evidence": {
+        "has429": true,
+        "hasUsageLimitReached": true,
+        "hasModelCooldownApplied": true,
+        "hasFallbackBlocked": true,
+        "hasHardAffinityFallbackBlocked": true,
+        "sameTaskAffinityFallbackBlockedCount": 1,
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "sameTaskAffinityTerminalCompletionCount": 0,
+        "sameTaskAffinityUnclosedBlockCount": 1,
+        "sameTaskAffinityUnrecoveredTerminal429Count": 0,
+        "sameTaskAffinityFallbackBlockedRequestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "sameTaskAffinityTerminalCompletionRequestIds": [],
+        "sameTaskAffinityUnclosedBlockRequestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "sameTaskAffinityUnrecoveredTerminal429RequestIds": [],
+        "requiredFallbackCycles": 1,
+        "retryLimitErrorFound": false,
+        "first429AccountHash": "sha256:0a7db35b2db7"
+      }
+    },
+    "newRequestAvoidsExhaustedCooldown": {
+      "status": "blocked",
+      "reason": "未观察到后续新请求避开 exhausted/cooldown 账号",
+      "evidence": {
+        "blockedAccountCount": 2,
+        "blockedAccountHashes": [
+          "sha256:0a7db35b2db7",
+          "sha256:2c1f79315627"
+        ],
+        "newRequestAvoidanceCount": 0,
+        "newRequestAvoidanceRequestIds": [],
+        "newRequestBlockedReuseCount": 0,
+        "newRequestBlockedReuseRequestIds": []
+      }
+    },
+    "turnLineageAccountSwitchAbsent": {
+      "status": "pass",
+      "reason": null,
+      "evidence": {
+        "lineageCount": 1,
+        "lineageAccountSwitchCount": 0,
+        "hardAffinityLineageAccountSwitchCount": 0,
+        "metadataOnlyLineageAccountSwitchCount": 0,
+        "continuationReroutedCount": 0,
+        "autoCompactReroutedCount": 0,
+        "lineageAccountSwitches": [],
+        "hardAffinityLineageAccountSwitches": [],
+        "metadataOnlyLineageAccountSwitches": [],
+        "continuationReroutes": [],
+        "autoCompactReroutes": []
+      }
+    },
+    "stickyResetWaitNotKilledByLocalTimeout": {
+      "status": "pass",
+      "reason": null,
+      "evidence": {
+        "requestCount": 1,
+        "recoveredCount": 1,
+        "killedByLocalTimeoutCount": 0,
+        "requests": [
+          {
+            "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "gatewayRequestId": "gw-1779881905984-4",
+            "timestamp": 1779881906024,
+            "normalRequestTimeoutMs": 600000,
+            "requestTimeoutMs": 691201000,
+            "timeoutExtended": true,
+            "retryAfterMs": 275809000,
+            "inlineWaitLimitMs": 691200000,
+            "hardAffinityWaitLimitMs": 691200000,
+            "resetWaitExceedsNormalTimeout": true,
+            "requestTimeoutCoversResetWait": true,
+            "stickyBoundary": "codex_turn_state",
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "hasHardAffinityBlock": true,
+            "hasSameAccountRetryWait": true,
+            "terminalSuccess": true,
+            "localTimeoutTerminal": false,
+            "terminalPhase": "final_response",
+            "terminalStatus": 200
+          }
+        ]
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "same_task_affinity_fallback_blocked",
+      "status": "blocked",
+      "reason": "同任务 hard-affinity block 已出现，但监测窗口内没有观察到 terminal/local completion，无法确认是否继续到完成",
+      "evidence": {
+        "sameTaskAffinityFallbackBlockedRequestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "first429AccountHash": "sha256:0a7db35b2db7",
+        "has429": true,
+        "sameTaskAffinityUnclosedBlockCount": 1,
+        "sameTaskAffinityUnrecoveredTerminal429Count": 0,
+        "requiredFallbackCycles": 1,
+        "responsesLocalCompletionPoolUnavailableCount": 0,
+        "hasModelCooldownApplied": true,
+        "sameTaskAffinityTerminalCompletionCount": 0,
+        "hasFallbackBlocked": true,
+        "localPoolUnavailableCount": 1,
+        "sameTaskAffinityUnclosedBlockRequestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "sameTaskAffinityUnrecoveredTerminal429RequestIds": [],
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "hasHardAffinityFallbackBlocked": true,
+        "sameTaskAffinityTerminalCompletionRequestIds": [],
+        "hasUsageLimitReached": true,
+        "sameTaskAffinityFallbackBlockedCount": 1
+      }
+    },
+    {
+      "name": "sticky_reset_wait_not_killed_by_local_timeout",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "stickyResetWaitRequests": [
+          {
+            "requestId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "gatewayRequestId": "gw-1779881905984-4",
+            "timestamp": 1779881906024,
+            "normalRequestTimeoutMs": 600000,
+            "requestTimeoutMs": 691201000,
+            "timeoutExtended": true,
+            "retryAfterMs": 275809000,
+            "inlineWaitLimitMs": 691200000,
+            "hardAffinityWaitLimitMs": 691200000,
+            "resetWaitExceedsNormalTimeout": true,
+            "requestTimeoutCoversResetWait": true,
+            "stickyBoundary": "codex_turn_state",
+            "turnLineageId": "x-codex-turn-state:sha256:81f69dbf3ecc",
+            "hasHardAffinityBlock": true,
+            "hasSameAccountRetryWait": true,
+            "terminalSuccess": true,
+            "localTimeoutTerminal": false,
+            "terminalPhase": "final_response",
+            "terminalStatus": 200
+          }
+        ],
+        "stickyResetWaitRequestCount": 1,
+        "stickyResetWaitRecoveredRequestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "stickyResetWaitKilledByLocalTimeoutRequestIds": [],
+        "stickyResetWaitRequestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "stickyResetWaitRecoveredCount": 1,
+        "stickyResetWaitKilledByLocalTimeoutCount": 0
+      }
+    },
+    {
+      "name": "structured_behavior_trace_present",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "requestTraceCount": 3,
+        "hardAffinityContinuityRequestTraceCount": 1,
+        "behaviorTraceCoverage": {
+          "requestTraceCount": 3,
+          "hardAffinityContinuityRequestTraceCount": 1,
+          "routingDecisionCount": 1,
+          "quotaClassificationCount": 3,
+          "streamTerminalCount": 0,
+          "streamTerminalResponseCompletedCount": 0,
+          "streamTerminalCompactionSummaryCount": 0,
+          "hasStructuredBehaviorTrace": true
+        },
+        "streamTerminalCount": 0,
+        "streamTerminalCompactionSummaryCount": 0,
+        "quotaClassificationCount": 3,
+        "routingDecisionCount": 1,
+        "streamTerminalResponseCompletedCount": 0
+      }
+    },
+    {
+      "name": "new_request_avoids_exhausted_account",
+      "status": "blocked",
+      "reason": "未观察到后续新请求避开 exhausted/cooldown 账号",
+      "evidence": {
+        "newRequestAvoidanceCount": 0,
+        "newRequestBlockedReuseRequestIds": [],
+        "newRequestAvoidanceRequestIds": [],
+        "blockedAccountHashes": [
+          "sha256:0a7db35b2db7",
+          "sha256:2c1f79315627"
+        ],
+        "blockedAccountCount": 2,
+        "newRequestBlockedReuseCount": 0
+      }
+    },
+    {
+      "name": "multi_account_fallback_observed",
+      "status": "skipped",
+      "reason": "未要求多账号 quota recovery 计数；仅记录多账号观察结果",
+      "evidence": {
+        "distinctHealthyAccountCountAfterBlock": 0,
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "distinctHealthyAccountHashesAfterBlock": [],
+        "sameTaskAffinityFallbackBlockedCount": 1,
+        "sameTaskAffinityTerminalCompletionCount": 0,
+        "requiredFallbackCycles": 1,
+        "requiredDistinctHealthyAccounts": 1
+      }
+    },
+    {
+      "name": "accepted_stream_continuity",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "clientAbortedBeforeFirstChunkCount": 0,
+        "openStreamCount": 0,
+        "startedStreamCount": 2,
+        "interruptedStreamCount": 0,
+        "completedStreamCount": 2,
+        "clientAbortedStreamCount": 0,
+        "clientAbortedAfterFirstChunkCount": 0,
+        "requiredCompletedStreams": 1,
+        "clientAbortedStreamSummaries": []
+      }
+    },
+    {
+      "name": "retry_limit_regression_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "localPoolUnavailableCount": 1,
+        "retryLimitTextMatchCount": 0,
+        "unrecoveredFallback429RequestIds": [],
+        "retryLimitErrorFound": false,
+        "retryLimitErrorCount": 0,
+        "localPoolUnavailableRequestIds": [
+          "-"
+        ],
+        "unrecoveredFallback429Count": 0
+      }
+    },
+    {
+      "name": "sse_idle_pool_wait_regression_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "sseIdleErrorCount": 0,
+        "sseIdleRequestIds": [],
+        "heartbeatPoolWaitRequestIds": [],
+        "parkedPoolWaitRequestIds": [],
+        "activeDrainPoolWaitRequestIds": [],
+        "parkedPoolWaitCount": 0,
+        "activeDrainPoolWaitCount": 0,
+        "heartbeatPoolWaitCount": 0
+      }
+    },
+    {
+      "name": "pool_wait_reaches_terminal_or_recovery",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "responsesLocalCompletionPoolUnavailableRequestIds": [],
+        "responsesLocalCompletionPoolUnavailableCount": 0,
+        "activeDrainPoolWaitCount": 0,
+        "poolWaitCount": 1,
+        "responsesFailedPoolUnavailableCount": 0,
+        "responsesFailedPoolUnavailableRequestIds": [],
+        "openPoolWaitCount": 0,
+        "heartbeatPoolWaitCount": 0,
+        "openPoolWaitRequestIds": []
+      }
+    },
+    {
+      "name": "responses_pool_unavailable_transport_503_absent",
+      "status": "fail",
+      "reason": "监测窗口内 Codex-facing /v1/responses 暴露了 transport 503/pool_unavailable；请求应返回 200 completed Responses 本地响应，不能让 Codex CLI/App 看到 transport 503",
+      "evidence": {
+        "responsesTransport503PoolUnavailableRequestIds": [
+          "-"
+        ],
+        "inBandSyntheticPoolUnavailableCount": 0,
+        "responsesTransport503PoolUnavailableAuditCount": 1,
+        "responsesTransport503PoolUnavailableTextCount": 0,
+        "responsesLocalCompletionPoolUnavailableCount": 0,
+        "responsesFailedPoolUnavailableCount": 0,
+        "responsesTransport503PoolUnavailableCount": 1,
+        "inBandSyntheticPoolUnavailableRequestIds": [],
+        "responsesLocalCompletionPoolUnavailableRequestIds": [],
+        "responsesFailedPoolUnavailableRequestIds": []
+      }
+    },
+    {
+      "name": "responses_pool_unavailable_local_completion_explicit",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "responsesFailedPoolUnavailableCount": 0,
+        "sameTaskAffinityFallbackBlockedRequestIds": [
+          "x-codex-turn-state:sha256:81f69dbf3ecc"
+        ],
+        "responsesFailedPoolUnavailableRequestIds": [],
+        "openPoolWaitRequestIds": [],
+        "responsesLocalCompletionPoolUnavailableRequestIds": [],
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "responsesLocalCompletionPoolUnavailableCount": 0,
+        "openPoolWaitCount": 0
+      }
+    },
+    {
+      "name": "responses_pool_unavailable_failed_stream_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "responsesFailedPoolUnavailableRequestIds": [],
+        "responsesFailedPoolUnavailableCount": 0
+      }
+    },
+    {
+      "name": "responses_pool_unavailable_legacy_synthetic_completion_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "inBandSyntheticPoolUnavailableRequestIds": [],
+        "inBandSyntheticPoolUnavailableCount": 0,
+        "heartbeatPoolWaitCount": 0,
+        "heartbeatPoolWaitRequestIds": []
+      }
+    },
+    {
+      "name": "turn_lineage_account_switch_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "lineageAccountSwitches": [],
+        "lineageAccountSwitchCount": 0,
+        "hardAffinityLineageAccountSwitches": [],
+        "metadataOnlyLineageAccountSwitchCount": 0,
+        "hardAffinityLineageAccountSwitchCount": 0,
+        "continuationReroutes": [],
+        "continuationReroutedCount": 0,
+        "autoCompactReroutedCount": 0,
+        "autoCompactReroutes": [],
+        "metadataOnlyLineageAccountSwitches": []
+      }
+    },
+    {
+      "name": "audit_lineage_fields_present",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "auditFieldCoverage": {
+          "parsedEventCount": 53,
+          "detailEventCount": 53,
+          "gatewayRequestIdCount": 53,
+          "turnLineageIdCount": 30,
+          "explicitTurnLineageIdCount": 30,
+          "previousResponseIdHashCount": 0,
+          "upstreamResponseIdHashCount": 1,
+          "continuationFlagCount": 53,
+          "autoCompactFlagCount": 53,
+          "autoCompactCandidateCount": 0,
+          "lineageDiagnosticReady": true,
+          "continuationDiagnosticReady": false,
+          "autoCompactDiagnosticReady": true,
+          "presentFieldNames": [
+            "gateway_request_id",
+            "turn_lineage_id",
+            "upstream_response_id_hash",
+            "is_continuation",
+            "is_auto_compact_candidate"
+          ],
+          "missingFieldNames": [
+            "previous_response_id_hash"
+          ]
+        }
+      }
+    },
+    {
+      "name": "client_aborted_streams_classified",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "clientAbortedBeforeFirstChunkCount": 0,
+        "clientAbortedStreamCount": 0,
+        "clientAbortedAfterFirstChunkCount": 0,
+        "clientAbortedStreamSummaries": []
+      }
+    },
+    {
+      "name": "codex_cli_config_auth_untouched",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "changedFiles": [],
+        "unchanged": true
+      }
+    },
+    {
+      "name": "codex_app_process_stable",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "afterCount": 0,
+        "stable": true,
+        "beforeCount": 0
+      }
+    }
+  ],
+  "safetyNotes": [
+    "this live monitor is read-only",
+    "it hashes ~/.codex/config.toml and ~/.codex/auth.json but does not read or write their contents",
+    "it does not start, stop, restart, or kill Codex App, Codex CLI, or Cockpit services",
+    "it does not switch providers or restore manual provider changes",
+    "use the App-safe isolated acceptance script when temporary provider config must be created and restored automatically"
+  ]
+}

@@ -367,6 +367,17 @@ enum GatewayResponseAdapter {
     },
 }
 
+impl GatewayResponseAdapter {
+    fn audit_kind(&self) -> &'static str {
+        match self {
+            Self::Passthrough { .. } => "passthrough",
+            Self::ChatCompletions { .. } => "chat_completions",
+            Self::Images { stream_prefix, .. } if stream_prefix == "image_edit" => "images_edit",
+            Self::Images { .. } => "images_generations",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct RequestRoutingHint {
     model_key: String,
@@ -12050,6 +12061,7 @@ async fn handle_connection(
         return Ok(());
     }
 
+    let client_route = failure_log_route(Some(&parsed));
     let started_at = Instant::now();
     let (prepared_request, response_adapter) = match prepare_gateway_request(parsed) {
         Ok(prepared) => prepared,
@@ -12069,6 +12081,7 @@ async fn handle_connection(
             return Ok(());
         }
     };
+    let response_adapter_kind = response_adapter.audit_kind();
     let request_audit_context = build_audit_context(&prepared_request, None);
     record_audit_event_from_context(
         &request_audit_context,
@@ -12077,7 +12090,14 @@ async fn handle_connection(
         None,
         None,
         Some("accepted"),
-        BTreeMap::from([("method".to_string(), prepared_request.method.clone())]),
+        BTreeMap::from([
+            ("method".to_string(), prepared_request.method.clone()),
+            ("client_route".to_string(), client_route.clone()),
+            (
+                "response_adapter".to_string(),
+                response_adapter_kind.to_string(),
+            ),
+        ]),
     );
 
     if is_responses_websocket_upgrade_request(&prepared_request) {
@@ -12117,6 +12137,11 @@ async fn handle_connection(
     };
     let mut request_trace_detail = BTreeMap::from([
         ("method".to_string(), prepared_request.method.clone()),
+        ("client_route".to_string(), client_route.clone()),
+        (
+            "response_adapter".to_string(),
+            response_adapter_kind.to_string(),
+        ),
         (
             "body_bytes".to_string(),
             prepared_request.body.len().to_string(),
