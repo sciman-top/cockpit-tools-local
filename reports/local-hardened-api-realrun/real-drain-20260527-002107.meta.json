@@ -1,0 +1,22 @@
+{
+  "runId": "20260527-002107",
+  "workspace": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "probeRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107",
+  "metaPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\real-drain-20260527-002107.meta.json",
+  "auditPath": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\codex_local_access_audit.jsonl",
+  "stopSignal": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\monitor.stop",
+  "monitorPid": 32648,
+  "smokePid": 31372,
+  "monitorExitCodeFile": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\monitor.exitcode.txt",
+  "monitorCheckpoint": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\monitor.checkpoint.json",
+  "monitorStdout": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\monitor.stdout.json",
+  "monitorStderr": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\monitor.stderr.log",
+  "smokeStdout": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\smoke.stdout.json",
+  "smokeStderr": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\smoke.stderr.log",
+  "monitorReportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-live-monitor",
+  "drainMaxRequests": 30,
+  "drainRequestIntervalSeconds": 22,
+  "startedAt": "2026-05-27T00:21:18.5486836+08:00",
+  "monitorCommand": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 1200 -PollIntervalSeconds 2 -DataRoot C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107 -CodexHome C:\\Users\\sciman\\.codex -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-live-monitor -ExitCodeFile C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\monitor.exitcode.txt -CheckpointPath C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\monitor.checkpoint.json -StopSignalFile C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107\\monitor.stop -RequireQuotaFallback -RequireStreamCompletion -RequireAppStable -RequiredFallbackCycles 1 -RequiredDistinctHealthyAccounts 1 -RequiredCompletedStreams 1 -WriteReport -Quiet",
+  "smokeCommand": "pwsh -NoProfile -ExecutionPolicy Bypass -File scripts\\smoke-local-hardened-api.ps1 -Stage fallback_probe -Model gpt-5.5 -StartEphemeralGateway -TemporaryFallbackConfig -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -RunCodexExecSmoke -RequireQuotaFallback -AutoDrainFirstFreeAccountUntilFallback -AutoDrainMaxRequests 30 -AutoDrainRequestIntervalSeconds 22 -AssertCodexAppProcessStable -CodexHome C:\\Users\\sciman\\.codex -DataRoot C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-real-drain-20260527-002107 -WriteReport"
+}

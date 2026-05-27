@@ -1202,7 +1202,13 @@ function Get-AuditAcceptanceSummary {
     $gatewayRequestId = Get-AuditGatewayRequestId $traceEvent
     $normalRequestTimeoutMs = Get-AuditDetailInt64 -Event $traceEvent -Name "normal_request_timeout_ms"
     $requestTimeoutMs = Get-AuditDetailInt64 -Event $traceEvent -Name "request_timeout_ms"
-    $timeoutExtended = [bool]($null -ne $normalRequestTimeoutMs -and $null -ne $requestTimeoutMs -and $requestTimeoutMs -gt $normalRequestTimeoutMs)
+    $hardAffinityWaitLimitMs = Get-AuditDetailInt64 -Event $traceEvent -Name "hard_affinity_wait_limit_ms"
+    $explicitTimeoutExtended = Get-AuditDetailValue -Event $traceEvent -Name "timeout_extended"
+    $timeoutExtended = if ($null -ne $explicitTimeoutExtended) {
+      Get-AuditDetailBool -Event $traceEvent -Name "timeout_extended"
+    } else {
+      [bool]($null -ne $normalRequestTimeoutMs -and $null -ne $requestTimeoutMs -and $requestTimeoutMs -gt $normalRequestTimeoutMs)
+    }
     $sameEvents = @($parsedEvents | Where-Object {
       $sameRequest = (-not [string]::IsNullOrWhiteSpace($requestId)) -and $_.requestId -eq $requestId
       $sameGateway = $false
@@ -1229,7 +1235,7 @@ function Get-AuditAcceptanceSummary {
         }
       }
       if ($null -eq $inlineWaitLimitMs) {
-        foreach ($name in @("inline_wait_limit_ms", "hard_affinity_inline_retry_wait_limit_ms", "max_inline_wait_ms", "max_hard_affinity_inline_retry_wait_ms")) {
+        foreach ($name in @("inline_wait_limit_ms", "hard_affinity_wait_limit_ms", "hard_affinity_inline_retry_wait_limit_ms", "max_inline_wait_ms", "max_hard_affinity_inline_retry_wait_ms")) {
           $value = Get-AuditDetailInt64 -Event $candidate -Name $name
           if ($null -ne $value) {
             $inlineWaitLimitMs = $value
@@ -1237,6 +1243,9 @@ function Get-AuditAcceptanceSummary {
           }
         }
       }
+    }
+    if ($null -eq $inlineWaitLimitMs -and $null -ne $hardAffinityWaitLimitMs) {
+      $inlineWaitLimitMs = $hardAffinityWaitLimitMs
     }
     $resetWaitExceedsNormalTimeout = [bool](
       $null -ne $retryAfterMs -and
@@ -1269,6 +1278,7 @@ function Get-AuditAcceptanceSummary {
       timeoutExtended = [bool]$timeoutExtended
       retryAfterMs = $retryAfterMs
       inlineWaitLimitMs = $inlineWaitLimitMs
+      hardAffinityWaitLimitMs = $hardAffinityWaitLimitMs
       resetWaitExceedsNormalTimeout = [bool]$resetWaitExceedsNormalTimeout
       requestTimeoutCoversResetWait = [bool]$requestTimeoutCoversResetWait
       stickyBoundary = Get-AuditDetailValue -Event $traceEvent -Name "sticky_boundary"

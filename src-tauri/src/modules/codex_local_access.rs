@@ -50,7 +50,8 @@ const LITELLM_GATEWAY_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
 const MAX_HTTP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_INLINE_ACCOUNT_RETRY_WAIT: Duration = Duration::from_secs(3);
-const HARD_AFFINITY_CONTINUITY_WAIT_LIMIT: Duration = Duration::from_secs(24 * 60 * 60);
+const HARD_AFFINITY_MIN_EXTENDED_WAIT_BASE: Duration = Duration::from_secs(30);
+const HARD_AFFINITY_CONTINUITY_WAIT_LIMIT: Duration = Duration::from_secs(8 * 24 * 60 * 60);
 const MAX_POOL_UNAVAILABLE_PRE_ADMISSION_WAIT: Duration = Duration::from_secs(3);
 const UPSTREAM_SEND_RETRY_ATTEMPTS: usize = 3;
 const UPSTREAM_SEND_RETRY_BASE_DELAY: Duration = Duration::from_millis(200);
@@ -8765,16 +8766,12 @@ fn build_audit_event(
             .entry("previous_response_id_hash".to_string())
             .or_insert(value);
     }
-    if context.is_continuation {
-        detail
-            .entry("is_continuation".to_string())
-            .or_insert("true".to_string());
-    }
-    if context.is_auto_compact_candidate {
-        detail
-            .entry("is_auto_compact_candidate".to_string())
-            .or_insert("true".to_string());
-    }
+    detail
+        .entry("is_continuation".to_string())
+        .or_insert(context.is_continuation.to_string());
+    detail
+        .entry("is_auto_compact_candidate".to_string())
+        .or_insert(context.is_auto_compact_candidate.to_string());
 
     CodexLocalAccessAuditEvent {
         schema_version: CODEX_LOCAL_ACCESS_AUDIT_SCHEMA_VERSION,
@@ -9311,6 +9308,30 @@ async fn write_json_error_response(
         .write_all(&response)
         .await
         .map_err(|e| format!("写入错误响应失败: {}", e))
+}
+
+fn build_proxy_dispatch_error_body(
+    request: &ParsedRequest,
+    status: u16,
+    message: &str,
+    retry_after: Option<Duration>,
+) -> Value {
+    if status == StatusCode::TOO_MANY_REQUESTS.as_u16()
+        && request_has_codex_sticky_routing_boundary(request)
+    {
+        let resets_in_seconds = retry_after.map(duration_to_ceiled_seconds_i64);
+        return json!({
+            "error": {
+                "type": "usage_limit_reached",
+                "code": "usage_limit_reached",
+                "message": message,
+                "resets_at": resets_in_seconds.map(|seconds| chrono::Utc::now().timestamp().saturating_add(seconds)),
+                "resets_in_seconds": resets_in_seconds,
+            }
+        });
+    }
+
+    json!({ "error": message })
 }
 
 async fn write_http_response(
@@ -10362,10 +10383,14 @@ fn should_retry_single_account_upstream_status(status: StatusCode) -> bool {
 }
 
 fn hard_affinity_inline_retry_wait_limit(config: &CodexLocalApiSafetyConfig) -> Duration {
-    Duration::from_secs(config.request_timeout_seconds.max(1))
+    let configured_timeout = Duration::from_secs(config.request_timeout_seconds.max(1));
+    let short_budget_limit = configured_timeout
         .saturating_sub(Duration::from_secs(1))
-        .max(MAX_INLINE_ACCOUNT_RETRY_WAIT)
-        .min(HARD_AFFINITY_CONTINUITY_WAIT_LIMIT)
+        .max(MAX_INLINE_ACCOUNT_RETRY_WAIT);
+    if configured_timeout < HARD_AFFINITY_MIN_EXTENDED_WAIT_BASE {
+        return short_budget_limit.min(HARD_AFFINITY_CONTINUITY_WAIT_LIMIT);
+    }
+    HARD_AFFINITY_CONTINUITY_WAIT_LIMIT
 }
 
 fn should_retry_hard_affinity_upstream_failure(
@@ -11863,7 +11888,7 @@ async fn write_proxy_dispatch_error_response(
     let response = json_response_with_retry_after(
         status,
         status_text,
-        &json!({ "error": message }),
+        &build_proxy_dispatch_error_body(request, status, message.as_str(), retry_after),
         retry_after,
     );
     let write_result = stream
@@ -12083,12 +12108,10 @@ async fn handle_connection(
 
     let normal_request_timeout =
         Duration::from_secs(collection.safety_config.request_timeout_seconds.max(1));
+    let hard_affinity_wait_limit = hard_affinity_inline_retry_wait_limit(&collection.safety_config);
     let hard_affinity_continuity = request_has_resolved_hard_affinity(&prepared_request).await;
     let request_timeout = if hard_affinity_continuity {
-        normal_request_timeout.max(
-            hard_affinity_inline_retry_wait_limit(&collection.safety_config)
-                .saturating_add(Duration::from_secs(1)),
-        )
+        normal_request_timeout.max(hard_affinity_wait_limit.saturating_add(Duration::from_secs(1)))
     } else {
         normal_request_timeout
     };
@@ -12109,6 +12132,14 @@ async fn handle_connection(
         (
             "hard_affinity_continuity".to_string(),
             hard_affinity_continuity.to_string(),
+        ),
+        (
+            "hard_affinity_wait_limit_ms".to_string(),
+            hard_affinity_wait_limit.as_millis().to_string(),
+        ),
+        (
+            "timeout_extended".to_string(),
+            (request_timeout > normal_request_timeout).to_string(),
         ),
     ]);
     if let Some(boundary) = official_codex_sticky_routing_boundary(&prepared_request) {
@@ -12340,9 +12371,9 @@ mod tests {
         build_effective_local_access_account_ids_from_registry, build_health_summary_from_registry,
         build_health_summary_from_registry_for_accounts, build_images_api_payload,
         build_local_models_response, build_ordered_account_ids, build_pool_unavailable_message,
-        build_projection_seed_local_access_account_ids, build_request_routing_hint,
-        build_routing_pool_account_ids, build_runtime_account, build_runtime_mode_state,
-        build_selector_audit_summary, cache_prepared_account,
+        build_projection_seed_local_access_account_ids, build_proxy_dispatch_error_body,
+        build_request_routing_hint, build_routing_pool_account_ids, build_runtime_account,
+        build_runtime_mode_state, build_selector_audit_summary, cache_prepared_account,
         classify_active_stream_terminal_error, classify_codex_api_failure,
         classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
         extract_usage_capture, filter_local_access_account_ids, first_audit_timestamp_from_path,
@@ -12618,6 +12649,71 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 hard_affinity_inline_retry_wait_limit(&CodexLocalApiSafetyConfig::default())
             ),
             Some(Duration::from_secs(61))
+        );
+    }
+
+    #[test]
+    fn hard_affinity_retry_should_cover_weekly_usage_limit_reset() {
+        let classified = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"type":"usage_limit_reached","reset_after_seconds":604282}}"#,
+        );
+
+        let reset_wait = Duration::from_secs(604_282);
+        let retry_limit =
+            hard_affinity_inline_retry_wait_limit(&CodexLocalApiSafetyConfig::default());
+        assert_eq!(classified.retry_after, Some(reset_wait));
+        assert!(
+            retry_limit >= reset_wait,
+            "hard-affinity continuation must not leak 429/retry-limit before the old account reset; limit={:?}, reset_wait={:?}",
+            retry_limit,
+            reset_wait
+        );
+        assert_eq!(
+            should_retry_hard_affinity_upstream_failure(true, &classified, 0, 1, retry_limit),
+            Some(reset_wait)
+        );
+    }
+
+    #[test]
+    fn sticky_429_dispatch_error_body_uses_official_usage_limit_shape() {
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                X_CODEX_TURN_STATE_HEADER.to_string(),
+                "turn-state-token".to_string(),
+            )]),
+            body: br#"{"model":"gpt-5.5","input":"continue"}"#.to_vec(),
+            gateway_request_id: "gw-test-sticky-429-body".to_string(),
+        };
+
+        let body = build_proxy_dispatch_error_body(
+            &request,
+            StatusCode::TOO_MANY_REQUESTS.as_u16(),
+            "sticky task waiting for old account quota reset",
+            Some(Duration::from_secs(60)),
+        );
+
+        assert_eq!(
+            body.get("error")
+                .and_then(|error| error.get("type"))
+                .and_then(Value::as_str),
+            Some("usage_limit_reached")
+        );
+        assert_eq!(
+            body.get("error")
+                .and_then(|error| error.get("code"))
+                .and_then(Value::as_str),
+            Some("usage_limit_reached")
+        );
+        assert!(
+            body.get("error")
+                .and_then(|error| error.get("resets_at"))
+                .and_then(Value::as_i64)
+                .is_some(),
+            "official Codex maps 429 to UsageLimitReached only when the body keeps the structured error object"
         );
     }
 
