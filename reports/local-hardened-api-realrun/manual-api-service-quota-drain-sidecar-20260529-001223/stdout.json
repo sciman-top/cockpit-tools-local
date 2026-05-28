@@ -1,0 +1,2 @@
+monitoring audit=C:\Users\sciman\.antigravity_cockpit\codex_local_access_audit.jsonl
+started_at=2026-05-29T00:12:23.9838958+08:00; duration_seconds=7200; include_existing_audit=False
