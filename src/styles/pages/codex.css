@@ -1691,10 +1691,6 @@
   background: color-mix(in srgb, var(--danger) 5%, var(--bg-tertiary));
 }
 
-.codex-account-card .codex-card-action-cluster .codex-inline-order-controls {
-  gap: 3px;
-}
-
 .codex-account-card .card-action-btn {
   width: 30px;
   height: 30px;
@@ -2775,32 +2771,6 @@
   display: inline-flex;
   gap: 6px;
   flex-shrink: 0;
-}
-
-.codex-inline-order-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: nowrap;
-  flex-shrink: 0;
-}
-
-.codex-inline-order-controls .card-action-btn,
-.codex-inline-order-controls .action-btn,
-.codex-inline-order-controls .codex-compact-note-btn {
-  flex-shrink: 0;
-}
-
-.codex-account-card.is-group-order-drop-target,
-.codex-compact-row.is-group-order-drop-target,
-.account-table tr.is-group-order-drop-target {
-  border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--primary) 38%, transparent);
-}
-
-.codex-compact-row.is-group-order-drop-target,
-.account-table tr.is-group-order-drop-target {
-  background: color-mix(in srgb, var(--primary) 8%, var(--bg-card));
 }
 
 .codex-custom-sort-row-actions .folder-icon-btn:disabled {

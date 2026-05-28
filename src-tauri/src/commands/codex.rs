@@ -834,8 +834,16 @@ pub async fn codex_local_access_apply_safety_preset(
 #[tauri::command]
 pub async fn codex_local_access_set_enabled(
     enabled: bool,
+    force: Option<bool>,
 ) -> Result<CodexLocalAccessState, String> {
-    codex_local_access::set_local_access_enabled(enabled).await
+    codex_local_access::set_local_access_enabled_with_options(
+        enabled,
+        codex_local_access::RuntimeProjectionChangeOptions::new(
+            "tauri_local_access_set_enabled",
+            force.unwrap_or(false),
+        ),
+    )
+    .await
 }
 
 #[tauri::command]
@@ -846,8 +854,16 @@ pub fn codex_runtime_mode_get() -> Result<CodexRuntimeModeState, String> {
 #[tauri::command]
 pub async fn codex_runtime_mode_set(
     mode: CodexRuntimeIntegrationMode,
+    force: Option<bool>,
 ) -> Result<CodexRuntimeModeState, String> {
-    codex_local_access::set_runtime_integration_mode(mode).await
+    codex_local_access::set_runtime_integration_mode_with_options(
+        mode,
+        codex_local_access::RuntimeProjectionChangeOptions::new(
+            "tauri_runtime_mode_set",
+            force.unwrap_or(false),
+        ),
+    )
+    .await
 }
 
 #[tauri::command]

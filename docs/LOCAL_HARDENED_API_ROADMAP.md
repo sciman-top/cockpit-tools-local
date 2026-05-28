@@ -505,7 +505,7 @@ P0 必做：
 P1 必做：
 
 - [x] `HLA-06` 真实多账号池数据面。UI 与保存/规范化层已允许多个有效账号；请求选择器可看完整候选池，实际上游调度仍默认单账号 cap。
-- [x] `HLA-07` sticky_process / fill_first 路由。已完成 hardened 默认稳定起点、完整候选池 + 单请求尝试 cap、process sticky binding、fill-first 用户排序、cooldown/auth/manual sticky 清理和 500+ selector 单测；`Session_id` / `X-Client-Request-Id` 任务级扩展留到后续增强。
+- [x] `HLA-07` sticky_process / fill_first 路由。已完成 hardened 默认稳定起点、完整候选池 + 单请求尝试 cap、process sticky binding、fill-first 证据排序、cooldown/auth/manual sticky 清理和 500+ selector 单测；`Session_id` / `X-Client-Request-Id` 任务级扩展留到后续增强。
 - [x] `HLA-08` 状态面板和手动恢复。已完成只读 health summary、API 服务面板展示、单账号/单模型 cooldown 手动恢复和脱敏恢复审计；手动暂停保留为后续增强。
 - [x] `HLA-09` 配额刷新和唤醒降频。已移除 quota reset wakeup 自动高频刷新调整；Codex 自动刷新不再扫 API service OAuth 池，目标超过 50 个时跳过；后台唤醒启用前有风险确认。后续补更细 wakeup/reset smoke。
 

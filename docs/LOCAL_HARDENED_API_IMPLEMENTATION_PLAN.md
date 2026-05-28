@@ -386,12 +386,12 @@ flowchart TD
 
 描述：把当前 round-robin cursor 改成 hardened 默认的 sticky/fill-first selector。
 
-状态：2026-05-18 已完成核心选择器切片：hardened mode 下请求起点固定为 0，不再随每个请求推进 round-robin cursor；候选池保留完整账号列表，实际上游尝试仍受 `maxRetryAccounts` / `fallbackMode` cap 控制；默认 fill-first 保持用户排序并跳过会触发账号快照刷新的 plan/quota 排序；process sticky binding 写入 health registry，健康时置顶，cooldown/auth/manual/过期/失效时清理或绕过；`previous_response_id` affinity 仍在最后置顶。`Session_id` / `X-Client-Request-Id` 作为后续任务级扩展保留。
+状态：2026-05-18 已完成核心选择器切片：hardened mode 下请求起点固定为 0，不再随每个请求推进 round-robin cursor；候选池保留完整账号列表，实际上游尝试仍受 `maxRetryAccounts` / `fallbackMode` cap 控制；默认 fill-first 按 health/quota/reset/连续性证据排序，不读取配置成员顺序，也不触发账号快照扫号；process sticky binding 写入 health registry，健康时置顶，cooldown/auth/manual/过期/失效时清理或绕过；`previous_response_id` affinity 仍在最后置顶。`Session_id` / `X-Client-Request-Id` 作为后续任务级扩展保留。
 
 策略：
 
 - `sticky_process`：AI 推荐。默认固定进程级账号，账号不可调度时才 fallback。
-- `fill_first`：适合 quota drain careful，按用户排序用第一个健康账号。
+- `fill_first`：适合 quota drain careful，按证据排序使用第一个健康账号。
 - `balanced_low_rate`：仅手动 opt-in，低频分散请求。
 - `round_robin`：仅保留显式高级选项，不进入 hardened 默认。
 

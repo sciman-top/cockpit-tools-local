@@ -115,7 +115,10 @@ interface CodexLocalAccessModalProps {
   onApplySafetyPreset: (
     preset: CodexLocalApiSafetyPresetId,
   ) => Promise<unknown> | unknown;
-  onSetRuntimeMode: (mode: CodexRuntimeIntegrationMode) => Promise<unknown> | unknown;
+  onSetRuntimeMode: (
+    mode: CodexRuntimeIntegrationMode,
+    options?: { force?: boolean },
+  ) => Promise<unknown> | unknown;
   onRotateApiKey: () => Promise<unknown> | unknown;
   onKillPort: () => Promise<unknown> | unknown;
   onToggleEnabled: () => Promise<unknown> | unknown;
@@ -1448,9 +1451,31 @@ export function CodexLocalAccessModal({
   const handleChangeRuntimeMode = async (nextMode: string) => {
     if (nextMode === selectedRuntimeMode) return;
 
+    const forceDirectProjection = nextMode === 'direct_projection';
+    if (forceDirectProjection) {
+      const confirmed = await confirmDialog(
+        t(
+          'codex.localAccess.disableServiceConfirmMessage',
+          '停用 API 服务会断开 Codex 当前使用的本地 provider，正在创建、恢复或流式执行的任务可能失败。确认停用吗？',
+        ),
+        {
+          title: t(
+            'codex.localAccess.disableServiceConfirmTitle',
+            '确认停用 API 服务',
+          ),
+          kind: 'warning',
+          okLabel: t('codex.localAccess.disableServiceAction', '确认停用'),
+          cancelLabel: t('common.cancel', '取消'),
+        },
+      );
+      if (!confirmed) return;
+    }
+
     await runAction(
       async () => {
-        await onSetRuntimeMode(nextMode as CodexRuntimeIntegrationMode);
+        await onSetRuntimeMode(nextMode as CodexRuntimeIntegrationMode, {
+          force: forceDirectProjection,
+        });
       },
       nextMode === 'cockpit_api_service'
         ? t('codex.localAccess.runtimeModeGatewaySuccess', '已切换为 Cockpit API Service 模式')

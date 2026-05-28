@@ -520,19 +520,64 @@ fn quota_reset_time_for_preservation(quota: &CodexQuota) -> Option<i64> {
         .max()
 }
 
-fn should_keep_existing_quota_exhaustion(account: &CodexAccount, now: i64) -> bool {
-    let Some(error) = account.quota_error.as_ref() else {
+fn quota_effective_remaining_percentage(quota: &CodexQuota) -> Option<i32> {
+    let mut quota = quota.clone();
+    quota.normalize_window_slots();
+
+    let mut percentages = Vec::new();
+    if quota.hourly_window_present.unwrap_or(true) {
+        percentages.push(quota.hourly_percentage.clamp(0, 100));
+    }
+    if quota.weekly_window_present.unwrap_or(true) {
+        percentages.push(quota.weekly_percentage.clamp(0, 100));
+    }
+    percentages.into_iter().min()
+}
+
+fn rate_limit_json_marks_exhausted(rate_limit: &serde_json::Value) -> bool {
+    rate_limit
+        .get("limit_reached")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        || rate_limit
+            .get("allowed")
+            .and_then(|value| value.as_bool())
+            .is_some_and(|allowed| !allowed)
+}
+
+fn quota_raw_data_marks_exhaustion(quota: &CodexQuota) -> bool {
+    let Some(raw_data) = quota.raw_data.as_ref() else {
         return false;
     };
-    let code_or_message = error.code.as_deref().unwrap_or(error.message.as_str());
-    if !is_quota_exhaustion_error(code_or_message) && !is_quota_exhaustion_error(&error.message) {
-        return false;
-    }
 
+    raw_data
+        .get("quota_exhausted")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+        || raw_data
+            .get("rate_limit_reached_type")
+            .is_some_and(|value| is_exhausted_rate_limit_reached_type(Some(value)))
+        || raw_data
+            .get("rate_limit")
+            .is_some_and(rate_limit_json_marks_exhausted)
+}
+
+fn should_keep_existing_quota_exhaustion(account: &CodexAccount, now: i64) -> bool {
     let Some(quota) = account.quota.as_ref() else {
         return false;
     };
-    if quota.hourly_percentage > 0 || quota.weekly_percentage > 0 {
+    let error_marks_exhaustion = account
+        .quota_error
+        .as_ref()
+        .map(|error| {
+            let code_or_message = error.code.as_deref().unwrap_or(error.message.as_str());
+            is_quota_exhaustion_error(code_or_message) || is_quota_exhaustion_error(&error.message)
+        })
+        .unwrap_or(false);
+    if !error_marks_exhaustion && !quota_raw_data_marks_exhaustion(quota) {
+        return false;
+    }
+    if quota_effective_remaining_percentage(quota) != Some(0) {
         return false;
     }
 
@@ -1550,17 +1595,7 @@ fn apply_direct_quota_observation(
 }
 
 fn quota_remaining_for_direct_observation(quota: &CodexQuota) -> Option<i32> {
-    let mut quota = quota.clone();
-    quota.normalize_window_slots();
-
-    let mut percentages = Vec::new();
-    if quota.hourly_window_present.unwrap_or(true) {
-        percentages.push(quota.hourly_percentage.clamp(0, 100));
-    }
-    if quota.weekly_window_present.unwrap_or(true) {
-        percentages.push(quota.weekly_percentage.clamp(0, 100));
-    }
-    percentages.into_iter().min()
+    quota_effective_remaining_percentage(quota)
 }
 
 fn should_apply_direct_quota_observation(
@@ -2757,6 +2792,71 @@ mod tests {
                 "source": "codex_direct_oauth_upstream_error",
                 "quota_exhausted": true,
                 "reset_at": 1_700_003_600
+            })),
+        });
+
+        assert!(should_keep_existing_quota_exhaustion(
+            &account,
+            1_700_000_100
+        ));
+    }
+
+    #[test]
+    fn weekly_only_quota_exhaustion_snapshot_blocks_stale_success_overwrite() {
+        let mut account = test_account();
+        account.quota_error = Some(CodexQuotaErrorInfo {
+            code: Some("rate_limit_reached".to_string()),
+            message: "Codex wham/usage reported weekly quota exhaustion".to_string(),
+            timestamp: 1_700_000_000,
+        });
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 100,
+            hourly_reset_time: None,
+            hourly_window_minutes: None,
+            hourly_window_present: Some(false),
+            weekly_percentage: 0,
+            weekly_reset_time: Some(1_700_604_800),
+            weekly_window_minutes: Some(10_080),
+            weekly_window_present: Some(true),
+            raw_data: Some(json!({
+                "rate_limit_reached_type": {
+                    "type": "rate_limit_reached"
+                }
+            })),
+        });
+
+        assert!(should_keep_existing_quota_exhaustion(
+            &account,
+            1_700_000_100
+        ));
+    }
+
+    #[test]
+    fn weekly_only_usage_exhaustion_without_error_blocks_stale_success_overwrite() {
+        let mut account = test_account();
+        account.quota_error = None;
+        account.quota = Some(CodexQuota {
+            hourly_percentage: 100,
+            hourly_reset_time: None,
+            hourly_window_minutes: None,
+            hourly_window_present: Some(false),
+            weekly_percentage: 0,
+            weekly_reset_time: Some(1_700_604_800),
+            weekly_window_minutes: Some(10_080),
+            weekly_window_present: Some(true),
+            raw_data: Some(json!({
+                "rate_limit": {
+                    "allowed": true,
+                    "limit_reached": false,
+                    "primary_window": {
+                        "used_percent": 100,
+                        "limit_window_seconds": 604800,
+                        "reset_at": 1700604800
+                    }
+                },
+                "rate_limit_reached_type": {
+                    "type": "rate_limit_reached"
+                }
             })),
         });
 

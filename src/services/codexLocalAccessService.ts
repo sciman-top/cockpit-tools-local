@@ -77,8 +77,12 @@ export async function applyCodexLocalAccessSafetyPreset(
 
 export async function setCodexLocalAccessEnabled(
   enabled: boolean,
+  options?: { force?: boolean },
 ): Promise<CodexLocalAccessState> {
-  return await invoke('codex_local_access_set_enabled', { enabled });
+  return await invoke('codex_local_access_set_enabled', {
+    enabled,
+    force: options?.force ?? false,
+  });
 }
 
 export async function getCodexRuntimeMode(): Promise<CodexRuntimeModeState> {
@@ -87,8 +91,12 @@ export async function getCodexRuntimeMode(): Promise<CodexRuntimeModeState> {
 
 export async function setCodexRuntimeMode(
   mode: CodexRuntimeIntegrationMode,
+  options?: { force?: boolean },
 ): Promise<CodexRuntimeModeState> {
-  return await invoke('codex_runtime_mode_set', { mode });
+  return await invoke('codex_runtime_mode_set', {
+    mode,
+    force: options?.force ?? false,
+  });
 }
 
 export async function activateCodexLocalAccess(): Promise<CodexLocalAccessState> {

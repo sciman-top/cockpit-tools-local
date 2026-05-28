@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Mutex as TokioMutex};
@@ -74,6 +74,7 @@ const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_UNKNOWN_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const CODEX_LOCAL_ACCESS_AUDIT_SCHEMA_VERSION: u32 = 1;
 const CODEX_LOCAL_ACCESS_AUDIT_MAX_BYTES: usize = 2 * 1024 * 1024;
+const RUNTIME_PROJECTION_RECENT_AUDIT_GRACE_MS: u128 = 5 * 60 * 1000;
 const UPSTREAM_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_CODEX_USER_AGENT: &str =
     "codex-tui/0.118.0 (Mac OS 26.3.1; arm64) iTerm.app/3.6.9 (codex-tui; 0.118.0)";
@@ -272,6 +273,73 @@ struct ActiveStreamLease {
     released: bool,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RuntimeProjectionChangeOptions {
+    pub force: bool,
+    pub source: &'static str,
+}
+
+impl RuntimeProjectionChangeOptions {
+    pub const fn new(source: &'static str, force: bool) -> Self {
+        Self { force, source }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RuntimeProjectionContinuityRisk {
+    active_stream_count: usize,
+    codex_app_process_count: usize,
+    recent_audit_activity: bool,
+    audit_last_modified_age_ms: Option<u128>,
+}
+
+impl RuntimeProjectionContinuityRisk {
+    fn has_live_continuity_risk(&self) -> bool {
+        self.active_stream_count > 0
+            || self.codex_app_process_count > 0
+            || self.recent_audit_activity
+    }
+
+    fn blocking_reasons(&self) -> Vec<&'static str> {
+        let mut reasons = Vec::new();
+        if self.active_stream_count > 0 {
+            reasons.push("active_stream");
+        }
+        if self.codex_app_process_count > 0 {
+            reasons.push("codex_app_running");
+        }
+        if self.recent_audit_activity {
+            reasons.push("recent_audit_activity");
+        }
+        reasons
+    }
+
+    fn audit_detail(&self) -> BTreeMap<String, String> {
+        let mut detail = BTreeMap::from([
+            (
+                "active_stream_count".to_string(),
+                self.active_stream_count.to_string(),
+            ),
+            (
+                "codex_app_process_count".to_string(),
+                self.codex_app_process_count.to_string(),
+            ),
+            (
+                "recent_audit_activity".to_string(),
+                self.recent_audit_activity.to_string(),
+            ),
+        ]);
+        if let Some(age_ms) = self.audit_last_modified_age_ms {
+            detail.insert("audit_last_modified_age_ms".to_string(), age_ms.to_string());
+        }
+        let reasons = self.blocking_reasons();
+        if !reasons.is_empty() {
+            detail.insert("blocking_reasons".to_string(), reasons.join(","));
+        }
+        detail
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct StreamWriteState {
     headers_written: bool,
@@ -436,6 +504,55 @@ fn local_api_backpressure_admission_queue() -> &'static TokioMutex<()> {
 
 fn active_stream_lease_registry() -> &'static Mutex<ActiveStreamLeaseRegistry> {
     ACTIVE_STREAM_LEASE_REGISTRY.get_or_init(|| Mutex::new(ActiveStreamLeaseRegistry::default()))
+}
+
+fn active_stream_lease_count() -> usize {
+    active_stream_lease_registry()
+        .lock()
+        .map(|registry| registry.leases.len())
+        .unwrap_or(0)
+}
+
+fn recent_audit_activity() -> (bool, Option<u128>) {
+    let Ok(path) = local_access_audit_file_path() else {
+        return (false, None);
+    };
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return (false, None);
+    };
+    let Ok(modified_at) = metadata.modified() else {
+        return (false, None);
+    };
+    let Ok(age) = SystemTime::now().duration_since(modified_at) else {
+        return (true, Some(0));
+    };
+    let age_ms = age.as_millis();
+    (
+        age_ms <= RUNTIME_PROJECTION_RECENT_AUDIT_GRACE_MS,
+        Some(age_ms),
+    )
+}
+
+fn collect_runtime_projection_continuity_risk() -> RuntimeProjectionContinuityRisk {
+    let (recent_audit_activity, audit_last_modified_age_ms) = recent_audit_activity();
+    RuntimeProjectionContinuityRisk {
+        active_stream_count: active_stream_lease_count(),
+        codex_app_process_count: process::collect_codex_process_entries().len(),
+        recent_audit_activity,
+        audit_last_modified_age_ms,
+    }
+}
+
+fn should_block_direct_projection_change(
+    current_mode: CodexRuntimeIntegrationMode,
+    target_mode: CodexRuntimeIntegrationMode,
+    force: bool,
+    risk: &RuntimeProjectionContinuityRisk,
+) -> bool {
+    current_mode == CodexRuntimeIntegrationMode::CockpitApiService
+        && target_mode == CodexRuntimeIntegrationMode::DirectProjection
+        && !force
+        && risk.has_live_continuity_risk()
 }
 
 fn audit_trail_status() -> &'static Mutex<AuditTrailStatus> {
@@ -1080,13 +1197,15 @@ async fn materialize_cockpit_api_service_projection() -> Result<(), String> {
     Ok(())
 }
 
-async fn materialize_direct_projection() -> Result<(), String> {
+async fn materialize_direct_projection(
+    options: RuntimeProjectionChangeOptions,
+) -> Result<(), String> {
     let account = codex_account::get_current_account()
         .or_else(codex_account::get_current_or_fallback_oauth_account)
         .ok_or_else(|| "未找到当前 Codex 账号".to_string())?;
     if let Ok(state) = snapshot_state().await {
         if state.collection.is_some() {
-            let _ = set_local_access_enabled(false).await?;
+            let _ = set_local_access_enabled_with_options(false, options).await?;
         }
     }
     codex_account::write_account_bundle_to_dir(&codex_account::get_codex_home(), &account)?;
@@ -1120,17 +1239,65 @@ pub fn load_runtime_mode_state() -> Result<CodexRuntimeModeState, String> {
 pub async fn set_runtime_integration_mode(
     mode: CodexRuntimeIntegrationMode,
 ) -> Result<CodexRuntimeModeState, String> {
+    set_runtime_integration_mode_with_options(
+        mode,
+        RuntimeProjectionChangeOptions::new("runtime_mode_set", false),
+    )
+    .await
+}
+
+pub async fn set_runtime_integration_mode_with_options(
+    mode: CodexRuntimeIntegrationMode,
+    options: RuntimeProjectionChangeOptions,
+) -> Result<CodexRuntimeModeState, String> {
+    let current_mode = load_runtime_mode_state()
+        .map(|state| state.mode)
+        .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
+    let risk = if mode == CodexRuntimeIntegrationMode::DirectProjection
+        && current_mode == CodexRuntimeIntegrationMode::CockpitApiService
+    {
+        Some(collect_runtime_projection_continuity_risk())
+    } else {
+        None
+    };
+    if let Some(risk) = risk.as_ref() {
+        if should_block_direct_projection_change(current_mode, mode, options.force, risk) {
+            record_runtime_projection_audit_event(
+                "runtime_mode_transition",
+                "blocked",
+                options.source,
+                options.force,
+                Some(current_mode),
+                Some(mode),
+                Some(risk),
+            );
+            return Err(format!(
+                "API 服务仍处于 Codex 连续性保护窗口（{}）。如确需停用，请在确认没有运行中任务后使用强制切换。",
+                risk.blocking_reasons().join(", ")
+            ));
+        }
+    }
+
     match mode {
         CodexRuntimeIntegrationMode::CockpitApiService => {
             materialize_cockpit_api_service_projection().await?;
         }
         CodexRuntimeIntegrationMode::DirectProjection => {
-            materialize_direct_projection().await?;
+            materialize_direct_projection(options).await?;
         }
     }
 
     let state = build_runtime_mode_state(mode);
     save_runtime_mode_state(&state)?;
+    record_runtime_projection_audit_event(
+        "runtime_mode_transition",
+        "changed",
+        options.source,
+        options.force,
+        Some(current_mode),
+        Some(mode),
+        risk.as_ref(),
+    );
     Ok(state)
 }
 
@@ -1142,7 +1309,11 @@ pub async fn prepare_runtime_projection_for_app_exit() -> Result<bool, String> {
         return Ok(false);
     }
 
-    let state = set_runtime_integration_mode(CodexRuntimeIntegrationMode::DirectProjection).await?;
+    let state = set_runtime_integration_mode_with_options(
+        CodexRuntimeIntegrationMode::DirectProjection,
+        RuntimeProjectionChangeOptions::new("app_exit", false),
+    )
+    .await?;
     logger::log_info(&format!(
         "[CodexRuntimeMode] 应用退出前已恢复 Direct Projection: mode={:?}",
         state.mode
@@ -1161,7 +1332,11 @@ pub async fn sync_runtime_projection_after_account_switch(account_id: &str) -> R
             materialize_cockpit_api_service_projection().await?;
         }
         CodexRuntimeIntegrationMode::DirectProjection => {
-            materialize_direct_projection().await?;
+            materialize_direct_projection(RuntimeProjectionChangeOptions::new(
+                "account_switch",
+                false,
+            ))
+            .await?;
         }
     }
 
@@ -3465,7 +3640,9 @@ fn retry_failover_account_attempt_limit(config: &CodexLocalApiSafetyConfig) -> u
 fn build_effective_local_access_account_ids(
     collection: &CodexLocalAccessCollection,
 ) -> Vec<String> {
-    collection.account_ids.clone()
+    let mut account_ids = collection.account_ids.clone();
+    account_ids.sort();
+    account_ids
 }
 
 fn build_effective_local_access_account_ids_from_registry(
@@ -3482,7 +3659,13 @@ fn build_effective_local_access_account_ids_for_state(
     collection: &CodexLocalAccessCollection,
 ) -> Vec<String> {
     let Ok(registry) = load_health_registry_from_disk() else {
-        return build_effective_local_access_account_ids(collection);
+        let mut account_ids = build_effective_local_access_account_ids(collection);
+        sort_account_ids_by_health_estimate(
+            &mut account_ids,
+            &empty_health_registry(now_ms()),
+            now_ms(),
+        );
+        return account_ids;
     };
     build_effective_local_access_account_ids_from_registry(collection, &registry, now_ms())
 }
@@ -3521,7 +3704,6 @@ fn compare_routing_candidates(
     left: &RoutingCandidate,
     right: &RoutingCandidate,
     strategy: CodexLocalAccessRoutingStrategy,
-    original_index: &HashMap<String, usize>,
 ) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 
@@ -3572,31 +3754,15 @@ fn compare_routing_candidates(
         }
     };
 
-    ordering.then_with(|| {
-        let left_index = original_index
-            .get(&left.account_id)
-            .copied()
-            .unwrap_or(usize::MAX);
-        let right_index = original_index
-            .get(&right.account_id)
-            .copied()
-            .unwrap_or(usize::MAX);
-        left_index.cmp(&right_index)
-    })
+    ordering.then_with(|| left.account_id.cmp(&right.account_id))
 }
 
 fn apply_routing_strategy(
     account_ids: &[String],
     strategy: CodexLocalAccessRoutingStrategy,
 ) -> Vec<String> {
-    let original_index: HashMap<String, usize> = account_ids
-        .iter()
-        .enumerate()
-        .map(|(index, account_id)| (account_id.clone(), index))
-        .collect();
     let mut candidates = build_routing_candidates(account_ids);
-    candidates
-        .sort_by(|left, right| compare_routing_candidates(left, right, strategy, &original_index));
+    candidates.sort_by(|left, right| compare_routing_candidates(left, right, strategy));
     candidates
         .into_iter()
         .map(|candidate| candidate.account_id)
@@ -3804,8 +3970,7 @@ fn infer_single_account_continuation_affinity(
 fn resolve_local_access_projection_account(
     collection: &CodexLocalAccessCollection,
 ) -> Result<CodexAccount, String> {
-    let account_ids = build_effective_local_access_account_ids(collection);
-    let ordered_account_ids = apply_routing_strategy(&account_ids, collection.routing_strategy);
+    let ordered_account_ids = build_effective_local_access_account_ids_for_state(collection);
     let first_account_id = ordered_account_ids
         .first()
         .ok_or_else(|| "API 服务实际调度池为空；请先把手动配置账号加入 API 服务".to_string())?;
@@ -7062,6 +7227,7 @@ where
             filtered.push(account_id);
         }
     }
+    filtered.sort();
     filtered
 }
 
@@ -7877,6 +8043,17 @@ pub async fn update_local_access_port(port: u16) -> Result<CodexLocalAccessState
 }
 
 pub async fn set_local_access_enabled(enabled: bool) -> Result<CodexLocalAccessState, String> {
+    set_local_access_enabled_with_options(
+        enabled,
+        RuntimeProjectionChangeOptions::new("local_access_set_enabled", false),
+    )
+    .await
+}
+
+pub async fn set_local_access_enabled_with_options(
+    enabled: bool,
+    options: RuntimeProjectionChangeOptions,
+) -> Result<CodexLocalAccessState, String> {
     ensure_runtime_loaded().await?;
 
     let maybe_collection = {
@@ -7888,6 +8065,38 @@ pub async fn set_local_access_enabled(enabled: bool) -> Result<CodexLocalAccessS
         return Err("本地接入集合尚未创建".to_string());
     };
 
+    let current_mode = load_runtime_mode_state()
+        .map(|state| state.mode)
+        .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
+    let risk = if !enabled && current_mode == CodexRuntimeIntegrationMode::CockpitApiService {
+        Some(collect_runtime_projection_continuity_risk())
+    } else {
+        None
+    };
+    if let Some(risk) = risk.as_ref() {
+        if should_block_direct_projection_change(
+            current_mode,
+            CodexRuntimeIntegrationMode::DirectProjection,
+            options.force,
+            risk,
+        ) {
+            record_runtime_projection_audit_event(
+                "local_access_enabled_transition",
+                "blocked",
+                options.source,
+                options.force,
+                Some(current_mode),
+                Some(CodexRuntimeIntegrationMode::DirectProjection),
+                Some(risk),
+            );
+            return Err(format!(
+                "API 服务仍处于 Codex 连续性保护窗口（{}）。如确需停用，请在确认没有运行中任务后使用强制停用。",
+                risk.blocking_reasons().join(", ")
+            ));
+        }
+    }
+
+    let was_enabled = collection.enabled;
     collection.enabled = enabled;
     collection.updated_at = now_ms();
     save_collection_to_disk(&collection)?;
@@ -7898,6 +8107,21 @@ pub async fn set_local_access_enabled(enabled: bool) -> Result<CodexLocalAccessS
     }
 
     ensure_gateway_matches_runtime().await?;
+    if was_enabled != enabled {
+        record_runtime_projection_audit_event(
+            "local_access_enabled_transition",
+            if enabled { "enabled" } else { "disabled" },
+            options.source,
+            options.force,
+            Some(current_mode),
+            Some(if enabled {
+                CodexRuntimeIntegrationMode::CockpitApiService
+            } else {
+                CodexRuntimeIntegrationMode::DirectProjection
+            }),
+            risk.as_ref(),
+        );
+    }
     snapshot_state().await
 }
 
@@ -8970,6 +9194,44 @@ fn record_manual_pause_audit_event(account_id: &str, changed: bool) {
             ("changed".to_string(), changed.to_string()),
         ]),
     );
+}
+
+fn record_runtime_projection_audit_event(
+    phase: &str,
+    outcome: &str,
+    source: &str,
+    force: bool,
+    from_mode: Option<CodexRuntimeIntegrationMode>,
+    to_mode: Option<CodexRuntimeIntegrationMode>,
+    risk: Option<&RuntimeProjectionContinuityRisk>,
+) {
+    let context = AuditContext {
+        request_id: "runtime_projection".to_string(),
+        request_id_source: "runtime_projection".to_string(),
+        route: "runtime_projection".to_string(),
+        model: "-".to_string(),
+        account_hash: "-".to_string(),
+        gateway_request_id: "runtime_projection".to_string(),
+        turn_lineage_id: None,
+        turn_lineage_source: None,
+        previous_response_id_hash: None,
+        is_continuation: false,
+        is_auto_compact_candidate: false,
+    };
+    let mut detail = BTreeMap::from([
+        ("source".to_string(), source.to_string()),
+        ("force".to_string(), force.to_string()),
+    ]);
+    if let Some(mode) = from_mode {
+        detail.insert("from_mode".to_string(), format!("{:?}", mode));
+    }
+    if let Some(mode) = to_mode {
+        detail.insert("to_mode".to_string(), format!("{:?}", mode));
+    }
+    if let Some(risk) = risk {
+        detail.extend(risk.audit_detail());
+    }
+    record_audit_event_from_context(&context, phase, None, None, None, Some(outcome), detail);
 }
 
 fn classified_audit_outcome(classified: &ClassifiedCodexUpstreamError) -> &'static str {
@@ -12645,8 +12907,8 @@ mod tests {
         reset_local_api_backpressure_for_tests, resolve_supported_model_alias,
         retry_failover_account_attempt_limit, retry_failover_max_retries,
         save_health_registry_to_path, selector_audit_detail, selector_selected_reason,
-        set_runtime_integration_mode, should_defer_pool_unavailable,
-        should_restore_direct_projection_before_app_exit,
+        set_runtime_integration_mode, should_block_direct_projection_change,
+        should_defer_pool_unavailable, should_restore_direct_projection_before_app_exit,
         should_retry_hard_affinity_upstream_failure, should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, should_use_pool_unavailable_summary,
@@ -12657,10 +12919,11 @@ mod tests {
         upsert_successful_account_health, AccountQuotaSortHint, ActiveStreamTerminal, AuditContext,
         AuditTrailStatus, CodexLocalAccessErrorType, GatewayResponseAdapter,
         LocalApiBackpressureState, OfficialCodexStickyRoutingBoundary, ParsedRequest,
-        ProxyDispatchError, ResponseUsageCollector, StreamWriteState,
-        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME,
-        DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES, PREFERRED_CODEX_LOCAL_ACCESS_PORTS,
-        X_CODEX_TURN_METADATA_HEADER, X_CODEX_TURN_STATE_HEADER,
+        ProxyDispatchError, ResponseUsageCollector, RuntimeProjectionContinuityRisk,
+        StreamWriteState, CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_ID,
+        CODEX_LOCAL_ACCESS_RUNTIME_PROVIDER_NAME, DAY_WINDOW_MS, MAX_HTTP_REQUEST_BYTES,
+        PREFERRED_CODEX_LOCAL_ACCESS_PORTS, X_CODEX_TURN_METADATA_HEADER,
+        X_CODEX_TURN_STATE_HEADER,
     };
     use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexQuota, CodexTokens};
     use crate::models::codex_local_access::{
@@ -19992,7 +20255,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn hardened_routing_fill_first_preserves_configured_order_before_health_sort() {
+    fn hardened_routing_fill_first_does_not_preserve_configured_order_after_health_sort() {
+        let now = 1_700_000_000_000;
         let collection = CodexLocalAccessCollection {
             enabled: true,
             port: 2876,
@@ -20006,9 +20270,13 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             updated_at: 2,
         };
 
+        let mut candidate_ids =
+            apply_collection_routing_strategy(&collection.account_ids, &collection);
+        sort_account_ids_by_health_estimate(&mut candidate_ids, &empty_health_registry(now), now);
+
         assert_eq!(
-            apply_collection_routing_strategy(&collection.account_ids, &collection),
-            vec!["acc-b".to_string(), "acc-a".to_string()]
+            candidate_ids,
+            vec!["acc-a".to_string(), "acc-b".to_string()]
         );
     }
 
@@ -20023,9 +20291,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             restrict_free_accounts: false,
             follow_current_account: false,
             account_ids: vec![
+                "acc-third".to_string(),
                 "acc-primary".to_string(),
                 "acc-secondary".to_string(),
-                "acc-third".to_string(),
             ],
             created_at: 1,
             updated_at: 2,
@@ -20145,7 +20413,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
-    fn local_access_account_filter_preserves_multiple_valid_accounts_in_order() {
+    fn local_access_account_filter_keeps_membership_without_preserving_input_order() {
         let valid_account_ids = HashSet::from([
             "acc-primary".to_string(),
             "acc-secondary".to_string(),
@@ -20154,11 +20422,11 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
 
         let filtered = filter_local_access_account_ids(
             vec![
-                "acc-primary".to_string(),
+                "acc-third".to_string(),
                 "missing".to_string(),
                 "acc-secondary".to_string(),
-                "acc-primary".to_string(),
                 "acc-third".to_string(),
+                "acc-primary".to_string(),
             ],
             &valid_account_ids,
         );
@@ -20309,6 +20577,87 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         ));
         assert!(!should_restore_direct_projection_before_app_exit(
             CodexRuntimeIntegrationMode::DirectProjection
+        ));
+    }
+
+    fn continuity_risk_for_test(
+        active_stream_count: usize,
+        codex_app_process_count: usize,
+        recent_audit_activity: bool,
+    ) -> RuntimeProjectionContinuityRisk {
+        RuntimeProjectionContinuityRisk {
+            active_stream_count,
+            codex_app_process_count,
+            recent_audit_activity,
+            audit_last_modified_age_ms: if recent_audit_activity {
+                Some(1_000)
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn direct_projection_change_blocks_when_continuity_risk_exists() {
+        let risk = continuity_risk_for_test(1, 0, false);
+
+        assert!(should_block_direct_projection_change(
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            CodexRuntimeIntegrationMode::DirectProjection,
+            false,
+            &risk,
+        ));
+    }
+
+    #[test]
+    fn direct_projection_change_blocks_for_codex_app_or_recent_audit() {
+        for risk in [
+            continuity_risk_for_test(0, 1, false),
+            continuity_risk_for_test(0, 0, true),
+        ] {
+            assert!(should_block_direct_projection_change(
+                CodexRuntimeIntegrationMode::CockpitApiService,
+                CodexRuntimeIntegrationMode::DirectProjection,
+                false,
+                &risk,
+            ));
+        }
+    }
+
+    #[test]
+    fn direct_projection_change_allows_force_or_no_risk() {
+        let risk = continuity_risk_for_test(2, 1, true);
+        let no_risk = continuity_risk_for_test(0, 0, false);
+
+        assert!(!should_block_direct_projection_change(
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            CodexRuntimeIntegrationMode::DirectProjection,
+            true,
+            &risk,
+        ));
+        assert!(!should_block_direct_projection_change(
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            CodexRuntimeIntegrationMode::DirectProjection,
+            false,
+            &no_risk,
+        ));
+    }
+
+    #[test]
+    fn direct_projection_guard_only_blocks_cockpit_to_direct_transition() {
+        let risk = continuity_risk_for_test(1, 1, true);
+
+        assert!(!should_block_direct_projection_change(
+            CodexRuntimeIntegrationMode::DirectProjection,
+            CodexRuntimeIntegrationMode::DirectProjection,
+            false,
+            &risk,
+        ));
+        assert!(!should_block_direct_projection_change(
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            false,
+            &risk,
         ));
     }
 

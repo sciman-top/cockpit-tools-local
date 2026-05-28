@@ -2518,6 +2518,46 @@ function New-ContinuitySummary {
   }
 }
 
+function New-CriticalSignals {
+  param(
+    [System.Collections.IDictionary]$ApiServiceRuntime,
+    [datetime]$GeneratedAt
+  )
+  $signals = @()
+  if ($null -eq $ApiServiceRuntime) {
+    return @($signals)
+  }
+
+  $localAccess = $ApiServiceRuntime.localAccess
+  $runtimeMode = $ApiServiceRuntime.runtimeMode
+  $listener = $ApiServiceRuntime.listener
+  $runtimeModeName = if ($runtimeMode) { $runtimeMode.mode } else { $null }
+  $localAccessEnabled = if ($localAccess) { $localAccess.enabled } else { $null }
+  $expectedApiServiceRuntime = (
+    [bool]$RequireApiServiceRuntimeAvailable -or
+    $runtimeModeName -eq "cockpit_api_service" -or
+    $localAccessEnabled -eq $true
+  )
+
+  if (-not $ApiServiceRuntime.available -and ($expectedApiServiceRuntime -or ($localAccess -and $localAccess.exists))) {
+    $signals += [ordered]@{
+      name = "api_service_runtime_unavailable"
+      severity = if ($expectedApiServiceRuntime) { "critical" } else { "warning" }
+      reason = $ApiServiceRuntime.reason
+      generatedAt = $GeneratedAt.ToString("o")
+      required = [bool]$RequireApiServiceRuntimeAvailable
+      expectedRuntime = [bool]$expectedApiServiceRuntime
+      apiBaseUrl = $ApiServiceRuntime.apiBaseUrl
+      localAccess = $localAccess
+      runtimeMode = $runtimeMode
+      listenerCount = if ($listener) { [int]$listener.listenerCount } else { 0 }
+      server = $ApiServiceRuntime.server
+    }
+  }
+
+  @($signals)
+}
+
 function New-MonitorReport {
   param(
     [datetime]$StartedAt,
@@ -2541,6 +2581,7 @@ function New-MonitorReport {
   $auditSummary = Get-AuditAcceptanceSummary $Events
   $results = New-AcceptanceResults -AuditSummary $auditSummary -CliComparison $cliComparison -AppComparison $appComparison -ApiServiceRuntime $apiServiceRuntime
   $continuitySummary = New-ContinuitySummary $auditSummary
+  $criticalSignals = New-CriticalSignals -ApiServiceRuntime $apiServiceRuntime -GeneratedAt $EndedAt
   $overall = if ($results | Where-Object { $_.status -eq "fail" }) {
     "fail"
   } elseif ($results | Where-Object { $_.status -eq "blocked" }) {
@@ -2602,6 +2643,7 @@ function New-MonitorReport {
       comparison = $appComparison
     }
     apiServiceRuntime = $apiServiceRuntime
+    criticalSignals = @($criticalSignals)
     audit = $auditSummary
     continuitySummary = $continuitySummary
     results = $results
@@ -2701,6 +2743,9 @@ do {
         -ReportPath $null `
         -CheckpointPath $CheckpointPath
       Write-MonitorJsonFile -Report $checkpoint -Path $CheckpointPath
+      if (-not $Quiet) {
+        Write-Host ("checkpoint apiAvailable={0}; apiReason={1}; runtimeMode={2}; localAccessEnabled={3}; listenerCount={4}; criticalSignals={5}" -f $checkpoint.apiServiceRuntime.available, $checkpoint.apiServiceRuntime.reason, $checkpoint.apiServiceRuntime.runtimeMode.mode, $checkpoint.apiServiceRuntime.localAccess.enabled, $checkpoint.apiServiceRuntime.listener.listenerCount, @($checkpoint.criticalSignals).Count)
+      }
       $lastCheckpointAt = $nowForCheckpoint
     }
   }

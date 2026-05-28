@@ -13,7 +13,6 @@ export type CodexNumericSortDirection = "asc" | "desc";
 
 export type CodexGroupSortMeta = {
   sortOrder: number;
-  accountIndex: number;
 };
 
 type CodexQuotaAvailabilityRank = {
@@ -34,7 +33,6 @@ export interface CodexAccountSortOptions {
 
 export interface CodexLocalAccessRefreshSortOptions {
   nowMs?: number;
-  accountOrderMeta?: Map<string, number>;
 }
 
 function toNullableSortNumber(value: number | null | undefined): number | null {
@@ -241,6 +239,13 @@ function compareCodexRecommendedGroupedAccounts(
   const quotaDiff = compareCodexAccountsByQuotaAvailability(left, right, "desc");
   if (quotaDiff !== 0) return quotaDiff;
 
+  const resetDiff = compareNullableSortNumber(
+    getCodexEarliestQuotaResetSortValue(left),
+    getCodexEarliestQuotaResetSortValue(right),
+    "asc",
+  );
+  if (resetDiff !== 0) return resetDiff;
+
   const leftMeta = groupSortMeta.get(left.id);
   const rightMeta = groupSortMeta.get(right.id);
   const sortOrderDiff =
@@ -248,30 +253,26 @@ function compareCodexRecommendedGroupedAccounts(
     (rightMeta?.sortOrder ?? Number.MAX_SAFE_INTEGER);
   if (sortOrderDiff !== 0) return sortOrderDiff;
 
-  const accountIndexDiff =
-    (leftMeta?.accountIndex ?? Number.MAX_SAFE_INTEGER) -
-    (rightMeta?.accountIndex ?? Number.MAX_SAFE_INTEGER);
-  return accountIndexDiff !== 0
-    ? accountIndexDiff
-    : compareCodexAccountTieBreak(left, right);
+  return compareCodexAccountTieBreak(left, right);
 }
 
 function compareCodexRecommendedApiServiceAccounts(
   left: CodexAccount,
   right: CodexAccount,
-  apiServiceSortMeta: Map<string, number>,
 ): number {
   const quotaDiff = compareCodexAccountsByQuotaAvailability(left, right, "desc");
   if (quotaDiff !== 0) return quotaDiff;
 
+  const resetDiff = compareNullableSortNumber(
+    getCodexEarliestQuotaResetSortValue(left),
+    getCodexEarliestQuotaResetSortValue(right),
+    "asc",
+  );
+  if (resetDiff !== 0) return resetDiff;
+
   if (isCodexNewApiAccount(left) !== isCodexNewApiAccount(right)) {
     return isCodexNewApiAccount(left) ? -1 : 1;
   }
-
-  const orderDiff =
-    (apiServiceSortMeta.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-    (apiServiceSortMeta.get(right.id) ?? Number.MAX_SAFE_INTEGER);
-  if (orderDiff !== 0) return orderDiff;
 
   return compareCodexAccountTieBreak(left, right);
 }
@@ -374,10 +375,26 @@ export function compareCodexAccountsByLocalAccessRefreshPriority(
   );
   if (errorTimestampDiff !== 0) return errorTimestampDiff;
 
-  const leftOrder = options.accountOrderMeta?.get(left.id);
-  const rightOrder = options.accountOrderMeta?.get(right.id);
-  const orderDiff = compareNullableSortNumber(leftOrder, rightOrder, "asc");
-  if (orderDiff !== 0) return orderDiff;
+  return compareCodexAccountTieBreak(left, right);
+}
+
+function compareCodexAccountsByLocalAccessEvidence(
+  left: CodexAccount,
+  right: CodexAccount,
+): number {
+  const quotaDiff = compareCodexAccountsByQuotaAvailability(left, right, "desc");
+  if (quotaDiff !== 0) return quotaDiff;
+
+  const resetDiff = compareNullableSortNumber(
+    getCodexEarliestQuotaResetSortValue(left),
+    getCodexEarliestQuotaResetSortValue(right),
+    "asc",
+  );
+  if (resetDiff !== 0) return resetDiff;
+
+  if (isCodexApiKeyAccount(left) !== isCodexApiKeyAccount(right)) {
+    return isCodexApiKeyAccount(left) ? 1 : -1;
+  }
 
   return compareCodexAccountTieBreak(left, right);
 }
@@ -444,16 +461,20 @@ export function sortCodexLocalAccessAccountsForStableDisplay(
   currentAccountId: string | null | undefined,
 ): CodexAccount[] {
   const normalizedCurrentId = currentAccountId?.trim();
-  if (!normalizedCurrentId) return [...accounts];
+  if (!normalizedCurrentId) {
+    return [...accounts].sort(compareCodexAccountsByLocalAccessEvidence);
+  }
 
   const currentAccount = accounts.find(
     (account) => account.id === normalizedCurrentId,
   );
-  if (!currentAccount) return [...accounts];
+  if (!currentAccount) {
+    return [...accounts].sort(compareCodexAccountsByLocalAccessEvidence);
+  }
 
   const otherAccounts = accounts.filter(
     (account) => account.id !== normalizedCurrentId,
-  );
+  ).sort(compareCodexAccountsByLocalAccessEvidence);
   if (isCodexLocalAccessCurrentAccountUnavailable(currentAccount)) {
     return [...otherAccounts, currentAccount];
   }
@@ -474,6 +495,7 @@ export function sortCodexLocalAccessAccountIdsForStableDisplay(
     currentAccountId,
   ).map((account) => account.id);
   const missingIds = accountIds.filter((accountId) => !accountById.has(accountId));
+  missingIds.sort((left, right) => left.localeCompare(right));
   return [...knownIds, ...missingIds];
 }
 
@@ -492,14 +514,10 @@ export function sortCodexLocalAccessAccountIdsForRefresh(
   nowMs: number = Date.now(),
 ): string[] {
   const accountById = new Map(accounts.map((account) => [account.id, account]));
-  const accountOrderMeta = new Map(
-    accountIds.map((accountId, index) => [accountId, index]),
-  );
   const knownAccounts = accountIds
     .map((accountId) => accountById.get(accountId))
     .filter((account): account is CodexAccount => Boolean(account));
   const sortedKnownIds = sortCodexLocalAccessAccountsForRefresh(knownAccounts, {
-    accountOrderMeta,
     nowMs,
   }).map((account) => account.id);
   const missingIds = accountIds
@@ -559,11 +577,7 @@ export function compareCodexAccountsByRecommendedSort(
     return leftBucket - rightBucket;
   }
   if (leftBucket === 0) {
-    return compareCodexRecommendedApiServiceAccounts(
-      left,
-      right,
-      apiServiceSortMeta,
-    );
+    return compareCodexRecommendedApiServiceAccounts(left, right);
   }
   if (leftBucket === 1) {
     return compareCodexRecommendedGroupedAccounts(left, right, groupSortMeta);

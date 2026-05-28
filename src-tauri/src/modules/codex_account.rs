@@ -2090,21 +2090,12 @@ fn future_quota_reset_from_account(account: &CodexAccount, now_seconds: i64) -> 
     quota.hourly_reset_time.filter(|reset| *reset > now_seconds)
 }
 
-fn repair_account_quota_from_local_access_health(
-    account: &mut CodexAccount,
-    registry: &CodexLocalAccessHealthRegistry,
+fn local_access_health_quota_exhaustion_evidence(
+    account: &CodexAccount,
+    health: &CodexLocalAccessAccountHealth,
     now_seconds: i64,
-) -> bool {
-    if account.is_api_key_auth() {
-        return false;
-    }
-
-    let Some(health) = registry.accounts.get(&account.id) else {
-        return false;
-    };
-    let Some(error_code) = codex_local_access_quota_error_code(health) else {
-        return false;
-    };
+) -> Option<(String, Option<i64>)> {
+    let error_code = codex_local_access_quota_error_code(health)?;
     let reset_at = health
         .estimated_reset_at_ms
         .map(|value| value.div_euclid(1000))
@@ -2118,8 +2109,29 @@ fn repair_account_quota_from_local_access_health(
         ) || health.estimated_remaining_percentage == Some(0)
             || health.last_observed_remaining_percentage == Some(0));
     if reset_at.is_none() && !confirmed_zero_without_reset {
+        return None;
+    }
+
+    Some((error_code, reset_at))
+}
+
+fn repair_account_quota_from_local_access_health(
+    account: &mut CodexAccount,
+    registry: &CodexLocalAccessHealthRegistry,
+    now_seconds: i64,
+) -> bool {
+    if account.is_api_key_auth() {
         return false;
     }
+
+    let Some(health) = registry.accounts.get(&account.id) else {
+        return false;
+    };
+    let Some((error_code, reset_at)) =
+        local_access_health_quota_exhaustion_evidence(account, health, now_seconds)
+    else {
+        return false;
+    };
 
     let current_remaining = account
         .quota
@@ -2193,11 +2205,23 @@ pub(crate) fn repair_account_quota_from_local_access_health_for_refresh(
         return Ok(false);
     };
     let now_seconds = chrono::Utc::now().timestamp();
-    if !repair_account_quota_from_local_access_health(account, &registry, now_seconds) {
-        return Ok(false);
+    if repair_account_quota_from_local_access_health(account, &registry, now_seconds) {
+        save_account(account)?;
+        return Ok(true);
     }
-    save_account(account)?;
-    Ok(true)
+    if !account.is_api_key_auth()
+        && account
+            .quota
+            .as_ref()
+            .and_then(effective_codex_quota_remaining)
+            == Some(0)
+        && registry.accounts.get(&account.id).is_some_and(|health| {
+            local_access_health_quota_exhaustion_evidence(account, health, now_seconds).is_some()
+        })
+    {
+        return Ok(true);
+    }
+    Ok(false)
 }
 
 fn repair_accounts_quota_from_local_access_health(accounts: &mut [CodexAccount]) -> usize {
@@ -4749,6 +4773,62 @@ mod tests {
                 .and_then(|value| value.get("reset_unknown"))
                 .and_then(|value| value.as_bool()),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn health_registry_refresh_guard_keeps_existing_confirmed_zero_without_reset_hint() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-refresh-confirmed-zero-no-reset");
+        let now = chrono::Utc::now().timestamp();
+        let mut account = test_codex_account_with_quota(
+            "codex_refresh_confirmed_zero_no_reset",
+            CodexQuota {
+                hourly_percentage: 0,
+                hourly_reset_time: None,
+                hourly_window_minutes: Some(300),
+                hourly_window_present: Some(true),
+                weekly_percentage: 0,
+                weekly_reset_time: None,
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: Some(serde_json::json!({
+                    "source": "codex_local_access_health_registry",
+                    "error_type": "usage_limit_reached",
+                    "reset_unknown": true,
+                })),
+            },
+        );
+        account.quota_error = Some(crate::models::codex::CodexQuotaErrorInfo {
+            code: Some("usage_limit_reached".to_string()),
+            message: "Codex local access quota exhaustion replayed from health registry: error_type=usage_limit_reached, reset_at=unknown".to_string(),
+            timestamp: now - 60,
+        });
+        let mut registry = CodexLocalAccessHealthRegistry::default();
+        registry.accounts.insert(
+            account.id.clone(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::Exhausted,
+                last_error_type: Some("usage_limit_reached".to_string()),
+                estimated_remaining_percentage: Some(0),
+                last_observed_remaining_percentage: Some(0),
+                updated_at: (now - 60) * 1000,
+                ..Default::default()
+            },
+        );
+        fs::write(
+            guard
+                .home_dir
+                .join(".antigravity_cockpit")
+                .join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
+            serde_json::to_string_pretty(&registry).expect("registry should serialize"),
+        )
+        .expect("health registry should be saved");
+
+        assert!(
+            super::repair_account_quota_from_local_access_health_for_refresh(&mut account)
+                .expect("refresh guard should complete"),
+            "refresh-time guard should keep local confirmed zero and skip wham/usage"
         );
     }
 

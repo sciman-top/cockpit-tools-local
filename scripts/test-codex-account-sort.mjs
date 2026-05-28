@@ -121,9 +121,9 @@ assert.deepEqual(
     .sort((left, right) =>
       sort.compareCodexAccountsByRecommendedSort(left, right, {
         groupSortMeta: new Map([
-          ['exhausted-weekly', { sortOrder: 0, accountIndex: 0 }],
-          ['available-low', { sortOrder: 0, accountIndex: 1 }],
-          ['available-medium', { sortOrder: 0, accountIndex: 2 }],
+          ['exhausted-weekly', { sortOrder: 0 }],
+          ['available-low', { sortOrder: 0 }],
+          ['available-medium', { sortOrder: 0 }],
         ]),
       }),
     )
@@ -150,15 +150,15 @@ assert.deepEqual(
 assert.deepEqual(
   sort.sortCodexLocalAccessAccountsForStableDisplay(
     [
-      codexAccount('saved-first', quota(0, 97), { created_at: 30 }),
       codexAccount('current-saved-second', quota(2, 97), { created_at: 20 }),
-      codexAccount('saved-third', quota(0, 97), { created_at: 10 }),
-      codexAccount('weekly-low', quota(0, 4), { created_at: 40 }),
+      codexAccount('saved-low', quota(15, 15), { created_at: 30 }),
+      codexAccount('quota-90', quota(90, 90), { created_at: 10 }),
+      codexAccount('quota-40-soon', quota(40, 40, { hourly_reset_time: 200 }), { created_at: 40 }),
     ],
     'current-saved-second',
   ).map((account) => account.id),
-  ['current-saved-second', 'saved-first', 'saved-third', 'weekly-low'],
-  'API service member display should pin the usable current account without reordering the saved pool',
+  ['current-saved-second', 'quota-90', 'quota-40-soon', 'saved-low'],
+  'API service member display should pin the usable current account, then sort other members by quota evidence',
 );
 
 assert.deepEqual(
@@ -193,12 +193,12 @@ assert.deepEqual(
     'current-weekly-0',
   ),
   [
+    'weekly-97',
     'weekly-0-more-requests',
     'weekly-0-fewer-requests',
-    'weekly-97',
     'current-weekly-0',
   ],
-  'API service member display should move only the exhausted current account to the end',
+  'API service member display should sort non-current members by quota evidence before moving an exhausted current account to the end',
 );
 
 assert.deepEqual(
@@ -212,8 +212,8 @@ assert.deepEqual(
     ],
     'current-low',
   ),
-  ['current-low', 'saved-first', 'quota-90', 'quota-40-soon'],
-  'API service member display should not reshuffle non-current accounts after quota refresh',
+  ['current-low', 'quota-90', 'quota-40-soon', 'saved-first'],
+  'API service member display should not keep member insertion order after quota refresh',
 );
 
 assert.deepEqual(
@@ -228,8 +228,8 @@ assert.deepEqual(
     ],
     'current-refresh-error',
   ),
-  ['current-refresh-error', 'saved-first', 'quota-90'],
-  'API service member display should not move the current account to the end for a non-limit refresh error',
+  ['current-refresh-error', 'quota-90', 'saved-first'],
+  'API service member display should keep a current account with a non-limit refresh error pinned, then sort other members by quota evidence',
 );
 
 {
@@ -247,7 +247,7 @@ assert.deepEqual(
   assert.deepEqual(
     displayIds,
     ['oauth-next', 'api-key', 'current-weekly-0'],
-    'API service card display should keep the saved order and move an exhausted current account to the end',
+    'API service card display should sort available OAuth members before API-key credentials and move an exhausted current account to the end',
   );
   assert.equal(
     sort.getCodexLocalAccessPrimaryRefreshAccountId(displayIds, displayAccounts),
@@ -566,8 +566,44 @@ assert.deepEqual(
     ],
     refreshNowMs,
   ),
-  ['healthy-b', 'healthy-a'],
-  'Local access refresh priority should preserve caller order when accounts have the same refresh need',
+  ['healthy-a', 'healthy-b'],
+  'Local access refresh priority should use deterministic account metadata instead of preserving caller order',
+);
+
+assert.deepEqual(
+  [
+    codexAccount('service-saved-first', quota(80, 80), { created_at: 10 }),
+    codexAccount('service-newer', quota(80, 80), { created_at: 20 }),
+  ]
+    .sort((left, right) =>
+      sort.compareCodexAccountsByRecommendedSort(left, right, {
+        apiServiceSortMeta: new Map([
+          ['service-saved-first', 0],
+          ['service-newer', 1],
+        ]),
+      }),
+    )
+    .map((account) => account.id),
+  ['service-newer', 'service-saved-first'],
+  'API service recommended sort should not use the saved member order as a tie-breaker',
+);
+
+assert.deepEqual(
+  [
+    codexAccount('group-saved-first', quota(60, 60), { created_at: 10 }),
+    codexAccount('group-newer', quota(60, 60), { created_at: 20 }),
+  ]
+    .sort((left, right) =>
+      sort.compareCodexAccountsByRecommendedSort(left, right, {
+        groupSortMeta: new Map([
+          ['group-saved-first', { sortOrder: 0 }],
+          ['group-newer', { sortOrder: 0 }],
+        ]),
+      }),
+    )
+    .map((account) => account.id),
+  ['group-newer', 'group-saved-first'],
+  'Grouped recommended sort should not use the group-internal saved order as a tie-breaker',
 );
 
 await rm(outdir, { force: true, recursive: true });

@@ -32,6 +32,16 @@ function cloneGroups(groups: CodexAccountGroup[]): CodexAccountGroup[] {
   }));
 }
 
+function normalizeCodexGroupAccountIds(accountIds: Iterable<string>): string[] {
+  return Array.from(
+    new Set(
+      Array.from(accountIds)
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  ).sort((left, right) => left.localeCompare(right));
+}
+
 async function loadGroupsFromDisk(): Promise<CodexAccountGroup[]> {
   try {
     const raw: string = await invoke('load_codex_account_groups');
@@ -124,14 +134,11 @@ export async function assignAccountsToCodexGroup(groupId: string, accountIds: st
     currentGroup.accountIds = currentGroup.accountIds.filter((id) => !targetIds.has(id));
   }
 
-  // 添加到目标分组
-  const existing = new Set(group.accountIds);
-  for (const id of accountIds) {
-    if (!existing.has(id)) {
-      group.accountIds.push(id);
-      existing.add(id);
-    }
-  }
+  // 分组只保存成员集合，不保存用户手动顺序。
+  group.accountIds = normalizeCodexGroupAccountIds([
+    ...group.accountIds,
+    ...accountIds,
+  ]);
   await saveGroups(groups);
   return group;
 }
@@ -141,34 +148,9 @@ export async function removeAccountsFromCodexGroup(groupId: string, accountIds: 
   const group = groups.find((g) => g.id === groupId);
   if (!group) return null;
   const toRemove = new Set(accountIds);
-  group.accountIds = group.accountIds.filter((id) => !toRemove.has(id));
-  await saveGroups(groups);
-  return group;
-}
-
-export async function updateCodexGroupAccountOrder(
-  groupId: string,
-  accountIds: string[],
-): Promise<CodexAccountGroup | null> {
-  const groups = await loadGroups();
-  const group = groups.find((g) => g.id === groupId);
-  if (!group) return null;
-
-  const currentIds = new Set(group.accountIds);
-  const seen = new Set<string>();
-  const nextIds: string[] = [];
-  for (const accountId of accountIds) {
-    if (!currentIds.has(accountId) || seen.has(accountId)) continue;
-    nextIds.push(accountId);
-    seen.add(accountId);
-  }
-  for (const accountId of group.accountIds) {
-    if (seen.has(accountId)) continue;
-    nextIds.push(accountId);
-    seen.add(accountId);
-  }
-
-  group.accountIds = nextIds;
+  group.accountIds = normalizeCodexGroupAccountIds(
+    group.accountIds.filter((id) => !toRemove.has(id)),
+  );
   await saveGroups(groups);
   return group;
 }
@@ -178,9 +160,11 @@ export async function cleanupDeletedCodexAccounts(existingAccountIds: Set<string
   const groups = await loadGroups();
   let changed = false;
   for (const group of groups) {
-    const before = group.accountIds.length;
-    group.accountIds = group.accountIds.filter((id) => existingAccountIds.has(id));
-    if (group.accountIds.length !== before) changed = true;
+    const before = group.accountIds.join("\u001f");
+    group.accountIds = normalizeCodexGroupAccountIds(
+      group.accountIds.filter((id) => existingAccountIds.has(id)),
+    );
+    if (group.accountIds.join("\u001f") !== before) changed = true;
   }
   if (changed) await saveGroups(groups);
 }

@@ -82,7 +82,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 1. `sticky_current_healthy`：当前 process sticky 或 `previous_response_id` affinity 的健康账号。
 2. `used_recovered_healthy`：曾经在 API service 中成功使用过，且 weekly reset 已到或已刷新证明周额度恢复的账号。
 3. `used_remaining_healthy`：曾经使用过，仍有明确可用周额度的账号。
-4. `manual_order_healthy`：用户在 API 服务号池中手动排在前面的健康账号。
+4. `observed_healthy`：有明确本地 health/quota 证据、但没有更强连续性信号的健康账号。
 5. `new_reserve_healthy`：从未被 API service 成功使用过的账号，只作为 reserve。
 6. `cooling_or_exhausted`：有 reset/cooldown hint 的账号，不可调度，但在 UI 中按 reset 时间展示。
 7. `auth_or_manual_required`：需要重新登录、人工确认或用户暂停的账号，永不自动调度。
@@ -91,13 +91,13 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 - 优先 `last_success_at` 最近的账号，保持同 IP 下账号连续性。
 - 对已耗尽但 reset 已到的账号，优先 `last_quota_exhausted_at` 更早的账号，避免刚恢复账号马上被重复打满。
-- 周额度相同且都健康时，保留 API 服务号池手动顺序；不要因为卡片视图排序变化重排调度顺序。
+- 周额度相同且都健康时，继续按 reset/cooldown、最近成功、更新时间、账号创建时间和账号 ID 做稳定 tie-break；`collection.account_ids` 和分组 `accountIds` 只表示成员集合，不表达用户手动顺序。
 - `weekly_reset_time` 只用于判断恢复或展示等待，不应让“还没恢复但 reset 时间最近”的账号抢在健康账号前面。
 
 当前实现锚点：
 
 - `CodexLocalAccessHealthRegistry.accounts` 记录 `last_selected_at_ms`、`last_success_at_ms`、`last_quota_exhausted_at_ms` 和 `api_service_success_count`。
-- `build_effective_local_access_account_ids_from_registry()` 输出给 UI 的 effective pool 顺序；它只改变展示/调度候选视图，不重写用户保存的 `collection.account_ids`。
+- `build_effective_local_access_account_ids_from_registry()` 输出给 UI 的 effective pool 顺序；`collection.account_ids` 只保存成员集合，不作为调度或展示 tie-break。
 - `sort_account_ids_by_health_estimate()` 使用 health bucket、剩余额度、恢复/冷却时间和最近成功时间排序；process sticky 与 request affinity 仍拥有最高连续性优先级。
 - `sortCodexLocalAccessAccountIdsForRefresh()` 独立处理 quota refresh priority；它优先处理 refresh error、缺失 quota、reset 已到和耗尽账号，不复用调度首位，也不因为当前 sticky account 仍健康就优先刷新它。
 
@@ -105,9 +105,9 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 卡片主页、Codex 分组和 API 服务号池视图应使用同一套状态 bucket，但展示目标和调度目标不同：
 
-1. API 服务号池成员置顶；成员内部展示保留用户保存顺序，只在当前账号可用时置顶、当前账号耗尽时置末，刷新 quota 不重排其它成员。
+1. API 服务号池成员置顶；成员内部按 health/quota/reset/连续性证据排序，只在当前账号可用时置顶、当前账号耗尽时置末。
 2. 当前账号/本次已启用账号保留明显标记，避免用户误以为系统会频繁换号。
-3. 分组内默认保留用户手动顺序；选择“推荐排序”时才按 API service scheduling score 排。
+3. Codex 分组内也不保留用户手动顺序；分组只表达成员集合，默认推荐排序按同一 comparator 展示。
 4. 曾用且已重置的账号应排在新账号前面；新账号用“备用”语义展示，不应因为 100% 周额度排到最前。
 5. 已耗尽或冷却账号保留在可见列表中，按 nearest reset/cooldown 升序展示，方便判断何时恢复。
 6. auth/manual/suspicious 账号放到最后，明确需要人工动作，不参与自动切换。
@@ -239,9 +239,9 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 任务：
 
 - [x] 在 API service health registry 或派生 read model 中暴露使用历史状态：已落地 `last_success_at_ms`、`last_selected_at_ms`、`last_quota_exhausted_at_ms`、`api_service_success_count`；独立 `last_weekly_reset_seen_at` 暂不需要，恢复由 reset/cooldown hint 估算。
-- [x] 新增 API service 推荐排序面：`effectiveAccountIds` 作为只读调度/展示顺序，不覆盖用户手动保存的 `collection.accountIds`。
+- [x] 新增 API service 推荐排序面：`effectiveAccountIds` 作为只读调度/展示顺序；`collection.accountIds` 只保存成员集合。
 - [x] 调整 Codex `recommended` 卡片排序：API 服务成员内部按 scheduling bucket 展示；新账号 reserve 不因 100% 周额度压过已恢复老账号。
-- [x] Codex 分组内推荐排序复用同一 comparator；普通分组手动排序保持原样。
+- [x] Codex 分组内推荐排序复用同一 comparator；普通分组也不再保留成员手动顺序。
 - [x] 刷新队列使用单独 refresh priority，不复用调度排序。
 
 验收：
@@ -249,7 +249,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 - [x] 两个周额度相同账号中，曾用且 reset 后恢复的账号排在新账号前面。
 - [x] sticky/current healthy 账号不因另一个账号周额度更高而被挤下调度首位。
 - [x] 冷却未到期账号只显示在“等待恢复”段，不进入调度候选。
-- [x] 用户手动 API 服务号池顺序不会被卡片推荐排序隐式改写。
+- [x] API 服务号池和 Codex 分组成员顺序不再作为卡片推荐排序、刷新排序或调度排序依据。
 - [x] `npm run typecheck` 通过；排序纯函数有 focused unit test 或最小 comparator test。
 
 ### Phase S5 - 任务级连续性验收固化
