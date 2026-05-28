@@ -1,0 +1,8 @@
+{
+  "processId": 28404,
+  "runDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\accept-drain-20260528-211516",
+  "stdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\accept-drain-20260528-211516\\accept.stdout.json",
+  "stderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\accept-drain-20260528-211516\\accept.stderr.log",
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\CODE\\external\\Cockpit-Tools-Local\\scripts\\accept-local-hardened-api-continuity.ps1 -Model gpt-5.5 -AcknowledgeLiveUpstreamRisk -DrainFirstFreeAccountUntilFallback -DrainMaxRequests 30 -DrainRequestIntervalSeconds 22 -TimeoutSeconds 1500",
+  "startedAt": "2026-05-28T21:15:16.1703815+08:00"
+}

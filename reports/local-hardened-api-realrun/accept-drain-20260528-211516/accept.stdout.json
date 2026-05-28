@@ -1,0 +1,53 @@
+{
+  "overall": "fail",
+  "reportPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-smoke\\smoke-20260528-212749.json",
+  "model": "gpt-5.5",
+  "elapsedSeconds": 752.9,
+  "liveUpstreamRiskAcknowledged": true,
+  "expandedLiveUpstreamRiskAcknowledged": false,
+  "configuredAccountCount": 2,
+  "drainRequested": true,
+  "drainResult": "blocked",
+  "sameTaskAffinity": "blocked",
+  "codexExec": "pass",
+  "cliUntouched": "fail",
+  "appStable": "pass",
+  "continuitySummary": {
+    "sameTaskAffinityFallbackBlocked": {
+      "status": "blocked",
+      "reason": "???? run ¦Ä??????????????????§Ü???????? upstream terminal closure ????? usage_limit_reached 429 closure",
+      "evidence": {
+        "has429": false,
+        "hasUsageLimitReached": false,
+        "hasModelCooldownApplied": false,
+        "hasFallbackBlocked": false,
+        "hasHardAffinityFallbackBlocked": false,
+        "sameTaskAffinityFallbackBlockedCount": 0,
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "sameTaskAffinityTerminalCompletionCount": 0,
+        "sameTaskAffinityUnrecoveredTerminal429Count": 0,
+        "sameTaskAffinityStructuredQuotaTerminal429Count": 0,
+        "sameTaskAffinityUnstructuredTerminal429Count": 0,
+        "sameTaskAffinityFallbackBlockedRequestIds": null,
+        "sameTaskAffinityTerminalCompletionRequestIds": null,
+        "sameTaskAffinityUnrecoveredTerminal429RequestIds": null,
+        "sameTaskAffinityStructuredQuotaTerminal429RequestIds": null,
+        "sameTaskAffinityUnstructuredTerminal429RequestIds": null
+      }
+    },
+    "newRequestAvoidsExhaustedCooldown": {
+      "status": "blocked",
+      "reason": "???? run ¦Ä??????????????? exhausted/cooldown ???",
+      "evidence": {
+        "blockedAccountCount": 0,
+        "newRequestAvoidanceCount": 0,
+        "newRequestAvoidanceRequestIds": null,
+        "newRequestBlockedReuseCount": 0,
+        "newRequestBlockedReuseRequestIds": null
+      }
+    }
+  },
+  "gatewayStopped": true,
+  "liveConfigRestored": true,
+  "tempRoot": "C:\\Users\\sciman\\AppData\\Local\\Temp\\cockpit-hla-accept-28404-20260528211516652"
+}

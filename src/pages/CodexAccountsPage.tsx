@@ -5510,6 +5510,10 @@ export function CodexAccountsPage() {
     storageKey: buildPaginationPageSizeStorageKey("Codex"),
   });
   const paginatedAccounts = pagination.pageItems;
+  const paginatedIds = useMemo(
+    () => paginatedAccounts.map((account) => account.id),
+    [paginatedAccounts],
+  );
   const isCustomSortActive = sortBy === "custom";
   const isRecommendedSortActive = sortBy === CODEX_RECOMMENDED_SORT_BY;
   const customSortAccounts = useMemo(() => {
@@ -5597,9 +5601,9 @@ export function CodexAccountsPage() {
     },
     [setSortBy, setSortDirection],
   );
-  const isAllFilteredSelected = useMemo(
-    () => isEveryIdSelected(selected, filteredIds),
-    [filteredIds, selected],
+  const isAllPaginatedSelected = useMemo(
+    () => isEveryIdSelected(selected, paginatedIds),
+    [paginatedIds, selected],
   );
   const selectedAccountIds = useMemo(() => Array.from(selected), [selected]);
   const selectedLocalAccessMemberCount = useMemo(
@@ -8984,8 +8988,8 @@ export function CodexAccountsPage() {
                   <label className="codex-overview-select-all">
                     <input
                       type="checkbox"
-                      checked={isAllFilteredSelected}
-                      onChange={() => toggleSelectAll(filteredIds)}
+                      checked={isAllPaginatedSelected}
+                      onChange={() => toggleSelectAll(paginatedIds)}
                     />
                     <span>{t("common.selectAll", "全选")}</span>
                   </label>
@@ -9044,8 +9048,8 @@ export function CodexAccountsPage() {
                         >
                           <input
                             type="checkbox"
-                            checked={isAllFilteredSelected}
-                            onChange={() => toggleSelectAll(filteredIds)}
+                            checked={isAllPaginatedSelected}
+                            onChange={() => toggleSelectAll(paginatedIds)}
                           />
                           {t("common.selectAll", "全选")}
                         </label>
@@ -9099,8 +9103,8 @@ export function CodexAccountsPage() {
                           <th style={{ width: 40 }}>
                             <input
                               type="checkbox"
-                              checked={isAllFilteredSelected}
-                              onChange={() => toggleSelectAll(filteredIds)}
+                              checked={isAllPaginatedSelected}
+                              onChange={() => toggleSelectAll(paginatedIds)}
                             />
                           </th>
                           <th style={{ width: 260 }}>
@@ -9157,8 +9161,8 @@ export function CodexAccountsPage() {
                             {showOverviewSelectionBar ? null : (
                               <input
                                 type="checkbox"
-                                checked={isAllFilteredSelected}
-                                onChange={() => toggleSelectAll(filteredIds)}
+                                checked={isAllPaginatedSelected}
+                                onChange={() => toggleSelectAll(paginatedIds)}
                               />
                             )}
                           </th>

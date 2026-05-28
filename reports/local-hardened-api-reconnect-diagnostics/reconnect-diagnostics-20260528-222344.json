@@ -1,0 +1,2011 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-28T22:23:44.6453583+08:00",
+  "incident": {
+    "incidentTime": "2026-05-28T22:23:41.2230558+08:00",
+    "windowMinutes": 30,
+    "startTime": "2026-05-28T21:53:41.2230558+08:00",
+    "endTime": "2026-05-28T22:53:41.2230558+08:00"
+  },
+  "codex": {
+    "home": "C:\\Users\\sciman\\.codex",
+    "provider": {
+      "config": {
+        "path": "C:\\Users\\sciman\\.codex\\config.toml",
+        "exists": true,
+        "length": 5531,
+        "lastWriteTime": "2026-05-28T22:23:38.2299172+08:00",
+        "sha256": "DC107B64AFD2193CF2866973F6F4673AE950A362DE545ACB3C38F31EDC13DCE8"
+      },
+      "activeModelProvider": "codex_local_access",
+      "activeModel": "gpt-5.5",
+      "provider": {
+        "name": "Cockpit API Service",
+        "base_url": "http://127.0.0.1:45336/v1",
+        "wire_api": "responses",
+        "requires_openai_auth": "false",
+        "supports_websockets": "false"
+      }
+    },
+    "appProcesses": {
+      "processes": [
+        {
+          "id": 1552,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:01.4212427+08:00"
+        },
+        {
+          "id": 31632,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:07:28.3683659+08:00"
+        },
+        {
+          "id": 31472,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:10.1162200+08:00"
+        },
+        {
+          "id": 31404,
+          "processName": "Codex",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe",
+          "startTime": "2026-05-28T22:06:24.5916392+08:00"
+        },
+        {
+          "id": 31180,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:07:59.4024138+08:00"
+        },
+        {
+          "id": 31172,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:07:44.6580225+08:00"
+        },
+        {
+          "id": 30728,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:07:20.6705591+08:00"
+        },
+        {
+          "id": 29628,
+          "processName": "Codex",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe",
+          "startTime": "2026-05-28T22:06:22.6880019+08:00"
+        },
+        {
+          "id": 29352,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:09:14.8049343+08:00"
+        },
+        {
+          "id": 28940,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:42.7018873+08:00"
+        },
+        {
+          "id": 28592,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:56.4469379+08:00"
+        },
+        {
+          "id": 26892,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:25.2687976+08:00"
+        },
+        {
+          "id": 26440,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:22.4637640+08:00"
+        },
+        {
+          "id": 25792,
+          "processName": "Codex",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe",
+          "startTime": "2026-05-28T22:06:22.5819045+08:00"
+        },
+        {
+          "id": 25508,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:19:37.7276346+08:00"
+        },
+        {
+          "id": 24212,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:40.2210680+08:00"
+        },
+        {
+          "id": 23876,
+          "processName": "Codex",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe",
+          "startTime": "2026-05-28T22:06:22.1606972+08:00"
+        },
+        {
+          "id": 23456,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:25.6029486+08:00"
+        },
+        {
+          "id": 18868,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe",
+          "startTime": "2026-05-28T19:18:00.1068086+08:00"
+        },
+        {
+          "id": 16004,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:06:55.1989154+08:00"
+        },
+        {
+          "id": 14876,
+          "processName": "Codex",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe",
+          "startTime": "2026-05-28T22:06:22.7384220+08:00"
+        },
+        {
+          "id": 13328,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:54.6036142+08:00"
+        },
+        {
+          "id": 13064,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T19:18:10.0831579+08:00"
+        },
+        {
+          "id": 10040,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:08:12.5088348+08:00"
+        },
+        {
+          "id": 3028,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:06:52.6365676+08:00"
+        },
+        {
+          "id": 2256,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:07:48.3419750+08:00"
+        },
+        {
+          "id": 33696,
+          "processName": "codex",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\resources\\codex.exe",
+          "startTime": "2026-05-28T22:06:24.1494062+08:00"
+        },
+        {
+          "id": 33904,
+          "processName": "codex",
+          "path": "C:\\Users\\sciman\\AppData\\Local\\OpenAI\\Codex\\bin\\958d608b5e0546a5\\codex.exe",
+          "startTime": "2026-05-28T22:09:16.7306661+08:00"
+        }
+      ]
+    },
+    "sessionLogHits": {
+      "root": "C:\\Users\\sciman\\.codex",
+      "searchedFiles": 0,
+      "skipped": true,
+      "reason": "pass -IncludeCodexSessionLogs to scan recent Codex session files",
+      "hits": []
+    }
+  },
+  "cockpit": {
+    "dataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+    "listener": {
+      "baseUrl": "http://127.0.0.1:45336/v1",
+      "localPort": 45336,
+      "listeners": [
+        {
+          "localAddress": "127.0.0.1",
+          "localPort": 45336,
+          "owningProcess": 23660,
+          "processName": "cockpit-tools",
+          "path": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+          "parentProcessId": 29564,
+          "creationDate": "2026-05-28T19:59:58.8132670+08:00"
+        }
+      ]
+    },
+    "runtime": {
+      "root": "C:\\Users\\sciman\\.antigravity_cockpit",
+      "files": {
+        "runtimeMode": {
+          "path": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_runtime_mode.json",
+          "exists": true,
+          "length": 155,
+          "lastWriteTime": "2026-05-28T22:11:25.2464082+08:00",
+          "sha256": "7F47BE76DDF70426E14E6CC7F616E2D9BC3A62CF99ABF15516C716E96890E346"
+        },
+        "localAccess": {
+          "path": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access.json",
+          "exists": true,
+          "length": 985,
+          "lastWriteTime": "2026-05-28T22:05:54.9975730+08:00",
+          "sha256": "090AC406542FBD9BDE0CBB027E451283C698C9E1E67324DE53349047B0DC0E95"
+        },
+        "health": {
+          "path": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_health.json",
+          "exists": true,
+          "length": 185472,
+          "lastWriteTime": "2026-05-28T22:23:42.6313318+08:00",
+          "sha256": "B5FE03264F99CF8DBE8D3146683BE8F386238E19CA7EC67D443D05110AABAABF"
+        },
+        "audit": {
+          "path": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+          "exists": true,
+          "length": 269126,
+          "lastWriteTime": "2026-05-28T22:23:42.7658588+08:00",
+          "sha256": null
+        }
+      },
+      "runtimeMode": {
+        "mode": "cockpit_api_service",
+        "accountKind": "oauth",
+        "currentAccountHash": "sha256:6fa9936153a8",
+        "updatedAt": 1779977485239
+      },
+      "localAccess": {
+        "enabled": true,
+        "port": 45336,
+        "routingStrategy": "auto",
+        "restrictFreeAccounts": false,
+        "followCurrentAccount": false,
+        "accountCount": 2,
+        "accountHashes": [
+          "sha256:6fa9936153a8",
+          "sha256:e54a5b161545"
+        ],
+        "apiKeyPresent": true,
+        "safetyConfig": {
+          "hardenedLocalMode": true,
+          "maxConcurrentRequests": 1,
+          "minRequestIntervalSeconds": 20,
+          "maxQueueWaitSeconds": 21,
+          "requestTimeoutSeconds": 600,
+          "maxRetries": 1,
+          "maxRetryAccounts": 2,
+          "fallbackMode": "disabled"
+        },
+        "updatedAt": 1779977154994
+      }
+    },
+    "audit": {
+      "file": {
+        "path": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+        "exists": true,
+        "length": 269126,
+        "lastWriteTime": "2026-05-28T22:23:42.7658588+08:00",
+        "sha256": null
+      },
+      "window": {
+        "startMs": 1779976421223,
+        "endMs": 1779980021223
+      },
+      "totalWindowEvents": 458,
+      "counts": {
+        "phase": {
+          "admission_attempt": 24,
+          "auth_projection": 24,
+          "lease_granted": 24,
+          "lease_released": 20,
+          "listener": 24,
+          "local_backpressure": 24,
+          "request_trace": 24,
+          "response_affinity_bound": 20,
+          "routing_decision": 24,
+          "selector": 72,
+          "stream_completed": 20,
+          "stream_terminal": 20,
+          "stream_write": 67,
+          "upstream_admitted": 24,
+          "upstream_forward": 47
+        },
+        "outcome": {
+          "accepted": 24,
+          "active": 24,
+          "admitted": 24,
+          "bound": 20,
+          "bypassed": 24,
+          "completed": 40,
+          "ok": 87,
+          "prepared": 48,
+          "request_affinity_bound": 48,
+          "response_received": 23,
+          "selected": 48,
+          "send_started": 24,
+          "started": 24
+        },
+        "status": {
+          "200": 182
+        },
+        "streamState": {
+          "finished": 39,
+          "first_chunk_written": 24,
+          "headers_written": 24
+        },
+        "responseCompletedSeen": {
+          "true": 20
+        }
+      },
+      "recentEvents": [
+        {
+          "timestamp": 1779978218924,
+          "timestampLocal": "2026-05-28T22:23:38.9240000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "request_trace",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "streamState": null,
+          "outcome": "prepared",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978218951,
+          "timestampLocal": "2026-05-28T22:23:38.9510000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "local_backpressure",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "streamState": null,
+          "outcome": "bypassed",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219073,
+          "timestampLocal": "2026-05-28T22:23:39.0730000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "auth_projection",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "prepared",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219156,
+          "timestampLocal": "2026-05-28T22:23:39.1560000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "admission_attempt",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "started",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219158,
+          "timestampLocal": "2026-05-28T22:23:39.1580000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "send_started",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219394,
+          "timestampLocal": "2026-05-28T22:23:39.3940000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "listener",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "streamState": null,
+          "outcome": "accepted",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219463,
+          "timestampLocal": "2026-05-28T22:23:39.4630000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "request_trace",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "streamState": null,
+          "outcome": "prepared",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219492,
+          "timestampLocal": "2026-05-28T22:23:39.4920000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "local_backpressure",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "streamState": null,
+          "outcome": "bypassed",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219636,
+          "timestampLocal": "2026-05-28T22:23:39.6360000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "auth_projection",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "prepared",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219738,
+          "timestampLocal": "2026-05-28T22:23:39.7380000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "admission_attempt",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "started",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219739,
+          "timestampLocal": "2026-05-28T22:23:39.7390000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "send_started",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219786,
+          "timestampLocal": "2026-05-28T22:23:39.7860000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "stream_write",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": "finished",
+          "outcome": "ok",
+          "gatewayRequestId": "gw-1779978210980-382",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219787,
+          "timestampLocal": "2026-05-28T22:23:39.7870000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "stream_terminal",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": "finished",
+          "outcome": "ok",
+          "gatewayRequestId": "gw-1779978210980-382",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": "true",
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219803,
+          "timestampLocal": "2026-05-28T22:23:39.8030000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "stream_completed",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "completed",
+          "gatewayRequestId": "gw-1779978210980-382",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219817,
+          "timestampLocal": "2026-05-28T22:23:39.8170000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "lease_released",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "completed",
+          "gatewayRequestId": "gw-1779978210980-382",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978219833,
+          "timestampLocal": "2026-05-28T22:23:39.8330000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "response_affinity_bound",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "bound",
+          "gatewayRequestId": "gw-1779978210980-382",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221464,
+          "timestampLocal": "2026-05-28T22:23:41.4640000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": null,
+          "outcome": "response_received",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221631,
+          "timestampLocal": "2026-05-28T22:23:41.6310000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "selector",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "request_affinity_bound",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221698,
+          "timestampLocal": "2026-05-28T22:23:41.6980000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "listener",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "streamState": null,
+          "outcome": "accepted",
+          "gatewayRequestId": "gw-1779978221466-385",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221712,
+          "timestampLocal": "2026-05-28T22:23:41.7120000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "request_trace",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "streamState": null,
+          "outcome": "prepared",
+          "gatewayRequestId": "gw-1779978221466-385",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221721,
+          "timestampLocal": "2026-05-28T22:23:41.7210000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "upstream_admitted",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": null,
+          "outcome": "admitted",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221726,
+          "timestampLocal": "2026-05-28T22:23:41.7260000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "local_backpressure",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "-",
+          "status": null,
+          "streamState": null,
+          "outcome": "bypassed",
+          "gatewayRequestId": "gw-1779978221466-385",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221727,
+          "timestampLocal": "2026-05-28T22:23:41.7270000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "routing_decision",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": null,
+          "outcome": "selected",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221751,
+          "timestampLocal": "2026-05-28T22:23:41.7510000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "selector",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": null,
+          "outcome": "selected",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221800,
+          "timestampLocal": "2026-05-28T22:23:41.8000000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "auth_projection",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "prepared",
+          "gatewayRequestId": "gw-1779978221466-385",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221848,
+          "timestampLocal": "2026-05-28T22:23:41.8480000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "admission_attempt",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "started",
+          "gatewayRequestId": "gw-1779978221466-385",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221850,
+          "timestampLocal": "2026-05-28T22:23:41.8500000+08:00",
+          "requestId": "x-codex-turn-state:sha256:53a92a076076",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "send_started",
+          "gatewayRequestId": "gw-1779978221466-385",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221967,
+          "timestampLocal": "2026-05-28T22:23:41.9670000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "selector",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "request_affinity_bound",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221969,
+          "timestampLocal": "2026-05-28T22:23:41.9690000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "lease_granted",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "active",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221982,
+          "timestampLocal": "2026-05-28T22:23:41.9820000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "stream_write",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": "headers_written",
+          "outcome": "ok",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978221996,
+          "timestampLocal": "2026-05-28T22:23:41.9960000+08:00",
+          "requestId": "x-codex-turn-state:sha256:274f785e07b8",
+          "phase": "stream_write",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": "first_chunk_written",
+          "outcome": "ok",
+          "gatewayRequestId": "gw-1779978219090-384",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222309,
+          "timestampLocal": "2026-05-28T22:23:42.3090000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "upstream_forward",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": null,
+          "outcome": "response_received",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222407,
+          "timestampLocal": "2026-05-28T22:23:42.4070000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "selector",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "request_affinity_bound",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222479,
+          "timestampLocal": "2026-05-28T22:23:42.4790000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "upstream_admitted",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": null,
+          "outcome": "admitted",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222481,
+          "timestampLocal": "2026-05-28T22:23:42.4810000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "routing_decision",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": null,
+          "outcome": "selected",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222496,
+          "timestampLocal": "2026-05-28T22:23:42.4960000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "selector",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": null,
+          "outcome": "selected",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222717,
+          "timestampLocal": "2026-05-28T22:23:42.7170000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "selector",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "request_affinity_bound",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222720,
+          "timestampLocal": "2026-05-28T22:23:42.7200000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "lease_granted",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": null,
+          "streamState": null,
+          "outcome": "active",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222734,
+          "timestampLocal": "2026-05-28T22:23:42.7340000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "stream_write",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": "headers_written",
+          "outcome": "ok",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        },
+        {
+          "timestamp": 1779978222751,
+          "timestampLocal": "2026-05-28T22:23:42.7510000+08:00",
+          "requestId": "x-codex-turn-state:sha256:564329335bb4",
+          "phase": "stream_write",
+          "route": "/v1/responses",
+          "model": "gpt-5.5",
+          "accountHash": "sha256:e54a5b161545",
+          "status": 200,
+          "streamState": "first_chunk_written",
+          "outcome": "ok",
+          "gatewayRequestId": "gw-1779978218674-383",
+          "requestIdSource": "codex_turn_state",
+          "responseCompletedSeen": null,
+          "isContinuation": "false",
+          "errorCode": null
+        }
+      ],
+      "keywordHits": [
+        {
+          "timestamp": 1779978211818,
+          "timestampLocal": "2026-05-28T22:23:31.8180000+08:00",
+          "phase": "upstream_admitted",
+          "outcome": "admitted",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978207442-380"
+        },
+        {
+          "timestamp": 1779978211819,
+          "timestampLocal": "2026-05-28T22:23:31.8190000+08:00",
+          "phase": "routing_decision",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978207442-380"
+        },
+        {
+          "timestamp": 1779978211832,
+          "timestampLocal": "2026-05-28T22:23:31.8320000+08:00",
+          "phase": "selector",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978207442-380"
+        },
+        {
+          "timestamp": 1779978211992,
+          "timestampLocal": "2026-05-28T22:23:31.9920000+08:00",
+          "phase": "upstream_forward",
+          "outcome": "response_received",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978211995,
+          "timestampLocal": "2026-05-28T22:23:31.9950000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978207442-380"
+        },
+        {
+          "timestamp": 1779978212008,
+          "timestampLocal": "2026-05-28T22:23:32.0080000+08:00",
+          "phase": "lease_granted",
+          "outcome": "active",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978207442-380"
+        },
+        {
+          "timestamp": 1779978212021,
+          "timestampLocal": "2026-05-28T22:23:32.0210000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "headers_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978207442-380"
+        },
+        {
+          "timestamp": 1779978212035,
+          "timestampLocal": "2026-05-28T22:23:32.0350000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "first_chunk_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978207442-380"
+        },
+        {
+          "timestamp": 1779978212108,
+          "timestampLocal": "2026-05-28T22:23:32.1080000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978212177,
+          "timestampLocal": "2026-05-28T22:23:32.1770000+08:00",
+          "phase": "upstream_admitted",
+          "outcome": "admitted",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978212178,
+          "timestampLocal": "2026-05-28T22:23:32.1780000+08:00",
+          "phase": "routing_decision",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978212191,
+          "timestampLocal": "2026-05-28T22:23:32.1910000+08:00",
+          "phase": "selector",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978212398,
+          "timestampLocal": "2026-05-28T22:23:32.3980000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978212400,
+          "timestampLocal": "2026-05-28T22:23:32.4000000+08:00",
+          "phase": "lease_granted",
+          "outcome": "active",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978212411,
+          "timestampLocal": "2026-05-28T22:23:32.4110000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "headers_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978212425,
+          "timestampLocal": "2026-05-28T22:23:32.4250000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "first_chunk_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978212726,
+          "timestampLocal": "2026-05-28T22:23:32.7260000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978198228-376"
+        },
+        {
+          "timestamp": 1779978212728,
+          "timestampLocal": "2026-05-28T22:23:32.7280000+08:00",
+          "phase": "lease_granted",
+          "outcome": "active",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978198228-376"
+        },
+        {
+          "timestamp": 1779978212738,
+          "timestampLocal": "2026-05-28T22:23:32.7380000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "headers_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978198228-376"
+        },
+        {
+          "timestamp": 1779978212750,
+          "timestampLocal": "2026-05-28T22:23:32.7500000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "first_chunk_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978198228-376"
+        },
+        {
+          "timestamp": 1779978212801,
+          "timestampLocal": "2026-05-28T22:23:32.8010000+08:00",
+          "phase": "upstream_forward",
+          "outcome": "response_received",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978212868,
+          "timestampLocal": "2026-05-28T22:23:32.8680000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978212909,
+          "timestampLocal": "2026-05-28T22:23:32.9090000+08:00",
+          "phase": "upstream_admitted",
+          "outcome": "admitted",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978212911,
+          "timestampLocal": "2026-05-28T22:23:32.9110000+08:00",
+          "phase": "routing_decision",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978212922,
+          "timestampLocal": "2026-05-28T22:23:32.9220000+08:00",
+          "phase": "selector",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978213026,
+          "timestampLocal": "2026-05-28T22:23:33.0260000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978213028,
+          "timestampLocal": "2026-05-28T22:23:33.0280000+08:00",
+          "phase": "lease_granted",
+          "outcome": "active",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978213039,
+          "timestampLocal": "2026-05-28T22:23:33.0390000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "headers_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978213051,
+          "timestampLocal": "2026-05-28T22:23:33.0510000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "first_chunk_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978213715,
+          "timestampLocal": "2026-05-28T22:23:33.7150000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "finished",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978201115-377"
+        },
+        {
+          "timestamp": 1779978213716,
+          "timestampLocal": "2026-05-28T22:23:33.7160000+08:00",
+          "phase": "stream_terminal",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "finished",
+          "matchedKeywords": [
+            "response_completed_seen",
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978201115-377"
+        },
+        {
+          "timestamp": 1779978213730,
+          "timestampLocal": "2026-05-28T22:23:33.7300000+08:00",
+          "phase": "stream_completed",
+          "outcome": "completed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978201115-377"
+        },
+        {
+          "timestamp": 1779978213742,
+          "timestampLocal": "2026-05-28T22:23:33.7420000+08:00",
+          "phase": "lease_released",
+          "outcome": "completed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978201115-377"
+        },
+        {
+          "timestamp": 1779978213770,
+          "timestampLocal": "2026-05-28T22:23:33.7700000+08:00",
+          "phase": "response_affinity_bound",
+          "outcome": "bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978201115-377"
+        },
+        {
+          "timestamp": 1779978214039,
+          "timestampLocal": "2026-05-28T22:23:34.0390000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "finished",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978214040,
+          "timestampLocal": "2026-05-28T22:23:34.0400000+08:00",
+          "phase": "stream_terminal",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "finished",
+          "matchedKeywords": [
+            "response_completed_seen",
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978214050,
+          "timestampLocal": "2026-05-28T22:23:34.0500000+08:00",
+          "phase": "stream_completed",
+          "outcome": "completed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978214059,
+          "timestampLocal": "2026-05-28T22:23:34.0590000+08:00",
+          "phase": "lease_released",
+          "outcome": "completed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978214068,
+          "timestampLocal": "2026-05-28T22:23:34.0680000+08:00",
+          "phase": "response_affinity_bound",
+          "outcome": "bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978209919-381"
+        },
+        {
+          "timestamp": 1779978218900,
+          "timestampLocal": "2026-05-28T22:23:38.9000000+08:00",
+          "phase": "listener",
+          "outcome": "accepted",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978218924,
+          "timestampLocal": "2026-05-28T22:23:38.9240000+08:00",
+          "phase": "request_trace",
+          "outcome": "prepared",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978218951,
+          "timestampLocal": "2026-05-28T22:23:38.9510000+08:00",
+          "phase": "local_backpressure",
+          "outcome": "bypassed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "local_backpressure",
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978219073,
+          "timestampLocal": "2026-05-28T22:23:39.0730000+08:00",
+          "phase": "auth_projection",
+          "outcome": "prepared",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978219156,
+          "timestampLocal": "2026-05-28T22:23:39.1560000+08:00",
+          "phase": "admission_attempt",
+          "outcome": "started",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978219158,
+          "timestampLocal": "2026-05-28T22:23:39.1580000+08:00",
+          "phase": "upstream_forward",
+          "outcome": "send_started",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978219394,
+          "timestampLocal": "2026-05-28T22:23:39.3940000+08:00",
+          "phase": "listener",
+          "outcome": "accepted",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978219463,
+          "timestampLocal": "2026-05-28T22:23:39.4630000+08:00",
+          "phase": "request_trace",
+          "outcome": "prepared",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978219492,
+          "timestampLocal": "2026-05-28T22:23:39.4920000+08:00",
+          "phase": "local_backpressure",
+          "outcome": "bypassed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "local_backpressure",
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978219636,
+          "timestampLocal": "2026-05-28T22:23:39.6360000+08:00",
+          "phase": "auth_projection",
+          "outcome": "prepared",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978219738,
+          "timestampLocal": "2026-05-28T22:23:39.7380000+08:00",
+          "phase": "admission_attempt",
+          "outcome": "started",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978219739,
+          "timestampLocal": "2026-05-28T22:23:39.7390000+08:00",
+          "phase": "upstream_forward",
+          "outcome": "send_started",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978219786,
+          "timestampLocal": "2026-05-28T22:23:39.7860000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "finished",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978219787,
+          "timestampLocal": "2026-05-28T22:23:39.7870000+08:00",
+          "phase": "stream_terminal",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "finished",
+          "matchedKeywords": [
+            "response_completed_seen",
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978219803,
+          "timestampLocal": "2026-05-28T22:23:39.8030000+08:00",
+          "phase": "stream_completed",
+          "outcome": "completed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978219817,
+          "timestampLocal": "2026-05-28T22:23:39.8170000+08:00",
+          "phase": "lease_released",
+          "outcome": "completed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978219833,
+          "timestampLocal": "2026-05-28T22:23:39.8330000+08:00",
+          "phase": "response_affinity_bound",
+          "outcome": "bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978210980-382"
+        },
+        {
+          "timestamp": 1779978221464,
+          "timestampLocal": "2026-05-28T22:23:41.4640000+08:00",
+          "phase": "upstream_forward",
+          "outcome": "response_received",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978221631,
+          "timestampLocal": "2026-05-28T22:23:41.6310000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978221698,
+          "timestampLocal": "2026-05-28T22:23:41.6980000+08:00",
+          "phase": "listener",
+          "outcome": "accepted",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978221466-385"
+        },
+        {
+          "timestamp": 1779978221712,
+          "timestampLocal": "2026-05-28T22:23:41.7120000+08:00",
+          "phase": "request_trace",
+          "outcome": "prepared",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978221466-385"
+        },
+        {
+          "timestamp": 1779978221721,
+          "timestampLocal": "2026-05-28T22:23:41.7210000+08:00",
+          "phase": "upstream_admitted",
+          "outcome": "admitted",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978221726,
+          "timestampLocal": "2026-05-28T22:23:41.7260000+08:00",
+          "phase": "local_backpressure",
+          "outcome": "bypassed",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "local_backpressure",
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978221466-385"
+        },
+        {
+          "timestamp": 1779978221727,
+          "timestampLocal": "2026-05-28T22:23:41.7270000+08:00",
+          "phase": "routing_decision",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978221751,
+          "timestampLocal": "2026-05-28T22:23:41.7510000+08:00",
+          "phase": "selector",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978221800,
+          "timestampLocal": "2026-05-28T22:23:41.8000000+08:00",
+          "phase": "auth_projection",
+          "outcome": "prepared",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978221466-385"
+        },
+        {
+          "timestamp": 1779978221848,
+          "timestampLocal": "2026-05-28T22:23:41.8480000+08:00",
+          "phase": "admission_attempt",
+          "outcome": "started",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978221466-385"
+        },
+        {
+          "timestamp": 1779978221850,
+          "timestampLocal": "2026-05-28T22:23:41.8500000+08:00",
+          "phase": "upstream_forward",
+          "outcome": "send_started",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978221466-385"
+        },
+        {
+          "timestamp": 1779978221967,
+          "timestampLocal": "2026-05-28T22:23:41.9670000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978221969,
+          "timestampLocal": "2026-05-28T22:23:41.9690000+08:00",
+          "phase": "lease_granted",
+          "outcome": "active",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978221982,
+          "timestampLocal": "2026-05-28T22:23:41.9820000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "headers_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978221996,
+          "timestampLocal": "2026-05-28T22:23:41.9960000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "first_chunk_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978219090-384"
+        },
+        {
+          "timestamp": 1779978222309,
+          "timestampLocal": "2026-05-28T22:23:42.3090000+08:00",
+          "phase": "upstream_forward",
+          "outcome": "response_received",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978222407,
+          "timestampLocal": "2026-05-28T22:23:42.4070000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978222479,
+          "timestampLocal": "2026-05-28T22:23:42.4790000+08:00",
+          "phase": "upstream_admitted",
+          "outcome": "admitted",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978222481,
+          "timestampLocal": "2026-05-28T22:23:42.4810000+08:00",
+          "phase": "routing_decision",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978222496,
+          "timestampLocal": "2026-05-28T22:23:42.4960000+08:00",
+          "phase": "selector",
+          "outcome": "selected",
+          "status": 200,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978222717,
+          "timestampLocal": "2026-05-28T22:23:42.7170000+08:00",
+          "phase": "selector",
+          "outcome": "request_affinity_bound",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978222720,
+          "timestampLocal": "2026-05-28T22:23:42.7200000+08:00",
+          "phase": "lease_granted",
+          "outcome": "active",
+          "status": null,
+          "streamState": null,
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978222734,
+          "timestampLocal": "2026-05-28T22:23:42.7340000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "headers_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        },
+        {
+          "timestamp": 1779978222751,
+          "timestampLocal": "2026-05-28T22:23:42.7510000+08:00",
+          "phase": "stream_write",
+          "outcome": "ok",
+          "status": 200,
+          "streamState": "first_chunk_written",
+          "matchedKeywords": [
+            "x-codex-turn-state"
+          ],
+          "gatewayRequestId": "gw-1779978218674-383"
+        }
+      ]
+    }
+  },
+  "assessment": {
+    "currentPathParticipates": true,
+    "isLocalCockpitProvider": true,
+    "isCockpitListener": true,
+    "evidence": [
+      "active provider or base_url points to localhost/local codex access",
+      "localhost provider port is owned by cockpit-tools",
+      "local access audit has events in the incident window"
+    ],
+    "nextStep": "Treat Cockpit local API service as an active candidate; compare audit terminal events with Codex reconnect log timestamps before changing code."
+  }
+}

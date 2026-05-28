@@ -1357,16 +1357,24 @@ function Get-AuditAcceptanceSummary {
     if (-not $requestId -or $requestId -eq "-") {
       continue
     }
+    $gatewayRequestId = Get-AuditGatewayRequestId $event
+    $streamGroupKey = if (-not [string]::IsNullOrWhiteSpace($gatewayRequestId)) {
+      $gatewayRequestId
+    } else {
+      $requestId
+    }
     $isStreamTerminalEvent = $event.phase -in @("stream_completed", "stream_terminal")
     $isStreamEvent =
       $event.phase -in @("lease_granted", "stream_write", "lease_released") -or
-      ($isStreamTerminalEvent -and ($activeStreamGroups.ContainsKey($requestId) -or $hardAffinityContinuityRequestIds -contains $requestId))
+      ($isStreamTerminalEvent -and ($activeStreamGroups.ContainsKey($streamGroupKey) -or $hardAffinityContinuityRequestIds -contains $requestId))
     $group = $null
     if ($event.phase -eq "lease_granted") {
       $streamSequence++
       $group = [ordered]@{
-        streamKey = "{0}#{1}" -f $requestId, $streamSequence
+        streamKey = "{0}#{1}" -f $streamGroupKey, $streamSequence
+        streamGroupKey = $streamGroupKey
         requestId = $requestId
+        gatewayRequestId = $gatewayRequestId
         firstTimestamp = $event.timestamp
         lastTimestamp = $event.timestamp
         eventCount = 0
@@ -1383,14 +1391,16 @@ function Get-AuditAcceptanceSummary {
         accountHashes = @()
       }
       $streamGroups += $group
-      $activeStreamGroups[$requestId] = $group
-    } elseif ($isStreamEvent -and $activeStreamGroups.ContainsKey($requestId)) {
-      $group = $activeStreamGroups[$requestId]
+      $activeStreamGroups[$streamGroupKey] = $group
+    } elseif ($isStreamEvent -and $activeStreamGroups.ContainsKey($streamGroupKey)) {
+      $group = $activeStreamGroups[$streamGroupKey]
     } elseif ($isStreamEvent) {
       $streamSequence++
       $group = [ordered]@{
-        streamKey = "{0}#{1}" -f $requestId, $streamSequence
+        streamKey = "{0}#{1}" -f $streamGroupKey, $streamSequence
+        streamGroupKey = $streamGroupKey
         requestId = $requestId
+        gatewayRequestId = $gatewayRequestId
         firstTimestamp = $event.timestamp
         lastTimestamp = $event.timestamp
         eventCount = 0
@@ -1407,9 +1417,9 @@ function Get-AuditAcceptanceSummary {
         accountHashes = @()
       }
       $streamGroups += $group
-      $activeStreamGroups[$requestId] = $group
-    } elseif ($activeStreamGroups.ContainsKey($requestId)) {
-      $group = $activeStreamGroups[$requestId]
+      $activeStreamGroups[$streamGroupKey] = $group
+    } elseif ($activeStreamGroups.ContainsKey($streamGroupKey)) {
+      $group = $activeStreamGroups[$streamGroupKey]
     }
     if (-not $group) {
       continue
@@ -1448,7 +1458,7 @@ function Get-AuditAcceptanceSummary {
       $group.interruptedByCooldown = $true
     }
     if (($isStreamTerminalEvent -or $event.phase -eq "lease_released" -or $event.phase -eq "final_response") -and ($group.completed -or $group.terminalError)) {
-      [void]$activeStreamGroups.Remove($requestId)
+      [void]$activeStreamGroups.Remove($streamGroupKey)
     }
   }
 
@@ -1941,6 +1951,8 @@ function Get-AuditAcceptanceSummary {
     upstreamStreamErrorSummaries = @($upstreamStreamErrorStreams | ForEach-Object {
       [ordered]@{
         streamKey = $_.streamKey
+        streamGroupKey = $_.streamGroupKey
+        gatewayRequestId = $_.gatewayRequestId
         requestId = $_.requestId
         firstTimestamp = $_.firstTimestamp
         lastTimestamp = $_.lastTimestamp
@@ -1959,6 +1971,8 @@ function Get-AuditAcceptanceSummary {
     clientAbortedStreamSummaries = @($clientAbortedStreams | ForEach-Object {
       [ordered]@{
         streamKey = $_.streamKey
+        streamGroupKey = $_.streamGroupKey
+        gatewayRequestId = $_.gatewayRequestId
         requestId = $_.requestId
         firstTimestamp = $_.firstTimestamp
         lastTimestamp = $_.lastTimestamp
@@ -1976,6 +1990,8 @@ function Get-AuditAcceptanceSummary {
     streamSummaries = @($streams | ForEach-Object {
       [ordered]@{
         streamKey = $_.streamKey
+        streamGroupKey = $_.streamGroupKey
+        gatewayRequestId = $_.gatewayRequestId
         requestId = $_.requestId
         firstTimestamp = $_.firstTimestamp
         lastTimestamp = $_.lastTimestamp

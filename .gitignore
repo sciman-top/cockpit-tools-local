@@ -29,6 +29,7 @@ locale-check-report.md
 reports/local-hardened-api-smoke/
 reports/local-hardened-api-live-monitor/
 reports/tauri-command-runs/
+reports/tauri-dev-run/
 
 docs/platform-integration-guide.md
 docs/plugin-architecture-design.md
@@ -44,6 +45,7 @@ src-tauri/native/macos-native-menu/.build/
 # Rust
 target/
 target-codex-verify/
+target-codex-quota-verify*/
 target-test/
 **/*.rs.bk
 docs/plugin-architecture-proposal.md

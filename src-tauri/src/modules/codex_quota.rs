@@ -2106,6 +2106,15 @@ async fn refresh_account_quota_once(account_id: &str) -> Result<CodexQuota, Stri
             return Ok(quota);
         }
     }
+    if codex_account::repair_account_quota_from_local_access_health_for_refresh(&mut account)? {
+        if let Some(quota) = account.quota.clone() {
+            logger::log_info(&format!(
+                "Codex 账号 {} 已采用 API 服务号池记录的 quota 状态，跳过本次 wham/usage 刷新",
+                account.email
+            ));
+            return Ok(quota);
+        }
+    }
     if should_keep_existing_quota_exhaustion(&account, chrono::Utc::now().timestamp()) {
         if let Some(quota) = account.quota.clone() {
             logger::log_info(&format!(

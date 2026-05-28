@@ -4,7 +4,8 @@ use crate::models::codex::{
     CodexQuotaErrorInfo, CodexTokens,
 };
 use crate::models::codex_local_access::{
-    CodexLocalAccessAccountHealth, CodexLocalAccessHealthRegistry,
+    CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
+    CodexLocalAccessHealthRegistry,
 };
 use crate::modules::{account, codex_oauth, logger};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
@@ -2104,14 +2105,21 @@ fn repair_account_quota_from_local_access_health(
     let Some(error_code) = codex_local_access_quota_error_code(health) else {
         return false;
     };
-    let Some(reset_at) = health
+    let reset_at = health
         .estimated_reset_at_ms
         .map(|value| value.div_euclid(1000))
         .filter(|value| *value > now_seconds)
-        .or_else(|| future_quota_reset_from_account(account, now_seconds))
-    else {
+        .or_else(|| future_quota_reset_from_account(account, now_seconds));
+    let confirmed_zero_without_reset = reset_at.is_none()
+        && (matches!(
+            health.status,
+            CodexLocalAccessAccountHealthStatus::Exhausted
+                | CodexLocalAccessAccountHealthStatus::CoolingDown
+        ) || health.estimated_remaining_percentage == Some(0)
+            || health.last_observed_remaining_percentage == Some(0));
+    if reset_at.is_none() && !confirmed_zero_without_reset {
         return false;
-    };
+    }
 
     let current_remaining = account
         .quota
@@ -2128,32 +2136,68 @@ fn repair_account_quota_from_local_access_health(
         .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
         .div_euclid(1000);
 
-    account.quota = Some(CodexQuota {
-        hourly_percentage: 100,
-        hourly_reset_time: None,
-        hourly_window_minutes: None,
-        hourly_window_present: Some(false),
-        weekly_percentage: 0,
-        weekly_reset_time: Some(reset_at),
-        weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
-        weekly_window_present: Some(true),
-        raw_data: Some(serde_json::json!({
-            "source": "codex_local_access_health_registry",
-            "error_type": error_code,
-            "health_updated_at_ms": health.updated_at,
-            "previous_remaining_percentage": current_remaining,
-        })),
+    account.quota = Some(if let Some(reset_at) = reset_at {
+        CodexQuota {
+            hourly_percentage: 100,
+            hourly_reset_time: None,
+            hourly_window_minutes: None,
+            hourly_window_present: Some(false),
+            weekly_percentage: 0,
+            weekly_reset_time: Some(reset_at),
+            weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+            weekly_window_present: Some(true),
+            raw_data: Some(serde_json::json!({
+                "source": "codex_local_access_health_registry",
+                "error_type": error_code,
+                "health_updated_at_ms": health.updated_at,
+                "previous_remaining_percentage": current_remaining,
+            })),
+        }
+    } else {
+        let previous = account.quota.as_ref();
+        CodexQuota {
+            hourly_percentage: 0,
+            hourly_reset_time: None,
+            hourly_window_minutes: previous.and_then(|quota| quota.hourly_window_minutes),
+            hourly_window_present: Some(true),
+            weekly_percentage: 0,
+            weekly_reset_time: None,
+            weekly_window_minutes: previous.and_then(|quota| quota.weekly_window_minutes),
+            weekly_window_present: Some(true),
+            raw_data: Some(serde_json::json!({
+                "source": "codex_local_access_health_registry",
+                "error_type": error_code,
+                "health_updated_at_ms": health.updated_at,
+                "previous_remaining_percentage": current_remaining,
+                "reset_unknown": true,
+            })),
+        }
     });
     account.quota_error = Some(CodexQuotaErrorInfo {
         code: Some(error_code.clone()),
         message: format!(
             "Codex local access quota exhaustion replayed from health registry: error_type={}, reset_at={}",
-            error_code, reset_at
+            error_code,
+            reset_at.map_or_else(|| "unknown".to_string(), |value| value.to_string())
         ),
         timestamp: observed_at,
     });
     account.usage_updated_at = Some(observed_at);
     true
+}
+
+pub(crate) fn repair_account_quota_from_local_access_health_for_refresh(
+    account: &mut CodexAccount,
+) -> Result<bool, String> {
+    let Some(registry) = load_local_access_health_registry() else {
+        return Ok(false);
+    };
+    let now_seconds = chrono::Utc::now().timestamp();
+    if !repair_account_quota_from_local_access_health(account, &registry, now_seconds) {
+        return Ok(false);
+    }
+    save_account(account)?;
+    Ok(true)
 }
 
 fn repair_accounts_quota_from_local_access_health(accounts: &mut [CodexAccount]) -> usize {
@@ -4514,7 +4558,8 @@ mod tests {
         CodexAccount, CodexApiProviderMode, CodexAuthMode, CodexQuota, CodexTokens,
     };
     use crate::models::codex_local_access::{
-        CodexLocalAccessAccountHealth, CodexLocalAccessHealthRegistry,
+        CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
+        CodexLocalAccessHealthRegistry,
     };
     use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
     use rusqlite::Connection;
@@ -4653,6 +4698,57 @@ mod tests {
                 .as_ref()
                 .map(|quota| (quota.hourly_percentage, quota.hourly_reset_time)),
             original_remaining
+        );
+    }
+
+    #[test]
+    fn health_registry_quota_repair_marks_confirmed_exhaustion_without_reset_hint() {
+        let now = 1_700_000_000;
+        let mut account = test_codex_account_with_quota(
+            "codex_confirmed_zero_no_reset",
+            CodexQuota {
+                hourly_percentage: 64,
+                hourly_reset_time: None,
+                hourly_window_minutes: Some(300),
+                hourly_window_present: Some(true),
+                weekly_percentage: 27,
+                weekly_reset_time: None,
+                weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+                weekly_window_present: Some(true),
+                raw_data: None,
+            },
+        );
+        let mut registry = CodexLocalAccessHealthRegistry::default();
+        registry.accounts.insert(
+            account.id.clone(),
+            CodexLocalAccessAccountHealth {
+                status: CodexLocalAccessAccountHealthStatus::Exhausted,
+                last_error_type: Some("usage_limit_reached".to_string()),
+                estimated_remaining_percentage: Some(0),
+                last_observed_remaining_percentage: Some(0),
+                updated_at: (now - 60) * 1000,
+                ..Default::default()
+            },
+        );
+
+        assert!(repair_account_quota_from_local_access_health(
+            &mut account,
+            &registry,
+            now
+        ));
+
+        let quota = account.quota.expect("quota should be repaired");
+        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.weekly_percentage, 0);
+        assert_eq!(quota.hourly_reset_time, None);
+        assert_eq!(quota.weekly_reset_time, None);
+        assert_eq!(
+            quota
+                .raw_data
+                .as_ref()
+                .and_then(|value| value.get("reset_unknown"))
+                .and_then(|value| value.as_bool()),
+            Some(true)
         );
     }
 

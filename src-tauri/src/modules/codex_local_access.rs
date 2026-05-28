@@ -12611,7 +12611,7 @@ mod tests {
         active_stream_affinity_account_for_request, active_stream_lease_count_for_account,
         append_audit_event_to_path, apply_audit_trail_status_to_health_summary,
         apply_collection_routing_strategy, apply_local_api_safety_preset_to_collection,
-        backpressure_wait_budget, build_audit_context, build_audit_event,
+        backpressure_wait_budget, bind_response_affinity, build_audit_context, build_audit_event,
         build_chat_completion_payload, build_chat_completion_stream_body,
         build_codex_api_failure_log, build_effective_local_access_account_ids,
         build_effective_local_access_account_ids_from_registry, build_health_summary_from_registry,
@@ -15879,7 +15879,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn codex_turn_state_hard_affinity_blocks_fallback_after_usage_limit() {
+    async fn previous_response_id_hard_affinity_blocks_fallback_after_usage_limit() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -15889,7 +15889,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
         let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
         let root = std::env::temp_dir().join(format!(
-            "cockpit-local-access-turn-state-fallback-test-{}-{}",
+            "cockpit-local-access-previous-response-fallback-test-{}-{}",
             std::process::id(),
             now_ms()
         ));
@@ -15910,7 +15910,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             let (mut socket, _) = upstream_listener
                 .accept()
                 .await
-                .expect("fake upstream should accept turn-state request");
+                .expect("fake upstream should accept continuation request");
             let mut request = Vec::new();
             let mut chunk = [0u8; 1024];
             loop {
@@ -15930,20 +15930,18 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             assert!(
                 request_text.contains("Authorization: Bearer sk-local-old")
                     || request_text.contains("authorization: Bearer sk-local-old"),
-                "turn-state affinity should use the original account: {}",
+                "previous_response_id affinity should use the original account: {}",
                 request_text
             );
             assert!(
                 !request_text.contains("Authorization: Bearer sk-local-current")
                     && !request_text.contains("authorization: Bearer sk-local-current"),
-                "turn-state affinity must not switch to the current pool account: {}",
+                "previous_response_id affinity must not switch to the current pool account: {}",
                 request_text
             );
             assert!(
-                request_text
-                    .to_ascii_lowercase()
-                    .contains("x-codex-turn-state: turn-secret-state"),
-                "turn-state header must be forwarded to upstream: {}",
+                request_text.contains("\"previous_response_id\":\"resp-prev-hard\""),
+                "previous_response_id must be forwarded to upstream body: {}",
                 request_text
             );
             let body = r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
@@ -16030,32 +16028,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("current pool account should be persisted");
         cache_prepared_account(&old_account).await;
 
-        let turn_state = "turn-secret-state";
-        let affinity_request = ParsedRequest {
-            method: "POST".to_string(),
-            target: "/v1/responses".to_string(),
-            headers: HashMap::from([("x-codex-turn-state".to_string(), turn_state.to_string())]),
-            body: br#"{"model":"gpt-5.5","input":"previous successful turn step"}"#.to_vec(),
-            gateway_request_id: "gw-test-6".to_string(),
-        };
-        let mut persisted_registry =
-            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
-                .expect("health registry should load from isolated test root");
-        assert!(upsert_request_affinity_binding(
-            &mut persisted_registry,
-            &affinity_request,
-            "api-old",
-            now_ms(),
-        ));
-        save_health_registry_to_path(
-            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
-            &persisted_registry,
-        )
-        .expect("persistent turn-state affinity should be written");
-        {
-            let mut runtime = gateway_runtime().lock().await;
-            runtime.request_affinity.clear();
-        }
+        let previous_response_id = "resp-prev-hard";
+        bind_response_affinity(previous_response_id, "api-old").await;
 
         let request = ParsedRequest {
             method: "POST".to_string(),
@@ -16063,14 +16037,19 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             headers: HashMap::from([
                 ("accept".to_string(), "text/event-stream".to_string()),
                 ("content-type".to_string(), "application/json".to_string()),
-                ("x-codex-turn-state".to_string(), turn_state.to_string()),
             ]),
-            body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
+            body: format!(
+                r#"{{"model":"gpt-5.5","previous_response_id":"{}","input":"continue previous response"}}"#,
+                previous_response_id
+            )
+            .into_bytes(),
             gateway_request_id: "gw-test-7".to_string(),
         };
         let err = proxy_request_with_account_pool(&request, &collection)
             .await
-            .expect_err("turn-state hard affinity should not fall back to replacement account");
+            .expect_err(
+                "previous_response_id hard affinity should not fall back to replacement account",
+            );
         assert_eq!(err.account_id.as_deref(), Some("api-old"));
         assert_eq!(err.status, StatusCode::TOO_MANY_REQUESTS.as_u16());
         assert_eq!(
@@ -16094,7 +16073,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         );
         assert_eq!(
             final_detail.get("sticky_boundary").map(String::as_str),
-            Some("codex_turn_state")
+            Some("previous_response_id")
         );
 
         let seen = upstream_server
@@ -16106,11 +16085,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("audit should be written to isolated root");
         assert!(audit.contains("\"phase\":\"fallback_blocked\""));
         assert!(audit.contains("\"outcome\":\"hard_affinity\""));
-        assert!(audit.contains("\"request_id_source\":\"codex_turn_state\""));
-        assert!(audit.contains("x-codex-turn-state:sha256:"));
+        assert!(audit.contains("\"previous_response_id_hash\":\"response:sha256:"));
         assert!(
-            !audit.contains(turn_state),
-            "raw x-codex-turn-state must not be written to audit"
+            !audit.contains(previous_response_id),
+            "raw previous_response_id must not be written to audit"
         );
         assert!(!audit.contains("\"phase\":\"fallback_selected\""));
 
@@ -16132,7 +16110,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn codex_turn_state_short_retry_after_retries_original_account_to_completion() {
+    async fn previous_response_id_short_retry_after_retries_original_account_to_completion() {
         let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
             .lock()
             .unwrap_or_else(|err| err.into_inner());
@@ -16142,7 +16120,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
         let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
         let root = std::env::temp_dir().join(format!(
-            "cockpit-local-access-turn-state-retry-test-{}-{}",
+            "cockpit-local-access-previous-response-retry-test-{}-{}",
             std::process::id(),
             now_ms()
         ));
@@ -16289,32 +16267,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("current pool account should be persisted");
         cache_prepared_account(&old_account).await;
 
-        let turn_state = "turn-secret-state";
-        let affinity_request = ParsedRequest {
-            method: "POST".to_string(),
-            target: "/v1/responses".to_string(),
-            headers: HashMap::from([("x-codex-turn-state".to_string(), turn_state.to_string())]),
-            body: br#"{"model":"gpt-5.5","input":"previous successful turn step"}"#.to_vec(),
-            gateway_request_id: "gw-test-7a".to_string(),
-        };
-        let mut persisted_registry =
-            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
-                .expect("health registry should load from isolated test root");
-        assert!(upsert_request_affinity_binding(
-            &mut persisted_registry,
-            &affinity_request,
-            "api-old",
-            now_ms(),
-        ));
-        save_health_registry_to_path(
-            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
-            &persisted_registry,
-        )
-        .expect("persistent turn-state affinity should be written");
-        {
-            let mut runtime = gateway_runtime().lock().await;
-            runtime.request_affinity.clear();
-        }
+        let previous_response_id = "resp-prev-retry";
+        bind_response_affinity(previous_response_id, "api-old").await;
 
         let request = ParsedRequest {
             method: "POST".to_string(),
@@ -16322,15 +16276,18 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             headers: HashMap::from([
                 ("accept".to_string(), "text/event-stream".to_string()),
                 ("content-type".to_string(), "application/json".to_string()),
-                ("x-codex-turn-state".to_string(), turn_state.to_string()),
             ]),
-            body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
+            body: format!(
+                r#"{{"model":"gpt-5.5","previous_response_id":"{}","input":"continue previous response"}}"#,
+                previous_response_id
+            )
+            .into_bytes(),
             gateway_request_id: "gw-test-7b".to_string(),
         };
         let success = proxy_request_with_account_pool(&request, &collection)
             .await
             .expect(
-                "turn-state hard affinity should retry the original account after a short reset",
+                "previous_response_id hard affinity should retry the original account after a short reset",
             );
         assert_eq!(success.account_id, "api-old");
         let response_text = success
@@ -16464,10 +16421,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                     request_text
                 );
                 assert!(
-                    request_text
-                        .to_ascii_lowercase()
-                        .contains("x-codex-turn-state: turn-secret-state"),
-                    "turn-state header must be preserved: {}",
+                    request_text.contains("\"previous_response_id\":\"resp-prev-wait\""),
+                    "previous_response_id must be preserved in forwarded body: {}",
                     request_text
                 );
                 seen.push(request_text);
@@ -16586,32 +16541,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             .expect("current pool account should be persisted");
         cache_prepared_account(&old_account).await;
 
-        let turn_state = "turn-secret-state";
-        let affinity_request = ParsedRequest {
-            method: "POST".to_string(),
-            target: "/v1/responses".to_string(),
-            headers: HashMap::from([("x-codex-turn-state".to_string(), turn_state.to_string())]),
-            body: br#"{"model":"gpt-5.5","input":"previous successful turn step"}"#.to_vec(),
-            gateway_request_id: "gw-test-timeout-affinity-seed".to_string(),
-        };
-        let mut persisted_registry =
-            load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))
-                .expect("health registry should load from isolated test root");
-        assert!(upsert_request_affinity_binding(
-            &mut persisted_registry,
-            &affinity_request,
-            "api-old",
-            now_ms(),
-        ));
-        save_health_registry_to_path(
-            &root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE),
-            &persisted_registry,
-        )
-        .expect("persistent turn-state affinity should be written");
-        {
-            let mut runtime = gateway_runtime().lock().await;
-            runtime.request_affinity.clear();
-        }
+        let previous_response_id = "resp-prev-wait";
+        bind_response_affinity(previous_response_id, "api-old").await;
 
         let server = tokio::spawn(async move {
             let (stream, peer) = listener.accept().await.expect("server should accept");
@@ -16621,12 +16552,14 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let mut client = TcpStream::connect(addr)
             .await
             .expect("client should connect");
-        let body = br#"{"model":"gpt-5.5","input":"continue same turn"}"#;
+        let body = format!(
+            r#"{{"model":"gpt-5.5","previous_response_id":"{}","input":"continue previous response"}}"#,
+            previous_response_id
+        );
         let request = format!(
-            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nContent-Type: application/json\r\nX-Codex-Turn-State: {}\r\nContent-Length: {}\r\n\r\n{}",
-            turn_state,
-            body.len(),
-            String::from_utf8_lossy(body)
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nAccept: text/event-stream\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+            body.as_bytes().len(),
+            body
         );
         client
             .write_all(request.as_bytes())
@@ -16706,7 +16639,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(audit.contains("\"compaction_summary_seen\":\"true\""));
         assert!(!audit.contains("\"phase\":\"final_response\""));
         assert!(!audit.contains("sk-local-old"));
-        assert!(!audit.contains("turn-secret-state"));
+        assert!(!audit.contains(previous_response_id));
     }
 
     #[test]
