@@ -1,13 +1,13 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-05-29T01:31:46.8293258+08:00",
+  "generatedAt": "2026-05-29T01:44:47.2204126+08:00",
   "overall": "fail",
   "reportStatus": "running",
   "terminationReason": "running",
   "mode": "live_codex_app_monitor",
   "startedAt": "2026-05-29T00:12:23.9838958+08:00",
-  "endedAt": "2026-05-29T01:31:46.8293258+08:00",
-  "elapsedSeconds": 4762.8,
+  "endedAt": "2026-05-29T01:44:47.2204126+08:00",
+  "elapsedSeconds": 5543.2,
   "dataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
   "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
   "auditWindow": {
@@ -64,8 +64,8 @@
         "config.toml": {
           "exists": true,
           "length": 5716,
-          "lastWriteTime": "2026-05-29T01:30:29.1890003+08:00",
-          "sha256": "BAE8FF3896053D507F643C291A6E1B99668CB1710CADCC5E2F1A3228A3BFC2D8"
+          "lastWriteTime": "2026-05-29T01:32:55.1390718+08:00",
+          "sha256": "7E8FDE651304D135B50C3BCBC41A96AB837D51DBDB6C50E258827455FA58CD11"
         },
         "auth.json": {
           "exists": true,
@@ -209,10 +209,10 @@
       "path": "C:\\Users\\sciman\\.antigravity_cockpit\\server.json",
       "exists": true,
       "parseError": null,
-      "pid": 8884,
+      "pid": 10996,
       "wsPort": 19528,
       "version": "0.23.4",
-      "startedAt": 1779989333
+      "startedAt": 1779989617
     },
     "listener": {
       "commandAvailable": true,
@@ -105677,10 +105677,10 @@
           "path": "C:\\Users\\sciman\\.antigravity_cockpit\\server.json",
           "exists": true,
           "parseError": null,
-          "pid": 8884,
+          "pid": 10996,
           "wsPort": 19528,
           "version": "0.23.4",
-          "startedAt": 1779989333
+          "startedAt": 1779989617
         },
         "required": true,
         "listener": {

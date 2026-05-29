@@ -2533,8 +2533,17 @@ function New-CriticalSignals {
   $listener = $ApiServiceRuntime.listener
   $runtimeModeName = if ($runtimeMode) { $runtimeMode.mode } else { $null }
   $localAccessEnabled = if ($localAccess) { $localAccess.enabled } else { $null }
+  $initialRuntime = $script:InitialApiServiceRuntime
+  $initialRuntimeMode = if ($initialRuntime) { $initialRuntime.runtimeMode } else { $null }
+  $initialLocalAccess = if ($initialRuntime) { $initialRuntime.localAccess } else { $null }
+  $initialExpectedApiServiceRuntime = (
+    ($initialRuntime -and $initialRuntime.available) -or
+    ($initialRuntimeMode -and $initialRuntimeMode.mode -eq "cockpit_api_service") -or
+    ($initialLocalAccess -and $initialLocalAccess.enabled -eq $true)
+  )
   $expectedApiServiceRuntime = (
     [bool]$RequireApiServiceRuntimeAvailable -or
+    [bool]$initialExpectedApiServiceRuntime -or
     $runtimeModeName -eq "cockpit_api_service" -or
     $localAccessEnabled -eq $true
   )
@@ -2550,6 +2559,12 @@ function New-CriticalSignals {
       apiBaseUrl = $ApiServiceRuntime.apiBaseUrl
       localAccess = $localAccess
       runtimeMode = $runtimeMode
+      initial = [ordered]@{
+        available = if ($initialRuntime) { [bool]$initialRuntime.available } else { $null }
+        reason = if ($initialRuntime) { $initialRuntime.reason } else { $null }
+        localAccess = $initialLocalAccess
+        runtimeMode = $initialRuntimeMode
+      }
       listenerCount = if ($listener) { [int]$listener.listenerCount } else { 0 }
       server = $ApiServiceRuntime.server
     }
@@ -2643,6 +2658,7 @@ function New-MonitorReport {
       comparison = $appComparison
     }
     apiServiceRuntime = $apiServiceRuntime
+    apiServiceRuntimeInitial = $script:InitialApiServiceRuntime
     criticalSignals = @($criticalSignals)
     audit = $auditSummary
     continuitySummary = $continuitySummary
@@ -2684,6 +2700,7 @@ $rawObservedEventCount = 0
 $windowDroppedEventCount = 0
 $cliBefore = Get-FileGuardState $CodexHome
 $appBefore = Get-CodexAppProcessState $CodexAppProcessNames $CodexAppPathIncludePatterns $CodexAppPathExcludePatterns
+$script:InitialApiServiceRuntime = Get-ApiServiceRuntimeState
 $terminationReason = "deadline"
 $lastCheckpointAt = [datetime]::MinValue
 if ($WriteReport) {
