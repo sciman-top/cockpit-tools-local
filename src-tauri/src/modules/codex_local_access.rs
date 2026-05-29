@@ -2,13 +2,13 @@ use crate::models::codex::{CodexAccount, CodexApiProviderMode, CodexQuota, Codex
 use crate::models::codex_local_access::{
     CodexLocalAccessAccountHealth, CodexLocalAccessAccountHealthStatus,
     CodexLocalAccessAccountHealthView, CodexLocalAccessAccountStats, CodexLocalAccessCollection,
-    CodexLocalAccessGlobalError, CodexLocalAccessHealthRegistry, CodexLocalAccessHealthSummary,
-    CodexLocalAccessModelCooldown, CodexLocalAccessPortCleanupResult,
-    CodexLocalAccessRoutingStrategy, CodexLocalAccessState, CodexLocalAccessStats,
-    CodexLocalAccessStatsWindow, CodexLocalAccessStickyBinding, CodexLocalAccessUsageEvent,
-    CodexLocalAccessUsageStats, CodexLocalApiFallbackMode, CodexLocalApiSafetyConfig,
-    CodexLocalApiSafetyPresetId, CodexRuntimeAccountKind, CodexRuntimeIntegrationMode,
-    CodexRuntimeModeState, CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION,
+    CodexLocalAccessConcurrencyDiagnostics, CodexLocalAccessGlobalError,
+    CodexLocalAccessHealthRegistry, CodexLocalAccessHealthSummary, CodexLocalAccessModelCooldown,
+    CodexLocalAccessPortCleanupResult, CodexLocalAccessRoutingStrategy, CodexLocalAccessState,
+    CodexLocalAccessStats, CodexLocalAccessStatsWindow, CodexLocalAccessStickyBinding,
+    CodexLocalAccessUsageEvent, CodexLocalAccessUsageStats, CodexLocalApiFallbackMode,
+    CodexLocalApiSafetyConfig, CodexLocalApiSafetyPresetId, CodexRuntimeAccountKind,
+    CodexRuntimeIntegrationMode, CodexRuntimeModeState, CODEX_LOCAL_ACCESS_HEALTH_SCHEMA_VERSION,
     CODEX_LOCAL_API_SAFETY_SCHEMA_VERSION,
 };
 use crate::modules::atomic_write::write_string_atomic;
@@ -74,6 +74,7 @@ const GATEWAY_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 const DEFAULT_UNKNOWN_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(60);
 const CODEX_LOCAL_ACCESS_AUDIT_SCHEMA_VERSION: u32 = 1;
 const CODEX_LOCAL_ACCESS_AUDIT_MAX_BYTES: usize = 2 * 1024 * 1024;
+const CONCURRENCY_DIAGNOSTICS_AUDIT_WINDOW_MS: i64 = 10 * 60 * 1000;
 const RUNTIME_PROJECTION_RECENT_AUDIT_GRACE_MS: u128 = 5 * 60 * 1000;
 const UPSTREAM_CODEX_BASE_URL: &str = "https://chatgpt.com/backend-api/codex";
 const DEFAULT_CODEX_USER_AGENT: &str =
@@ -228,7 +229,7 @@ struct ProxyDispatchError {
     defer_until_pool_available: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct LocalApiBackpressureState {
     active_requests: u32,
     last_started_at: Option<Instant>,
@@ -250,6 +251,19 @@ struct AuditTrailStatus {
     degraded: bool,
     error: Option<String>,
     degraded_at_ms: Option<i64>,
+}
+
+#[derive(Debug, Default)]
+struct ConcurrencyAuditRollup {
+    recent_audit_event_count: usize,
+    recent_request_count: usize,
+    recent_local_backpressure_count: usize,
+    recent_pool_wait_count: usize,
+    recent_upstream_limit_count: usize,
+    recent_stream_error_count: usize,
+    last_problem_at_ms: Option<i64>,
+    last_problem_kind: Option<String>,
+    audit_load_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -513,6 +527,192 @@ fn active_stream_lease_count() -> usize {
         .unwrap_or(0)
 }
 
+fn current_local_backpressure_snapshot() -> LocalApiBackpressureState {
+    local_api_backpressure_state()
+        .lock()
+        .map(|state| state.clone())
+        .unwrap_or_default()
+}
+
+fn local_backpressure_start_interval_remaining(
+    state: &LocalApiBackpressureState,
+    config: &CodexLocalApiSafetyConfig,
+    now: Instant,
+) -> Duration {
+    if state.active_requests >= config.max_concurrent_requests.max(1) {
+        return Duration::from_millis(0);
+    }
+
+    let min_interval = Duration::from_secs(config.min_request_interval_seconds);
+    if min_interval.is_zero() {
+        return Duration::from_millis(0);
+    }
+
+    let Some(last_started_at) = state.last_started_at else {
+        return Duration::from_millis(0);
+    };
+    let Some(next_allowed_at) = last_started_at.checked_add(min_interval) else {
+        return Duration::from_millis(0);
+    };
+    next_allowed_at
+        .checked_duration_since(now)
+        .unwrap_or_else(|| Duration::from_millis(0))
+}
+
+fn duration_as_millis_u64(duration: Duration) -> u64 {
+    duration.as_millis().min(u64::MAX as u128) as u64
+}
+
+fn concurrency_problem_kind(event: &CodexLocalAccessAuditEvent) -> Option<&'static str> {
+    let phase = event.phase.to_ascii_lowercase();
+    let error_type = event
+        .error_type
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+
+    if phase == "local_backpressure" || error_type == "local_backpressure" {
+        return Some("local_backpressure");
+    }
+    if phase == "pool_wait" || error_type == "cockpit_pool_wait" {
+        return Some("pool_wait");
+    }
+    if matches!(
+        error_type.as_str(),
+        "usage_limit_reached"
+            | "upstream_rate_limit"
+            | "insufficient_quota"
+            | "model_capacity"
+            | "rate_limited"
+    ) {
+        return Some("upstream_limit");
+    }
+    if phase.contains("stream_error") || error_type.contains("stream_error") {
+        return Some("stream_error");
+    }
+    None
+}
+
+fn update_concurrency_audit_rollup(
+    rollup: &mut ConcurrencyAuditRollup,
+    event: &CodexLocalAccessAuditEvent,
+) {
+    rollup.recent_audit_event_count = rollup.recent_audit_event_count.saturating_add(1);
+    if event.phase == "listener" {
+        rollup.recent_request_count = rollup.recent_request_count.saturating_add(1);
+    }
+
+    let Some(kind) = concurrency_problem_kind(event) else {
+        return;
+    };
+    match kind {
+        "local_backpressure" => {
+            rollup.recent_local_backpressure_count =
+                rollup.recent_local_backpressure_count.saturating_add(1);
+        }
+        "pool_wait" => {
+            rollup.recent_pool_wait_count = rollup.recent_pool_wait_count.saturating_add(1);
+        }
+        "upstream_limit" => {
+            rollup.recent_upstream_limit_count =
+                rollup.recent_upstream_limit_count.saturating_add(1);
+        }
+        "stream_error" => {
+            rollup.recent_stream_error_count = rollup.recent_stream_error_count.saturating_add(1);
+        }
+        _ => {}
+    }
+
+    if rollup
+        .last_problem_at_ms
+        .map(|timestamp| event.timestamp >= timestamp)
+        .unwrap_or(true)
+    {
+        rollup.last_problem_at_ms = Some(event.timestamp);
+        rollup.last_problem_kind = Some(kind.to_string());
+    }
+}
+
+fn read_concurrency_audit_file(
+    path: &Path,
+    now: i64,
+    audit_window_ms: i64,
+    rollup: &mut ConcurrencyAuditRollup,
+) {
+    if !path.exists() {
+        return;
+    }
+
+    match path.metadata() {
+        Ok(metadata) if metadata.len() as usize > CODEX_LOCAL_ACCESS_AUDIT_MAX_BYTES => {
+            if rollup.audit_load_error.is_none() {
+                rollup.audit_load_error = Some(format!(
+                    "审计日志过大，已跳过 {}",
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("audit")
+                ));
+            }
+            return;
+        }
+        Err(err) => {
+            if rollup.audit_load_error.is_none() {
+                rollup.audit_load_error = Some(format!("读取审计日志元数据失败: {}", err));
+            }
+            return;
+        }
+        _ => {}
+    }
+
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) => {
+            if rollup.audit_load_error.is_none() {
+                rollup.audit_load_error = Some(format!("读取审计日志失败: {}", err));
+            }
+            return;
+        }
+    };
+
+    let window_start = now.saturating_sub(audit_window_ms.max(0));
+    for (index, line) in content.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let event = match serde_json::from_str::<CodexLocalAccessAuditEvent>(line) {
+            Ok(event) => event,
+            Err(err) => {
+                if rollup.audit_load_error.is_none() {
+                    rollup.audit_load_error =
+                        Some(format!("解析审计日志第 {} 行失败: {}", index + 1, err));
+                }
+                continue;
+            }
+        };
+        if event.timestamp < window_start || event.timestamp > now.saturating_add(60_000) {
+            continue;
+        }
+        update_concurrency_audit_rollup(rollup, &event);
+    }
+}
+
+fn load_concurrency_audit_rollup(now: i64, audit_window_ms: i64) -> ConcurrencyAuditRollup {
+    let mut rollup = ConcurrencyAuditRollup::default();
+    let path = match local_access_audit_file_path() {
+        Ok(path) => path,
+        Err(err) => {
+            rollup.audit_load_error = Some(err);
+            return rollup;
+        }
+    };
+
+    let rotated_path = audit_rotated_path(&path);
+    read_concurrency_audit_file(&rotated_path, now, audit_window_ms, &mut rollup);
+    read_concurrency_audit_file(&path, now, audit_window_ms, &mut rollup);
+    rollup
+}
+
 fn recent_audit_activity() -> (bool, Option<u128>) {
     let Ok(path) = local_access_audit_file_path() else {
         return (false, None);
@@ -551,8 +751,16 @@ fn should_block_direct_projection_change(
 ) -> bool {
     current_mode == CodexRuntimeIntegrationMode::CockpitApiService
         && target_mode == CodexRuntimeIntegrationMode::DirectProjection
-        && !force
-        && risk.has_live_continuity_risk()
+        && should_block_runtime_projection_change(current_mode, target_mode, force, risk)
+}
+
+fn should_block_runtime_projection_change(
+    current_mode: CodexRuntimeIntegrationMode,
+    target_mode: CodexRuntimeIntegrationMode,
+    force: bool,
+    risk: &RuntimeProjectionContinuityRisk,
+) -> bool {
+    current_mode != target_mode && !force && risk.has_live_continuity_risk()
 }
 
 fn audit_trail_status() -> &'static Mutex<AuditTrailStatus> {
@@ -1269,15 +1477,13 @@ pub async fn set_runtime_integration_mode_with_options(
     let current_mode = load_runtime_mode_state()
         .map(|state| state.mode)
         .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
-    let risk = if mode == CodexRuntimeIntegrationMode::DirectProjection
-        && current_mode == CodexRuntimeIntegrationMode::CockpitApiService
-    {
+    let risk = if mode != current_mode {
         Some(collect_runtime_projection_continuity_risk())
     } else {
         None
     };
     if let Some(risk) = risk.as_ref() {
-        if should_block_direct_projection_change(current_mode, mode, options.force, risk) {
+        if should_block_runtime_projection_change(current_mode, mode, options.force, risk) {
             record_runtime_projection_audit_event(
                 "runtime_mode_transition",
                 "blocked",
@@ -1287,9 +1493,21 @@ pub async fn set_runtime_integration_mode_with_options(
                 Some(mode),
                 Some(risk),
             );
+            let action = match (current_mode, mode) {
+                (
+                    CodexRuntimeIntegrationMode::DirectProjection,
+                    CodexRuntimeIntegrationMode::CockpitApiService,
+                ) => "启用 API 服务会替换 Codex auth 投影，可能让旧 Direct API/OAuth 任务把本地 API 服务 token 发到官方端点",
+                (
+                    CodexRuntimeIntegrationMode::CockpitApiService,
+                    CodexRuntimeIntegrationMode::DirectProjection,
+                ) => "停用 API 服务会替换 Codex auth 投影，可能断开正在使用本地 provider 的任务",
+                _ => "切换 Codex runtime mode 会替换 Codex auth 投影",
+            };
             return Err(format!(
-                "API 服务仍处于 Codex 连续性保护窗口（{}）。如确需停用，请在确认没有运行中任务后使用强制切换。",
-                risk.blocking_reasons().join(", ")
+                "Codex 连续性保护窗口内已阻止切换（{}）。{}。如确需切换，请在确认没有运行中任务后使用强制切换。",
+                risk.blocking_reasons().join(", "),
+                action
             ));
         }
     }
@@ -4423,10 +4641,9 @@ fn insert_codex_upstream_quota_metadata(
                 }
             }
             if !log_fields.contains_key("active_limit") {
-                if let Some(active_limit) = first_safe_json_metadata_field(
-                    candidate,
-                    &["active_limit", "activeLimit"],
-                ) {
+                if let Some(active_limit) =
+                    first_safe_json_metadata_field(candidate, &["active_limit", "activeLimit"])
+                {
                     log_fields.insert("active_limit".to_string(), active_limit);
                 }
             }
@@ -7816,6 +8033,47 @@ fn build_state_snapshot(runtime: &GatewayRuntime) -> CodexLocalAccessState {
         effective_account_ids,
         stats,
         health,
+        concurrency_diagnostics: build_concurrency_diagnostics(runtime),
+    }
+}
+
+fn build_concurrency_diagnostics(
+    runtime: &GatewayRuntime,
+) -> CodexLocalAccessConcurrencyDiagnostics {
+    let now = now_ms();
+    let audit_window_ms = CONCURRENCY_DIAGNOSTICS_AUDIT_WINDOW_MS;
+    let safety_config = runtime
+        .collection
+        .as_ref()
+        .map(|collection| collection.safety_config.clone())
+        .unwrap_or_default();
+    let backpressure = current_local_backpressure_snapshot();
+    let max_concurrent_requests = safety_config.max_concurrent_requests.max(1);
+    let active_request_count = backpressure.active_requests;
+    let start_interval_remaining_ms = duration_as_millis_u64(
+        local_backpressure_start_interval_remaining(&backpressure, &safety_config, Instant::now()),
+    );
+    let rollup = load_concurrency_audit_rollup(now, audit_window_ms);
+
+    CodexLocalAccessConcurrencyDiagnostics {
+        updated_at: now,
+        max_concurrent_requests,
+        active_request_count,
+        active_stream_count: active_stream_lease_count(),
+        request_capacity: max_concurrent_requests.saturating_sub(active_request_count),
+        min_request_interval_seconds: safety_config.min_request_interval_seconds,
+        max_queue_wait_seconds: safety_config.max_queue_wait_seconds,
+        start_interval_remaining_ms,
+        audit_window_ms,
+        recent_audit_event_count: rollup.recent_audit_event_count,
+        recent_request_count: rollup.recent_request_count,
+        recent_local_backpressure_count: rollup.recent_local_backpressure_count,
+        recent_pool_wait_count: rollup.recent_pool_wait_count,
+        recent_upstream_limit_count: rollup.recent_upstream_limit_count,
+        recent_stream_error_count: rollup.recent_stream_error_count,
+        last_problem_at_ms: rollup.last_problem_at_ms,
+        last_problem_kind: rollup.last_problem_kind,
+        audit_load_error: rollup.audit_load_error,
     }
 }
 
@@ -12403,6 +12661,22 @@ async fn write_in_band_pool_unavailable_response(
         ("transport_status".to_string(), "200".to_string()),
         ("original_status".to_string(), error.status.to_string()),
         (
+            "codex_facing_terminal_contract".to_string(),
+            if is_stream_response {
+                "response.completed_local_pool_unavailable".to_string()
+            } else {
+                "json_completed_local_pool_unavailable".to_string()
+            },
+        ),
+        (
+            "recover_action".to_string(),
+            "retry_after_cooldown_or_start_new_task".to_string(),
+        ),
+        (
+            "terminal_origin".to_string(),
+            "local_pool_unavailable".to_string(),
+        ),
+        (
             "message".to_string(),
             safe_log_field(Some(error.message.as_str()), 512),
         ),
@@ -13057,11 +13331,10 @@ mod tests {
         build_projection_seed_local_access_account_ids, build_proxy_dispatch_error_body,
         build_request_routing_hint, build_responses_upstream_stream_error_sse,
         build_routing_pool_account_ids, build_runtime_account, build_runtime_mode_state,
-        build_selector_audit_summary, cache_prepared_account,
+        build_selector_audit_summary, cache_prepared_account, classified_audit_detail,
         classify_active_stream_terminal_error, classify_codex_api_failure,
-        classify_codex_upstream_error, classified_audit_detail,
-        constrain_previous_response_affinity, empty_health_registry, extract_usage_capture,
-        filter_local_access_account_ids, first_audit_timestamp_from_path,
+        classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
+        extract_usage_capture, filter_local_access_account_ids, first_audit_timestamp_from_path,
         first_stable_local_access_port, gateway_runtime, grant_active_stream_lease,
         grant_active_stream_lease_for_request, handle_connection,
         hard_affinity_inline_retry_wait_limit, health_registry_account_cooldown_wait,
@@ -13084,7 +13357,8 @@ mod tests {
         retry_failover_account_attempt_limit, retry_failover_max_retries,
         save_health_registry_to_path, selector_audit_detail, selector_selected_reason,
         set_runtime_integration_mode, should_block_direct_projection_change,
-        should_defer_pool_unavailable, should_restore_direct_projection_before_app_exit,
+        should_block_runtime_projection_change, should_defer_pool_unavailable,
+        should_restore_direct_projection_before_app_exit,
         should_retry_hard_affinity_upstream_failure, should_retry_single_account_upstream_status,
         should_sync_local_access_collection_on_account_switch, should_treat_response_as_stream,
         should_try_next_account, should_use_pool_unavailable_summary,
@@ -13134,6 +13408,27 @@ mod tests {
         )
     }
 
+    fn test_concurrency_audit_event(
+        timestamp: i64,
+        phase: &str,
+        error_type: Option<&str>,
+    ) -> super::CodexLocalAccessAuditEvent {
+        super::CodexLocalAccessAuditEvent {
+            schema_version: super::CODEX_LOCAL_ACCESS_AUDIT_SCHEMA_VERSION,
+            timestamp,
+            request_id: format!("req-{}", timestamp),
+            phase: phase.to_string(),
+            route: "/v1/responses".to_string(),
+            model: "gpt-5.5".to_string(),
+            account_hash: "hash".to_string(),
+            status: None,
+            error_type: error_type.map(str::to_string),
+            stream_state: None,
+            outcome: Some("test".to_string()),
+            detail: BTreeMap::new(),
+        }
+    }
+
     #[test]
     fn local_access_file_paths_honor_data_root_env_override() {
         let _guard = LOCAL_ACCESS_ENV_TEST_LOCK
@@ -13164,6 +13459,144 @@ mod tests {
             super::runtime_mode_file_path().expect("runtime mode path should resolve"),
             root.join(super::CODEX_RUNTIME_MODE_FILE)
         );
+
+        match previous {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrency_diagnostics_reports_configured_capacity_without_audit() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-concurrency-empty-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let mut runtime = super::GatewayRuntime::default();
+        runtime.collection = Some(CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "ck-test".to_string(),
+            safety_config: CodexLocalApiSafetyConfig {
+                max_concurrent_requests: 2,
+                min_request_interval_seconds: 3,
+                max_queue_wait_seconds: 4,
+                ..CodexLocalApiSafetyConfig::default()
+            },
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec!["acc-a".to_string()],
+            created_at: 1,
+            updated_at: 2,
+        });
+
+        let diagnostics = super::build_concurrency_diagnostics(&runtime);
+
+        assert_eq!(diagnostics.max_concurrent_requests, 2);
+        assert_eq!(diagnostics.active_request_count, 0);
+        assert_eq!(diagnostics.request_capacity, 2);
+        assert_eq!(diagnostics.min_request_interval_seconds, 3);
+        assert_eq!(diagnostics.max_queue_wait_seconds, 4);
+        assert_eq!(
+            diagnostics.audit_window_ms,
+            super::CONCURRENCY_DIAGNOSTICS_AUDIT_WINDOW_MS
+        );
+        assert_eq!(diagnostics.recent_audit_event_count, 0);
+        assert_eq!(diagnostics.recent_request_count, 0);
+        assert!(diagnostics.audit_load_error.is_none());
+
+        match previous {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn concurrency_diagnostics_classifies_recent_audit_pressure() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-concurrency-audit-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("test root should be created");
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+
+        let now = now_ms();
+        let events = [
+            test_concurrency_audit_event(now - 5_000, "listener", None),
+            test_concurrency_audit_event(now - 4_000, "local_backpressure", None),
+            test_concurrency_audit_event(now - 3_000, "pool_wait", None),
+            test_concurrency_audit_event(
+                now - 2_000,
+                "final_response",
+                Some("usage_limit_reached"),
+            ),
+            test_concurrency_audit_event(
+                now - 1_000,
+                "stream_error",
+                Some("upstream_stream_error"),
+            ),
+            test_concurrency_audit_event(
+                now - super::CONCURRENCY_DIAGNOSTICS_AUDIT_WINDOW_MS - 1_000,
+                "local_backpressure",
+                None,
+            ),
+        ];
+        let mut content = String::new();
+        for event in events {
+            content.push_str(&serde_json::to_string(&event).expect("audit event should serialize"));
+            content.push('\n');
+        }
+        fs::write(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE), content)
+            .expect("audit fixture should be written");
+
+        let mut runtime = super::GatewayRuntime::default();
+        runtime.collection = Some(CodexLocalAccessCollection {
+            enabled: true,
+            port: 45335,
+            api_key: "ck-test".to_string(),
+            safety_config: CodexLocalApiSafetyConfig::default(),
+            routing_strategy: CodexLocalAccessRoutingStrategy::Auto,
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: vec!["acc-a".to_string()],
+            created_at: 1,
+            updated_at: 2,
+        });
+
+        let diagnostics = super::build_concurrency_diagnostics(&runtime);
+
+        assert_eq!(diagnostics.recent_audit_event_count, 5);
+        assert_eq!(diagnostics.recent_request_count, 1);
+        assert_eq!(diagnostics.recent_local_backpressure_count, 1);
+        assert_eq!(diagnostics.recent_pool_wait_count, 1);
+        assert_eq!(diagnostics.recent_upstream_limit_count, 1);
+        assert_eq!(diagnostics.recent_stream_error_count, 1);
+        assert_eq!(
+            diagnostics.last_problem_kind.as_deref(),
+            Some("stream_error")
+        );
+        assert!(diagnostics.last_problem_at_ms.is_some());
+        assert!(diagnostics.audit_load_error.is_none());
 
         match previous {
             Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
@@ -13485,7 +13918,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             Some("604282")
         );
         assert_eq!(
-            classified.log_fields.get("active_limit").map(String::as_str),
+            classified
+                .log_fields
+                .get("active_limit")
+                .map(String::as_str),
             Some("weekly")
         );
         assert_eq!(
@@ -14576,6 +15012,10 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(audit.contains("\"streamState\":\"completed\""));
         assert!(audit.contains("\"outcome\":\"in_band_local_completion\""));
         assert!(audit.contains("\"errorType\":\"pool_unavailable\""));
+        assert!(audit.contains(
+            "\"codex_facing_terminal_contract\":\"response.completed_local_pool_unavailable\""
+        ));
+        assert!(audit.contains("\"recover_action\":\"retry_after_cooldown_or_start_new_task\""));
         assert!(!audit.contains("\"streamState\":\"failed\""));
         assert!(!audit.contains("\"streamState\":\"heartbeat\""));
 
@@ -20874,6 +21314,49 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(should_block_direct_projection_change(
             CodexRuntimeIntegrationMode::CockpitApiService,
             CodexRuntimeIntegrationMode::DirectProjection,
+            false,
+            &risk,
+        ));
+    }
+
+    #[test]
+    fn runtime_projection_change_blocks_both_auth_replacing_directions() {
+        let risk = continuity_risk_for_test(1, 0, false);
+
+        assert!(should_block_runtime_projection_change(
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            CodexRuntimeIntegrationMode::DirectProjection,
+            false,
+            &risk,
+        ));
+        assert!(should_block_runtime_projection_change(
+            CodexRuntimeIntegrationMode::DirectProjection,
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            false,
+            &risk,
+        ));
+    }
+
+    #[test]
+    fn runtime_projection_change_allows_force_no_risk_or_same_mode() {
+        let risk = continuity_risk_for_test(2, 1, true);
+        let no_risk = continuity_risk_for_test(0, 0, false);
+
+        assert!(!should_block_runtime_projection_change(
+            CodexRuntimeIntegrationMode::DirectProjection,
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            true,
+            &risk,
+        ));
+        assert!(!should_block_runtime_projection_change(
+            CodexRuntimeIntegrationMode::DirectProjection,
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            false,
+            &no_risk,
+        ));
+        assert!(!should_block_runtime_projection_change(
+            CodexRuntimeIntegrationMode::CockpitApiService,
+            CodexRuntimeIntegrationMode::CockpitApiService,
             false,
             &risk,
         ));

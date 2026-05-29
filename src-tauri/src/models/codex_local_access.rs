@@ -481,6 +481,29 @@ pub struct CodexLocalAccessHealthSummary {
 
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct CodexLocalAccessConcurrencyDiagnostics {
+    pub updated_at: i64,
+    pub max_concurrent_requests: u32,
+    pub active_request_count: u32,
+    pub active_stream_count: usize,
+    pub request_capacity: u32,
+    pub min_request_interval_seconds: u64,
+    pub max_queue_wait_seconds: u64,
+    pub start_interval_remaining_ms: u64,
+    pub audit_window_ms: i64,
+    pub recent_audit_event_count: usize,
+    pub recent_request_count: usize,
+    pub recent_local_backpressure_count: usize,
+    pub recent_pool_wait_count: usize,
+    pub recent_upstream_limit_count: usize,
+    pub recent_stream_error_count: usize,
+    pub last_problem_at_ms: Option<i64>,
+    pub last_problem_kind: Option<String>,
+    pub audit_load_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct CodexLocalAccessAccountHealthView {
     pub account_id: String,
     #[serde(default)]
@@ -521,6 +544,7 @@ pub struct CodexLocalAccessState {
     pub effective_account_ids: Vec<String>,
     pub stats: CodexLocalAccessStats,
     pub health: CodexLocalAccessHealthSummary,
+    pub concurrency_diagnostics: CodexLocalAccessConcurrencyDiagnostics,
 }
 
 #[derive(Debug, Clone, Serialize)]

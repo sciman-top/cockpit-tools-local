@@ -150,6 +150,27 @@ export interface CodexLocalAccessHealthSummary {
   auditDegradedAtMs: number | null;
 }
 
+export interface CodexLocalAccessConcurrencyDiagnostics {
+  updatedAt: number;
+  maxConcurrentRequests: number;
+  activeRequestCount: number;
+  activeStreamCount: number;
+  requestCapacity: number;
+  minRequestIntervalSeconds: number;
+  maxQueueWaitSeconds: number;
+  startIntervalRemainingMs: number;
+  auditWindowMs: number;
+  recentAuditEventCount: number;
+  recentRequestCount: number;
+  recentLocalBackpressureCount: number;
+  recentPoolWaitCount: number;
+  recentUpstreamLimitCount: number;
+  recentStreamErrorCount: number;
+  lastProblemAtMs: number | null;
+  lastProblemKind: string | null;
+  auditLoadError: string | null;
+}
+
 export interface CodexLocalAccessState {
   collection: CodexLocalAccessCollection | null;
   running: boolean;
@@ -162,6 +183,7 @@ export interface CodexLocalAccessState {
   effectiveAccountIds: string[];
   stats: CodexLocalAccessStats;
   health: CodexLocalAccessHealthSummary;
+  concurrencyDiagnostics: CodexLocalAccessConcurrencyDiagnostics;
 }
 
 export interface CodexLocalAccessPortCleanupResult {

@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-05-30T03:42:43.3943933+08:00",
+  "action": "stopped_old_cockpit_release",
+  "targetPid": 38240,
+  "wasRunning": true,
+  "stillRunning": false
+}

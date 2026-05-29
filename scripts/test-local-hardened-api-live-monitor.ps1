@@ -244,8 +244,8 @@ try {
     [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-current"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; outcome = "response_received" },
     [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "req-current"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ provider_code = "usage_limit_reached" } },
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "req-current"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded" },
-    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-current"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity" },
-    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-current"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion" },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "req-current"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-current"; retry_after_ms = "604372000" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "req-current"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 200; errorType = "pool_unavailable"; streamState = "completed"; outcome = "in_band_local_completion"; detail = [ordered]@{ gateway_request_id = "gw-current"; original_status = "429"; transport_status = "200"; retry_after_ms = "604372000"; codex_facing_terminal_contract = "response.completed_local_pool_unavailable"; recover_action = "retry_after_cooldown_or_start_new_task"; message = "模型 gpt-5.5 的可用账号均在冷却中，请 604372 秒 后重试" } },
     [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "req-next"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted" },
     [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "req-next"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active" },
     [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "req-next"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok" },
@@ -269,6 +269,28 @@ try {
   Assert-Equal (($sameTaskLocalCompletionSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "fail" "same-task local completion must fail hard-affinity guard"
   Assert-Equal (($sameTaskLocalCompletionSummary.results | Where-Object name -eq "responses_pool_unavailable_local_completion_explicit").status) "fail" "same-task local completion must fail local-completion guard"
   Assert-Equal $sameTaskLocalCompletionSummary.continuitySummary.sameTaskAffinityFallbackBlocked.status "fail" "expected same-task continuity summary fail"
+  Assert-Equal $sameTaskLocalCompletionSummary.audit.interruptedByLocalPoolUnavailableCount 1 "expected local pool_unavailable interruption alias"
+  Assert-Equal $sameTaskLocalCompletionSummary.audit.interruptedByLocalPoolUnavailableTransitions[0].gatewayRequestId "gw-current" "expected blocked gateway request id in interruption trace"
+  Assert-Equal $sameTaskLocalCompletionSummary.audit.interruptedByLocalPoolUnavailableTransitions[0].localCompletionTerminalContract "response.completed_local_pool_unavailable" "expected terminal contract in interruption trace"
+  Assert-Equal $sameTaskLocalCompletionSummary.audit.responsesLocalCompletionPoolUnavailableDetails[0].recoverAction "retry_after_cooldown_or_start_new_task" "expected recover action in local completion detail"
+
+  $sameTaskStopOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 5 `
+    -PollIntervalSeconds 1 `
+    -DataRoot $dataRootSameTaskLocalCompletion `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireQuotaFallback `
+    -RequireStreamCompletion `
+    -RequireCliConfigUntouched `
+    -RequireAppStable `
+    -StopWhenSatisfied `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 1) "expected same-task key failure stop fixture exit code 1"
+  $sameTaskStopSummary = Convert-JsonOutput $sameTaskStopOutput "same-task key failure stop fixture"
+  Assert-Equal $sameTaskStopSummary.terminationReason "stop_when_key_signal_fail" "expected StopWhenSatisfied to stop on key failure"
 
   $dataRootStructuredQuotaFromBlock = Join-Path $tempRoot "data-structured-quota-from-block"
   $auditStructuredQuotaFromBlock = Join-Path $dataRootStructuredQuotaFromBlock "codex_local_access_audit.jsonl"

@@ -621,6 +621,122 @@
   word-break: break-all;
 }
 
+.codex-local-access-diagnostics-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  background: color-mix(in srgb, var(--bg-card) 88%, rgba(239, 246, 255, 0.78));
+}
+
+.codex-local-access-diagnostics-panel.is-warning {
+  border-color: rgba(217, 119, 6, 0.22);
+  background: color-mix(in srgb, var(--bg-card) 86%, rgba(255, 251, 235, 0.86));
+}
+
+.codex-local-access-diagnostics-panel.is-danger {
+  border-color: rgba(220, 38, 38, 0.22);
+  background: color-mix(in srgb, var(--bg-card) 86%, rgba(254, 242, 242, 0.86));
+}
+
+.codex-local-access-diagnostics-head,
+.codex-local-access-diagnostics-title,
+.codex-local-access-diagnostics-metrics,
+.codex-local-access-diagnostics-meta,
+.codex-local-access-diagnostics-metric,
+.codex-local-access-diagnostics-hint {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.codex-local-access-diagnostics-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.codex-local-access-diagnostics-title {
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  color: #1d4ed8;
+}
+
+.codex-local-access-diagnostics-panel.is-warning .codex-local-access-diagnostics-title {
+  color: #b45309;
+}
+
+.codex-local-access-diagnostics-panel.is-danger .codex-local-access-diagnostics-title {
+  color: #b91c1c;
+}
+
+.codex-local-access-diagnostics-updated {
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.codex-local-access-diagnostics-metrics {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.codex-local-access-diagnostics-metric {
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.codex-local-access-diagnostics-metric strong {
+  color: var(--text-primary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.codex-local-access-diagnostics-metric-localBackpressure strong,
+.codex-local-access-diagnostics-metric-poolWait strong {
+  color: #b45309;
+}
+
+.codex-local-access-diagnostics-metric-upstreamLimit strong,
+.codex-local-access-diagnostics-metric-streamError strong {
+  color: #b91c1c;
+}
+
+.codex-local-access-diagnostics-hint {
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1.45;
+}
+
+.codex-local-access-diagnostics-hint svg {
+  flex: 0 0 auto;
+}
+
+.codex-local-access-diagnostics-meta {
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.codex-local-access-diagnostics-meta code {
+  color: var(--text-secondary);
+  font-size: 11px;
+  word-break: break-all;
+}
+
 .codex-local-access-quota-pool-grid {
   display: flex;
   align-items: center;
@@ -1954,6 +2070,7 @@
 [data-theme="dark"] .codex-local-access-config-card,
 [data-theme="dark"] .codex-local-access-account-stat-row,
 [data-theme="dark"] .codex-local-access-stat-card,
+[data-theme="dark"] .codex-local-access-diagnostics-panel,
 [data-theme="dark"] .codex-local-access-health-panel,
 [data-theme="dark"] .codex-local-access-member-section .group-account-item,
 [data-theme="dark"] .codex-local-access-member-section .group-account-item.group-account-item-header {
@@ -1969,6 +2086,31 @@
 [data-theme="dark"] .codex-local-access-health-metric {
   background: rgba(15, 23, 42, 0.48);
   border-color: rgba(148, 163, 184, 0.16);
+}
+
+[data-theme="dark"] .codex-local-access-diagnostics-panel.is-warning {
+  border-color: rgba(245, 158, 11, 0.22);
+}
+
+[data-theme="dark"] .codex-local-access-diagnostics-panel.is-danger {
+  border-color: rgba(248, 113, 113, 0.22);
+}
+
+[data-theme="dark"] .codex-local-access-diagnostics-metric {
+  background: rgba(15, 23, 42, 0.48);
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+[data-theme="dark"] .codex-local-access-diagnostics-title {
+  color: #93c5fd;
+}
+
+[data-theme="dark"] .codex-local-access-diagnostics-panel.is-warning .codex-local-access-diagnostics-title {
+  color: #fcd34d;
+}
+
+[data-theme="dark"] .codex-local-access-diagnostics-panel.is-danger .codex-local-access-diagnostics-title {
+  color: #fca5a5;
 }
 
 [data-theme="dark"] .codex-local-access-health-title {

@@ -75,6 +75,8 @@ const CODEX_TOKEN_SOURCE_MANAGED: &str = "managed";
 const CODEX_LOCAL_ACCESS_HEALTH_FILE: &str = "codex_local_access_health.json";
 const CODEX_STARTUP_QUOTA_SCAN_STATE_FILE: &str = "codex_startup_quota_scan.json";
 const CODEX_DIRECT_QUOTA_LOG_SYNC_STATE_FILE: &str = "codex_direct_quota_log_sync.json";
+const CODEX_MODEL_PROVIDERS_FILE_NAME: &str = "codex_model_providers.json";
+const CODEX_LOCAL_ACCESS_FILE_NAME: &str = "codex_local_access.json";
 const CODEX_STARTUP_QUOTA_SCAN_DELAY_SECONDS: u64 = 5;
 const CODEX_STARTUP_QUOTA_SCAN_MIN_INTERVAL_MS: i64 = 10 * 60 * 1000;
 const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
@@ -149,6 +151,20 @@ struct ApiProviderConfig {
     base_url: Option<String>,
     provider_id: Option<String>,
     provider_name: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct StoredCodexModelProvider {
+    id: Option<String>,
+    name: Option<String>,
+    #[serde(rename = "baseUrl", alias = "base_url")]
+    base_url: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredLocalAccessConfig {
+    port: Option<u16>,
 }
 
 fn is_default_openai_base_url(raw: &str) -> bool {

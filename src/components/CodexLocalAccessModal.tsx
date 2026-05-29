@@ -351,6 +351,7 @@ export function CodexLocalAccessModal({
   }, [stats, statsRange]);
   const selectedTotals = selectedStatsWindow?.totals;
   const health = state?.health ?? null;
+  const concurrencyDiagnostics = state?.concurrencyDiagnostics ?? null;
   const accountHealthById = useMemo(() => {
     const next = new Map<string, CodexLocalAccessAccountHealthView>();
     (health?.accounts ?? []).forEach((item) => {
@@ -449,6 +450,134 @@ export function CodexLocalAccessModal({
     ],
     [health, t],
   );
+  const concurrencyMetricItems = useMemo(() => {
+    if (!concurrencyDiagnostics) return [];
+    const auditWindowMinutes = Math.max(
+      1,
+      Math.round(concurrencyDiagnostics.auditWindowMs / 60_000),
+    );
+    return [
+      {
+        key: 'active',
+        label: t('codex.localAccess.diagnostics.activeRequests', '执行中请求'),
+        value: `${formatCompactNumber(concurrencyDiagnostics.activeRequestCount)}/${formatCompactNumber(
+          concurrencyDiagnostics.maxConcurrentRequests,
+        )}`,
+      },
+      {
+        key: 'streams',
+        label: t('codex.localAccess.diagnostics.activeStreams', '活跃流'),
+        value: formatCompactNumber(concurrencyDiagnostics.activeStreamCount),
+      },
+      {
+        key: 'interval',
+        label: t('codex.localAccess.diagnostics.startInterval', '启动间隔'),
+        value:
+          concurrencyDiagnostics.startIntervalRemainingMs > 0
+            ? formatLatencyMs(concurrencyDiagnostics.startIntervalRemainingMs)
+            : '0ms',
+      },
+      {
+        key: 'requests',
+        label: t('codex.localAccess.diagnostics.recentRequests', {
+          minutes: auditWindowMinutes,
+          defaultValue: '近 {{minutes}} 分钟请求',
+        }),
+        value: formatCompactNumber(concurrencyDiagnostics.recentRequestCount),
+      },
+      {
+        key: 'localBackpressure',
+        label: t('codex.localAccess.diagnostics.localBackpressure', '本地排队'),
+        value: formatCompactNumber(concurrencyDiagnostics.recentLocalBackpressureCount),
+      },
+      {
+        key: 'poolWait',
+        label: t('codex.localAccess.diagnostics.poolWait', '号池等待'),
+        value: formatCompactNumber(concurrencyDiagnostics.recentPoolWaitCount),
+      },
+      {
+        key: 'upstreamLimit',
+        label: t('codex.localAccess.diagnostics.upstreamLimit', '上游限额'),
+        value: formatCompactNumber(concurrencyDiagnostics.recentUpstreamLimitCount),
+      },
+      {
+        key: 'streamError',
+        label: t('codex.localAccess.diagnostics.streamError', '流错误'),
+        value: formatCompactNumber(concurrencyDiagnostics.recentStreamErrorCount),
+      },
+    ];
+  }, [concurrencyDiagnostics, t]);
+  const concurrencyDiagnosis = useMemo(() => {
+    if (!concurrencyDiagnostics) return null;
+    if (concurrencyDiagnostics.auditLoadError) {
+      return {
+        tone: 'warning',
+        text: t('codex.localAccess.diagnostics.auditLoadError', {
+          error: concurrencyDiagnostics.auditLoadError,
+          defaultValue: '审计日志读取降级：{{error}}',
+        }),
+      };
+    }
+    if (
+      concurrencyDiagnostics.activeStreamCount > 0 &&
+      concurrencyDiagnostics.recentPoolWaitCount > 0
+    ) {
+      return {
+        tone: 'warning',
+        text: t(
+          'codex.localAccess.diagnostics.hintActiveStreamPoolWait',
+          '有旧任务仍占用活跃流，新任务可能在等待旧流结束或同账号恢复。',
+        ),
+      };
+    }
+    if (concurrencyDiagnostics.recentLocalBackpressureCount > 0) {
+      return {
+        tone: 'warning',
+        text: t(
+          'codex.localAccess.diagnostics.hintLocalBackpressure',
+          'Cockpit 本地 admission 正在限速，这是保护上游与账号池的排队信号。',
+        ),
+      };
+    }
+    if (concurrencyDiagnostics.recentUpstreamLimitCount > 0) {
+      return {
+        tone: 'danger',
+        text: t(
+          'codex.localAccess.diagnostics.hintUpstreamLimit',
+          '账号、模型 quota 或 cooldown 更可能是当前瓶颈，优先看健康状态与冷却时间。',
+        ),
+      };
+    }
+    if (
+      concurrencyDiagnostics.activeRequestCount >=
+        concurrencyDiagnostics.maxConcurrentRequests ||
+      concurrencyDiagnostics.startIntervalRemainingMs > 0
+    ) {
+      return {
+        tone: 'warning',
+        text: t(
+          'codex.localAccess.diagnostics.hintAdmission',
+          '请求 admission 正在限速，新的请求会等到并发或启动间隔释放。',
+        ),
+      };
+    }
+    if (concurrencyDiagnostics.recentStreamErrorCount > 0) {
+      return {
+        tone: 'warning',
+        text: t(
+          'codex.localAccess.diagnostics.hintStreamError',
+          '近窗口内出现流错误，若 Codex App 仍显示 Thinking，需要区分后台任务是否已继续执行。',
+        ),
+      };
+    }
+    return {
+      tone: 'neutral',
+      text: t(
+        'codex.localAccess.diagnostics.hintNeutral',
+        'Cockpit 侧没有明显阻塞；若 Codex App 仍停在 Thinking，更可能是 App/session queue 或 UI 状态。',
+      ),
+    };
+  }, [concurrencyDiagnostics, t]);
   const actionBusy =
     saving || refreshing || testing || starting || portCleanupBusy || statsRefreshing;
   const summaryStats = useMemo(
@@ -1854,6 +1983,50 @@ export function CodexLocalAccessModal({
                   </div>
                 ))}
               </div>
+              {concurrencyDiagnostics && concurrencyDiagnosis && (
+                <div
+                  className={`codex-local-access-diagnostics-panel is-${concurrencyDiagnosis.tone}`}
+                >
+                  <div className="codex-local-access-diagnostics-head">
+                    <span className="codex-local-access-diagnostics-title">
+                      <Gauge size={15} />
+                      {t('codex.localAccess.diagnostics.title', '并发诊断')}
+                    </span>
+                    <span className="codex-local-access-diagnostics-updated">
+                      {formatTimestampMs(concurrencyDiagnostics.updatedAt)}
+                    </span>
+                  </div>
+                  <div className="codex-local-access-diagnostics-metrics">
+                    {concurrencyMetricItems.map((item) => (
+                      <span
+                        key={item.key}
+                        className={`codex-local-access-diagnostics-metric codex-local-access-diagnostics-metric-${item.key}`}
+                      >
+                        <span>{item.label}</span>
+                        <strong>{item.value}</strong>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="codex-local-access-diagnostics-hint">
+                    <Info size={14} />
+                    <span>{concurrencyDiagnosis.text}</span>
+                  </div>
+                  <div className="codex-local-access-diagnostics-meta">
+                    <span>
+                      {t('codex.localAccess.diagnostics.capacity', '剩余容量')}:{' '}
+                      <code>{formatCompactNumber(concurrencyDiagnostics.requestCapacity)}</code>
+                    </span>
+                    <span>
+                      {t('codex.localAccess.diagnostics.lastProblem', '最近问题')}:{' '}
+                      <code>{concurrencyDiagnostics.lastProblemKind ?? '--'}</code>
+                    </span>
+                    <span>
+                      {t('codex.localAccess.diagnostics.lastProblemAt', '问题时间')}:{' '}
+                      {formatTimestampMs(concurrencyDiagnostics.lastProblemAtMs)}
+                    </span>
+                  </div>
+                </div>
+              )}
               {health && (
                 <div className="codex-local-access-health-panel">
                   <div className="codex-local-access-health-head">

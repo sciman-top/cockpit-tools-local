@@ -1,0 +1,15 @@
+{
+  "timestamp": "2026-05-30T03:42:23.7662642+08:00",
+  "action": "backup_old_release_before_rebuild",
+  "processId": 38240,
+  "processName": "cockpit-tools",
+  "processPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+  "processStartTime": "2026-05-30T02:16:40.2551744+08:00",
+  "exeInfo": {
+    "FullName": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+    "Length": 62059520,
+    "CreationTime": "2026-05-24T22:54:48.7536228+08:00",
+    "LastWriteTime": "2026-05-24T22:54:52.4040769+08:00"
+  },
+  "exeHash": "C20681FD437568EC6A1006B092C9CCEAB45DD41A6F2E24F2FB9CEE64179A3C40"
+}

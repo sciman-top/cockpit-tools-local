@@ -1155,6 +1155,23 @@ function Get-AuditAcceptanceSummary {
   $responsesLocalCompletionPoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
     (Test-CodexFacingResponsesRoute $_ $gatewayClientRoutes) -and $_.status -eq 200 -and ($_.streamState -eq "completed" -or $_.outcome -eq "in_band_local_completion" -or $_.rawLine -match 'response\.completed')
   })
+  $responsesLocalCompletionPoolUnavailableDetails = @($responsesLocalCompletionPoolUnavailableEvents | ForEach-Object {
+    [ordered]@{
+      requestId = $_.requestId
+      gatewayRequestId = Get-AuditGatewayRequestId $_
+      timestamp = $_.timestamp
+      accountHash = $_.accountHash
+      status = $_.status
+      streamState = $_.streamState
+      outcome = $_.outcome
+      originalStatus = Get-AuditDetailValue -Event $_ -Name "original_status"
+      transportStatus = Get-AuditDetailValue -Event $_ -Name "transport_status"
+      retryAfterMs = Get-AuditDetailValue -Event $_ -Name "retry_after_ms"
+      terminalContract = Get-AuditDetailValue -Event $_ -Name "codex_facing_terminal_contract"
+      recoverAction = Get-AuditDetailValue -Event $_ -Name "recover_action"
+      message = Get-AuditDetailValue -Event $_ -Name "message"
+    }
+  })
   $responsesTransport503PoolUnavailableEvents = @($localPoolUnavailableEvents | Where-Object {
     (Test-CodexFacingResponsesRoute $_ $gatewayClientRoutes) -and $_.status -eq 503 -and $_.outcome -ne "in_band_synthetic"
   })
@@ -1315,10 +1332,18 @@ function Get-AuditAcceptanceSummary {
 
       $sameTaskAffinityBlockTransitions += [ordered]@{
         requestId = $event.requestId
+        gatewayRequestId = Get-AuditGatewayRequestId $event
         blockedAccountHash = $event.accountHash
         blockedTimestamp = $event.timestamp
+        blockedRetryAfterMs = Get-AuditDetailValue -Event $event -Name "retry_after_ms"
         localCompletionTimestamp = if ($localCompletion) { $localCompletion.timestamp } else { $null }
+        localCompletionGatewayRequestId = if ($localCompletion) { Get-AuditGatewayRequestId $localCompletion } else { $null }
         localCompletionAccountHash = if ($localCompletion) { $localCompletion.accountHash } else { $null }
+        localCompletionRetryAfterMs = if ($localCompletion) { Get-AuditDetailValue -Event $localCompletion -Name "retry_after_ms" } else { $null }
+        localCompletionOriginalStatus = if ($localCompletion) { Get-AuditDetailValue -Event $localCompletion -Name "original_status" } else { $null }
+        localCompletionTransportStatus = if ($localCompletion) { Get-AuditDetailValue -Event $localCompletion -Name "transport_status" } else { $null }
+        localCompletionTerminalContract = if ($localCompletion) { Get-AuditDetailValue -Event $localCompletion -Name "codex_facing_terminal_contract" } else { $null }
+        localCompletionRecoverAction = if ($localCompletion) { Get-AuditDetailValue -Event $localCompletion -Name "recover_action" } else { $null }
         terminalCompletionTimestamp = if ($terminalCompletion) { $terminalCompletion.timestamp } else { $null }
         terminalCompletionAccountHash = if ($terminalCompletion) { $terminalCompletion.accountHash } else { $null }
         terminal429Timestamp = if ($terminal429) { $terminal429.timestamp } else { $null }
@@ -2036,6 +2061,8 @@ function Get-AuditAcceptanceSummary {
     fallbackTransitions = @($fallbackTransitions)
     sameTaskAffinityFallbackBlockedCount = $sameTaskAffinityBlockTransitions.Count
     sameTaskAffinityLocalCompletionCount = $completedSameTaskAffinityBlocks.Count
+    interruptedByLocalPoolUnavailableCount = $completedSameTaskAffinityBlocks.Count
+    interruptedByLocalPoolUnavailableTransitions = @($completedSameTaskAffinityBlocks)
     sameTaskAffinityTerminalCompletionCount = $upstreamCompletedSameTaskAffinityBlocks.Count
     sameTaskAffinityTerminalCompletionRequestIds = @($upstreamCompletedSameTaskAffinityBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityUnrecoveredTerminal429Count = $unrecoveredHardAffinityTerminal429Blocks.Count
@@ -2117,6 +2144,7 @@ function Get-AuditAcceptanceSummary {
     responsesFailedPoolUnavailableRequestIds = @($responsesFailedPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     responsesLocalCompletionPoolUnavailableCount = $responsesLocalCompletionPoolUnavailableEvents.Count
     responsesLocalCompletionPoolUnavailableRequestIds = @($responsesLocalCompletionPoolUnavailableEvents | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    responsesLocalCompletionPoolUnavailableDetails = @($responsesLocalCompletionPoolUnavailableDetails)
     responsesTransport503PoolUnavailableCount = ([int]$responsesTransport503PoolUnavailableEvents.Count + [int]$responsesTransport503TextEvents.Count)
     responsesTransport503PoolUnavailableAuditCount = $responsesTransport503PoolUnavailableEvents.Count
     responsesTransport503PoolUnavailableTextCount = $responsesTransport503TextEvents.Count
@@ -3051,7 +3079,22 @@ function Write-MonitorJsonFile {
   if (-not [string]::IsNullOrWhiteSpace($dir)) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
   }
-  $Report | ConvertTo-Json -Depth 24 | Set-Content -LiteralPath $Path -Encoding UTF8
+  $json = $Report | ConvertTo-Json -Depth 24
+  $lastError = $null
+  for ($attempt = 1; $attempt -le 5; $attempt++) {
+    $tmpPath = "{0}.tmp-{1}-{2}" -f $Path, $PID, $attempt
+    try {
+      [System.IO.File]::WriteAllText($tmpPath, $json, [System.Text.UTF8Encoding]::new($false))
+      Move-Item -LiteralPath $tmpPath -Destination $Path -Force
+      return
+    } catch {
+      $lastError = $_
+      Remove-Item -LiteralPath $tmpPath -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Milliseconds ([Math]::Min(1000, 100 * $attempt))
+    }
+  }
+  $message = if ($lastError) { $lastError.Exception.Message } else { "unknown error" }
+  Write-Warning ("写入 monitor JSON 失败，已保留上一份文件: {0}; error={1}" -f $Path, $message)
 }
 
 if (-not $AuditPath) {
@@ -3135,6 +3178,21 @@ do {
 
   if ($StopWhenSatisfied) {
     $summaryNow = Get-AuditAcceptanceSummary $events
+    $keyFailureObserved = (
+      $summaryNow.sameTaskAffinityLocalCompletionCount -gt 0 -or
+      $summaryNow.responsesTransport503PoolUnavailableCount -gt 0 -or
+      $summaryNow.responsesFailedPoolUnavailableCount -gt 0 -or
+      $summaryNow.retryLimitErrorFound -or
+      $summaryNow.upstreamStreamErrorCount -gt 0 -or
+      $summaryNow.interruptedStreamCount -gt 0 -or
+      $summaryNow.stickyResetWaitKilledByLocalTimeoutCount -gt 0 -or
+      $summaryNow.stickyResetWaitExceededInlineBudgetCount -gt 0 -or
+      $summaryNow.inBandSyntheticPoolUnavailableCount -gt 0
+    )
+    if ($keyFailureObserved) {
+      $terminationReason = "stop_when_key_signal_fail"
+      break
+    }
     $quotaSatisfied = (-not $RequireQuotaFallback) -or ($summaryNow.has429 -and $summaryNow.hasUsageLimitReached -and $summaryNow.hasModelCooldownApplied -and ($summaryNow.sameTaskAffinityTerminalCompletionCount + $summaryNow.sameTaskAffinityStructuredQuotaTerminal429Count) -ge $RequiredFallbackCycles -and $summaryNow.sameTaskAffinityLocalCompletionCount -eq 0 -and $summaryNow.newRequestAvoidanceCount -gt 0 -and $summaryNow.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts)
     $streamSatisfied = (-not $RequireStreamCompletion) -or ($summaryNow.completedStreamCount -ge $RequiredCompletedStreams)
     $retrySatisfied = (-not $summaryNow.retryLimitErrorFound)
