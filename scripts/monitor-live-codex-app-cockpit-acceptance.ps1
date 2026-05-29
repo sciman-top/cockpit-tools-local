@@ -591,6 +591,93 @@ function Get-AuditDetailInt64 {
   $null
 }
 
+function Get-AuditDetailFirstValue {
+  param(
+    [System.Collections.IDictionary]$Event,
+    [string[]]$Names
+  )
+  foreach ($name in $Names) {
+    $value = Get-AuditDetailValue -Event $Event -Name $name
+    if (-not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-") {
+      return $value
+    }
+  }
+  $null
+}
+
+function Select-DistinctAuditDetailValues {
+  param(
+    [object[]]$Events,
+    [string[]]$Names,
+    [int]$Limit = 20
+  )
+  $values = @()
+  foreach ($event in $Events) {
+    $value = Get-AuditDetailFirstValue -Event $event -Names $Names
+    if (-not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-") {
+      $values += $value
+    }
+  }
+  @($values | Sort-Object -Unique | Select-Object -First $Limit)
+}
+
+function New-QuotaMetadataCoverage {
+  param([object[]]$ParsedEvents)
+
+  $fieldAliases = [ordered]@{
+    plan_type = @("plan_type", "planType")
+    provider_plan_type = @("provider_plan_type", "providerPlanType")
+    reset_at = @("reset_at", "resets_at", "resetAt")
+    reset_after_seconds = @("reset_after_seconds", "resets_in_seconds", "resetAfterSeconds")
+    retry_after_ms = @("retry_after_ms", "retryAfterMs")
+    active_limit = @("active_limit", "activeLimit")
+    rate_limit_reached_type = @("rate_limit_reached_type", "rateLimitReachedType")
+    promo_message_present = @("promo_message_present", "promoMessagePresent")
+  }
+  $fieldEventCounts = [ordered]@{}
+  $presentFieldNames = @()
+  foreach ($fieldName in $fieldAliases.Keys) {
+    $count = @($ParsedEvents | Where-Object {
+      $value = Get-AuditDetailFirstValue -Event $_ -Names $fieldAliases[$fieldName]
+      -not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-"
+    }).Count
+    $fieldEventCounts[$fieldName] = [int]$count
+    if ($count -gt 0) {
+      $presentFieldNames += $fieldName
+    }
+  }
+
+  $metadataEvents = @($ParsedEvents | Where-Object {
+    $hasMetadata = $false
+    foreach ($fieldName in $fieldAliases.Keys) {
+      $value = Get-AuditDetailFirstValue -Event $_ -Names $fieldAliases[$fieldName]
+      if (-not [string]::IsNullOrWhiteSpace($value) -and $value -ne "-") {
+        $hasMetadata = $true
+        break
+      }
+    }
+    $hasMetadata
+  })
+
+  [ordered]@{
+    metadataEventCount = [int]$metadataEvents.Count
+    fieldEventCounts = $fieldEventCounts
+    presentFieldNames = @($presentFieldNames)
+    missingFieldNames = @($fieldAliases.Keys | Where-Object { $_ -notin $presentFieldNames })
+    planTypes = @(Select-DistinctAuditDetailValues -Events $ParsedEvents -Names $fieldAliases["plan_type"])
+    providerPlanTypes = @(Select-DistinctAuditDetailValues -Events $ParsedEvents -Names $fieldAliases["provider_plan_type"])
+    resetAtValues = @(Select-DistinctAuditDetailValues -Events $ParsedEvents -Names $fieldAliases["reset_at"])
+    resetAfterSecondsValues = @(Select-DistinctAuditDetailValues -Events $ParsedEvents -Names $fieldAliases["reset_after_seconds"])
+    retryAfterMsValues = @(Select-DistinctAuditDetailValues -Events $ParsedEvents -Names $fieldAliases["retry_after_ms"])
+    activeLimits = @(Select-DistinctAuditDetailValues -Events $ParsedEvents -Names $fieldAliases["active_limit"])
+    rateLimitReachedTypes = @(Select-DistinctAuditDetailValues -Events $ParsedEvents -Names $fieldAliases["rate_limit_reached_type"])
+    promoMessagePresentCount = [int]$fieldEventCounts["promo_message_present"]
+    hasPlanMetadata = (($fieldEventCounts["plan_type"] + $fieldEventCounts["provider_plan_type"]) -gt 0)
+    hasResetMetadata = (($fieldEventCounts["reset_at"] + $fieldEventCounts["reset_after_seconds"] + $fieldEventCounts["retry_after_ms"]) -gt 0)
+    hasLimitMetadata = (($fieldEventCounts["active_limit"] + $fieldEventCounts["rate_limit_reached_type"]) -gt 0)
+  }
+}
+
 function Get-AuditEventTimestampMs {
   param([System.Collections.IDictionary]$Event)
   if ($null -eq $Event.timestamp) {
@@ -1878,6 +1965,7 @@ function Get-AuditAcceptanceSummary {
   $autoCompactReroutes = @($lineageSummaries | ForEach-Object { $_.autoCompactReroutes })
   $lineageLocalCompletionsAfterHardAffinity = @($lineageSummaries | ForEach-Object { $_.localCompletionAfterHardAffinity })
   $detailEvents = @($parsedEvents | Where-Object { $_.detail })
+  $quotaMetadataCoverage = New-QuotaMetadataCoverage $parsedEvents
   $requestTraceEvents = @($parsedEvents | Where-Object { $_.phase -eq "request_trace" })
   $hardAffinityContinuityRequestTraceEvents = @($requestTraceEvents | Where-Object { Get-AuditDetailBool -Event $_ -Name "hard_affinity_continuity" })
   $routingDecisionEvents = @($parsedEvents | Where-Object { $_.phase -eq "routing_decision" })
@@ -2064,6 +2152,7 @@ function Get-AuditAcceptanceSummary {
       presentFieldNames = @($lineagePresentFieldNames)
       missingFieldNames = @($lineageMissingFieldNames)
     }
+    quotaMetadataCoverage = $quotaMetadataCoverage
     requestTimelineCount = $requestTimelines.Count
     requestTimelines = @($requestTimelines)
     startedStreamCount = $startedStreams.Count
@@ -2273,6 +2362,18 @@ function New-AcceptanceResults {
     $results += Set-MonitorStatus $behaviorTrace "blocked" "当前 audit 仍是旧事件模型，缺少 request_trace/routing_decision/quota_classification/stream_terminal；请确认实跑使用的是当前源码构建出的 gateway，而不是过期 target/debug 二进制" $behaviorTraceEvidence
   } else {
     $results += Set-MonitorStatus $behaviorTrace "warn" "当前 audit 仍是旧事件模型，缺少 request_trace/routing_decision/quota_classification/stream_terminal 结构化行为追踪" $behaviorTraceEvidence
+  }
+
+  $quotaMetadata = New-MonitorResult "quota_metadata_fields_present"
+  $quotaMetadataEvidence = @{
+    quotaMetadataCoverage = $AuditSummary.quotaMetadataCoverage
+  }
+  if ($AuditSummary.eventCount -eq 0) {
+    $results += Set-MonitorStatus $quotaMetadata "skipped" "监测窗口内没有 audit 事件，无法评估 plan/quota 元数据覆盖率" $quotaMetadataEvidence
+  } elseif ($AuditSummary.hasUsageLimitReached -and -not ($AuditSummary.quotaMetadataCoverage.hasPlanMetadata -or $AuditSummary.quotaMetadataCoverage.hasResetMetadata -or $AuditSummary.quotaMetadataCoverage.hasLimitMetadata)) {
+    $results += Set-MonitorStatus $quotaMetadata "warn" "已观察到 usage_limit_reached，但 audit 缺少 plan_type/reset/active_limit 等元数据；Free/Plus 差异定位证据不足" $quotaMetadataEvidence
+  } else {
+    $results += Set-MonitorStatus $quotaMetadata "pass" $null $quotaMetadataEvidence
   }
 
   $newRequest = New-MonitorResult "new_request_avoids_exhausted_account"
@@ -2691,6 +2792,94 @@ function New-ContinuitySummary {
   }
 }
 
+function New-QuotaContinuityVerdict {
+  param([System.Collections.IDictionary]$AuditSummary)
+
+  $evidence = [ordered]@{
+    has429 = [bool]$AuditSummary.has429
+    hasUsageLimitReached = [bool]$AuditSummary.hasUsageLimitReached
+    hasModelCooldownApplied = [bool]$AuditSummary.hasModelCooldownApplied
+    fallbackSelectedCount = [int]$AuditSummary.fallbackSelectedCount
+    sameTaskAffinityFallbackBlockedCount = [int]$AuditSummary.sameTaskAffinityFallbackBlockedCount
+    sameTaskAffinityTerminalCompletionCount = [int]$AuditSummary.sameTaskAffinityTerminalCompletionCount
+    sameTaskAffinityStructuredQuotaTerminal429Count = [int]$AuditSummary.sameTaskAffinityStructuredQuotaTerminal429Count
+    sameTaskAffinityLocalCompletionCount = [int]$AuditSummary.sameTaskAffinityLocalCompletionCount
+    sameTaskAffinityUnstructuredTerminal429Count = [int]$AuditSummary.sameTaskAffinityUnstructuredTerminal429Count
+    newRequestAvoidanceCount = [int]$AuditSummary.newRequestAvoidanceCount
+    newRequestBlockedReuseCount = [int]$AuditSummary.newRequestBlockedReuseCount
+    upstreamStreamErrorCount = [int]$AuditSummary.upstreamStreamErrorCount
+    quotaMetadataCoverage = $AuditSummary.quotaMetadataCoverage
+  }
+  $status = "not_observed"
+  $reason = "监测窗口内未观察到完整 quota exhaustion 链路"
+  $plusLike = $false
+  $terminalQuota = $false
+
+  if ($AuditSummary.upstreamStreamErrorCount -gt 0) {
+    $status = "fail"
+    $reason = "已接纳 stream 出现 upstream_stream_error；无法证明 Plus-like in-flight continuation"
+  } elseif ($AuditSummary.sameTaskAffinityLocalCompletionCount -gt 0) {
+    $status = "fail"
+    $reason = "同任务 hard-affinity block 被本地 completed 响应闭合，不是上游真实持续完成"
+  } elseif ($AuditSummary.sameTaskAffinityUnstructuredTerminal429Count -gt 0 -or $AuditSummary.retryLimitErrorFound) {
+    $status = "fail"
+    $reason = "同任务 hard-affinity block 后出现非结构化 terminal 429/retry-limit"
+  } elseif ($AuditSummary.sameTaskAffinityStructuredQuotaTerminal429Count -gt 0) {
+    $status = "terminal_quota"
+    $terminalQuota = $true
+    $reason = "同任务以结构化 usage_limit_reached terminal 429 闭合；这是明确配额终态，不是 Plus-like 持续完成"
+  } elseif ($AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied -and $AuditSummary.sameTaskAffinityTerminalCompletionCount -ge $RequiredFallbackCycles -and $AuditSummary.newRequestAvoidanceCount -gt 0) {
+    $status = "plus_like"
+    $plusLike = $true
+    $reason = $null
+  } elseif ($AuditSummary.has429 -and $AuditSummary.hasUsageLimitReached -and $AuditSummary.hasModelCooldownApplied) {
+    $status = "blocked"
+    $reason = "已观察到 quota/cooldown，但尚未同时证明同任务完成与新请求避开 exhausted 账号"
+  }
+
+  [ordered]@{
+    status = $status
+    reason = $reason
+    plusLike = [bool]$plusLike
+    terminalQuota = [bool]$terminalQuota
+    evidence = $evidence
+  }
+}
+
+function New-HostDriftVerdict {
+  param(
+    [System.Collections.IDictionary]$CliComparison,
+    [System.Collections.IDictionary]$AppComparison
+  )
+
+  $cliUnchanged = [bool]$CliComparison.unchanged
+  $appStable = [bool]$AppComparison.stable
+  $status = "pass"
+  $reason = $null
+  if (-not $cliUnchanged -and -not $appStable) {
+    $status = "fail"
+    $reason = "Codex CLI config/auth 文件和 Codex App 进程集合均发生变化"
+  } elseif (-not $cliUnchanged) {
+    $status = "fail"
+    $reason = "Codex CLI config/auth 文件发生变化"
+  } elseif (-not $appStable) {
+    $status = "fail"
+    $reason = "Codex App 进程集合发生变化"
+  }
+
+  [ordered]@{
+    status = $status
+    reason = $reason
+    evidence = [ordered]@{
+      cliConfigUnchanged = $cliUnchanged
+      cliChangedFiles = @($CliComparison.changedFiles)
+      codexAppStable = $appStable
+      codexAppBeforeCount = [int]$AppComparison.beforeCount
+      codexAppAfterCount = [int]$AppComparison.afterCount
+    }
+  }
+}
+
 function New-CriticalSignals {
   param(
     [System.Collections.IDictionary]$ApiServiceRuntime,
@@ -2769,6 +2958,8 @@ function New-MonitorReport {
   $auditSummary = Get-AuditAcceptanceSummary $Events
   $results = New-AcceptanceResults -AuditSummary $auditSummary -CliComparison $cliComparison -AppComparison $appComparison -ApiServiceRuntime $apiServiceRuntime
   $continuitySummary = New-ContinuitySummary $auditSummary
+  $quotaContinuityVerdict = New-QuotaContinuityVerdict $auditSummary
+  $hostDriftVerdict = New-HostDriftVerdict -CliComparison $cliComparison -AppComparison $appComparison
   $criticalSignals = New-CriticalSignals -ApiServiceRuntime $apiServiceRuntime -GeneratedAt $EndedAt
   $overall = if ($results | Where-Object { $_.status -eq "fail" }) {
     "fail"
@@ -2835,6 +3026,8 @@ function New-MonitorReport {
     criticalSignals = @($criticalSignals)
     audit = $auditSummary
     continuitySummary = $continuitySummary
+    quotaContinuityVerdict = $quotaContinuityVerdict
+    hostDriftVerdict = $hostDriftVerdict
     results = $results
     safetyNotes = @(
       "this live monitor is read-only",

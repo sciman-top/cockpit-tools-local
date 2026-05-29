@@ -4420,9 +4420,50 @@ export function CodexAccountsPage() {
     ],
   );
 
+  const confirmRemoveLocalAccessAccounts = useCallback(
+    async (accountIds: string[]) => {
+      if (accountIds.length === 0) return false;
+      const removedAccount =
+        accountIds.length === 1
+          ? accounts.find((account) => account.id === accountIds[0])
+          : null;
+      const removedAccountLabel = removedAccount
+        ? maskAccountText(resolvePresentation(removedAccount).displayName)
+        : t("codex.localAccess.modal.thisAccount", "该账号");
+      return confirmDialog(
+        accountIds.length === 1
+          ? t("codex.localAccess.modal.removeMemberConfirmMessage", {
+              account: removedAccountLabel,
+              defaultValue:
+                "确定要将 {{account}} 移出 API 服务吗？移出后它不会参与本机 API 服务调度，账号本身不会被删除。",
+            })
+          : t("codex.localAccess.modal.removeMembersConfirmMessage", {
+              count: accountIds.length,
+              defaultValue:
+                "确定要将 {{count}} 个账号移出 API 服务吗？移出后这些账号不会参与本机 API 服务调度，账号本身不会被删除。",
+            }),
+        {
+          title: t(
+            "codex.localAccess.modal.removeMemberConfirmTitle",
+            "确认移出 API 服务",
+          ),
+          kind: "warning",
+          okLabel: t(
+            "codex.localAccess.modal.removeMemberConfirmAction",
+            "确认移出",
+          ),
+          cancelLabel: t("common.cancel", "取消"),
+        },
+      );
+    },
+    [accounts, maskAccountText, resolvePresentation, t],
+  );
+
   const handleRemoveLocalAccessAccount = useCallback(
     async (accountId: string) => {
       if (!localAccessCollection) return;
+      const confirmed = await confirmRemoveLocalAccessAccounts([accountId]);
+      if (!confirmed) return;
       try {
         await handleSaveLocalAccessAccounts(
           localAccessCollection.accountIds.filter((id) => id !== accountId),
@@ -4441,7 +4482,13 @@ export function CodexAccountsPage() {
         });
       }
     },
-    [handleSaveLocalAccessAccounts, localAccessCollection, setMessage, t],
+    [
+      confirmRemoveLocalAccessAccounts,
+      handleSaveLocalAccessAccounts,
+      localAccessCollection,
+      setMessage,
+      t,
+    ],
   );
 
   const handleAddLocalAccessAccounts = useCallback(
@@ -4509,12 +4556,17 @@ export function CodexAccountsPage() {
   const handleRemoveSelectedFromLocalAccess = useCallback(async () => {
     if (!localAccessCollection) return;
     const selectedAccountIds = new Set(selected);
+    const removedAccountIds = localAccessCollection.accountIds.filter(
+      (accountId) => selectedAccountIds.has(accountId),
+    );
     const nextAccountIds = localAccessCollection.accountIds.filter(
       (accountId) => !selectedAccountIds.has(accountId),
     );
     if (nextAccountIds.length === localAccessCollection.accountIds.length) {
       return;
     }
+    const confirmed = await confirmRemoveLocalAccessAccounts(removedAccountIds);
+    if (!confirmed) return;
     try {
       await handleSaveLocalAccessAccounts(nextAccountIds, {
         restrictFreeAccounts: localAccessCollection.restrictFreeAccounts ?? false,
@@ -4529,6 +4581,7 @@ export function CodexAccountsPage() {
       });
     }
   }, [
+    confirmRemoveLocalAccessAccounts,
     handleSaveLocalAccessAccounts,
     localAccessCollection,
     selected,

@@ -13444,6 +13444,79 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn classifier_records_safe_plan_and_quota_metadata_without_raw_prompt_text() {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert("x-codex-plan-type", HeaderValue::from_static("free"));
+        headers.insert("x-codex-active-limit", HeaderValue::from_static("weekly"));
+        headers.insert(
+            "x-codex-rate-limit-reached-type",
+            HeaderValue::from_static("weekly"),
+        );
+        headers.insert(
+            "x-codex-promo-message",
+            HeaderValue::from_static("upgrade raw-prompt user@example.com"),
+        );
+        let body = r#"{"error":{"type":"usage_limit_reached","plan_type":"free","resets_at":1700000360000,"resets_in_seconds":604282,"promo_message":"upgrade raw prompt user@example.com","message":"raw prompt text sk-secret user@example.com"}}"#;
+
+        let classified =
+            classify_codex_upstream_error(StatusCode::TOO_MANY_REQUESTS, Some(&headers), body);
+        let audit_detail = classified_audit_detail(&classified);
+
+        assert_eq!(
+            classified.log_fields.get("plan_type").map(String::as_str),
+            Some("free")
+        );
+        assert_eq!(
+            classified
+                .log_fields
+                .get("provider_plan_type")
+                .map(String::as_str),
+            Some("free")
+        );
+        assert_eq!(
+            classified.log_fields.get("reset_at").map(String::as_str),
+            Some("1700000360")
+        );
+        assert_eq!(
+            classified
+                .log_fields
+                .get("reset_after_seconds")
+                .map(String::as_str),
+            Some("604282")
+        );
+        assert_eq!(
+            classified.log_fields.get("active_limit").map(String::as_str),
+            Some("weekly")
+        );
+        assert_eq!(
+            classified
+                .log_fields
+                .get("rate_limit_reached_type")
+                .map(String::as_str),
+            Some("weekly")
+        );
+        assert_eq!(
+            classified
+                .log_fields
+                .get("promo_message_present")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            audit_detail.get("provider_plan_type").map(String::as_str),
+            Some("free")
+        );
+
+        let serialized = serde_json::to_string(&audit_detail).expect("detail serializes");
+        for secret in ["raw prompt", "raw-prompt", "sk-secret", "user@example.com"] {
+            assert!(
+                !serialized.contains(secret),
+                "classified audit detail leaked {secret}"
+            );
+        }
+    }
+
+    #[test]
     fn api_service_usage_limit_writes_zero_quota_snapshot_with_reset_hint() {
         let now_ms = 1_700_000_000_000;
         let mut account = test_codex_account("api-service-quota");

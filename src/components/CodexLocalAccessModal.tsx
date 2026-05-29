@@ -1345,6 +1345,39 @@ export function CodexLocalAccessModal({
     if (actionBusy) return;
     const removalIds = new Set(accountIds);
     if (removalIds.size === 0) return;
+    const removedAccountIds = selectedOrderForSave.filter((accountId) =>
+      removalIds.has(accountId),
+    );
+    const removedCount = removedAccountIds.length;
+    if (removedCount === 0) return;
+    const removedAccount =
+      removedCount === 1 ? accountById.get(removedAccountIds[0]) : null;
+    const removedAccountLabel = removedAccount
+      ? maskAccountText(buildCodexAccountPresentation(removedAccount, t).displayName)
+      : t('codex.localAccess.modal.thisAccount', '该账号');
+    const confirmed = await confirmDialog(
+      removedCount === 1
+        ? t('codex.localAccess.modal.removeMemberConfirmMessage', {
+            account: removedAccountLabel,
+            defaultValue:
+              '确定要将 {{account}} 移出 API 服务吗？移出后它不会参与本机 API 服务调度，账号本身不会被删除。',
+          })
+        : t('codex.localAccess.modal.removeMembersConfirmMessage', {
+            count: removedCount,
+            defaultValue:
+              '确定要将 {{count}} 个账号移出 API 服务吗？移出后这些账号不会参与本机 API 服务调度，账号本身不会被删除。',
+          }),
+      {
+        title: t(
+          'codex.localAccess.modal.removeMemberConfirmTitle',
+          '确认移出 API 服务',
+        ),
+        kind: 'warning',
+        okLabel: t('codex.localAccess.modal.removeMemberConfirmAction', '确认移出'),
+        cancelLabel: t('common.cancel', '取消'),
+      },
+    );
+    if (!confirmed) return;
     setError('');
     setNotice('');
     const nextSelected = new Set(selected);
@@ -1352,8 +1385,6 @@ export function CodexLocalAccessModal({
     const nextOrder = selectedOrderForSave.filter(
       (accountId) => !removalIds.has(accountId),
     );
-    const removedCount = selectedOrderForSave.length - nextOrder.length;
-    if (removedCount === 0) return;
     try {
       const filtered = buildPersistedMemberIds(nextOrder);
       await onSaveAccounts({
