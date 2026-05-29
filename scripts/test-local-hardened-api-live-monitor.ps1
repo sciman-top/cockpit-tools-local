@@ -579,12 +579,15 @@ try {
     [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "turn:sha256:same"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded"; detail = [ordered]@{ gateway_request_id = "gw-same-quota"; turn_lineage_id = "turn:sha256:same" } },
     [ordered]@{ schemaVersion = 1; timestamp = 10; requestId = "turn:sha256:same"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-same-quota"; turn_lineage_id = "turn:sha256:same" } },
     [ordered]@{ schemaVersion = 1; timestamp = 11; requestId = "turn:sha256:same"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 429; errorType = "usage_limit_reached"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-same-quota"; turn_lineage_id = "turn:sha256:same" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 12; requestId = "turn:sha256:next-after-same"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same"; turn_lineage_source = "codex_turn_state" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 13; requestId = "turn:sha256:next-after-same"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same"; hard_affinity_continuity = "false" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 14; requestId = "turn:sha256:next-after-same"; phase = "routing_decision"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; outcome = "selected"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 15; requestId = "turn:sha256:next-after-same"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 16; requestId = "turn:sha256:next-after-same"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 17; requestId = "turn:sha256:next-after-same"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same"; upstream_response_id_hash = "response:sha256:next" } }
+    [ordered]@{ schemaVersion = 1; timestamp = 12; requestId = "turn:sha256:same"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; status = 200; streamState = "finished"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-same-open"; turn_lineage_id = "turn:sha256:same" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 13; requestId = "turn:sha256:same"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-same-open"; turn_lineage_id = "turn:sha256:same"; upstream_response_id_hash = "response:sha256:same-open" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 14; requestId = "turn:sha256:same"; phase = "lease_released"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:exhausted"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-same-open"; turn_lineage_id = "turn:sha256:same" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 15; requestId = "turn:sha256:next-after-same"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 16; requestId = "turn:sha256:next-after-same"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same"; hard_affinity_continuity = "false" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 17; requestId = "turn:sha256:next-after-same"; phase = "routing_decision"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; outcome = "selected"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 18; requestId = "turn:sha256:next-after-same"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 19; requestId = "turn:sha256:next-after-same"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; streamState = "first_chunk_written"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 20; requestId = "turn:sha256:next-after-same"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-next-after-same"; turn_lineage_id = "turn:sha256:next-after-same"; upstream_response_id_hash = "response:sha256:next" } }
   )
   $sameTurnMultiGatewayOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
     -DurationSeconds 0 `
@@ -876,6 +879,41 @@ try {
   Assert-Equal $structuredTraceSummary.audit.streamTerminalCompactionSummaryCount 1 "expected compaction summary trace count"
   Assert-Equal $structuredTraceSummary.audit.completedStreamCount 1 "expected stream_terminal to count as completed stream"
   Assert-Equal (($structuredTraceSummary.results | Where-Object name -eq "structured_behavior_trace_present").status) "pass" "expected structured behavior trace coverage pass"
+
+  $dataRootAccountExhaustionInFlight = Join-Path $tempRoot "data-account-exhaustion-inflight"
+  $auditAccountExhaustionInFlight = Join-Path $dataRootAccountExhaustionInFlight "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditAccountExhaustionInFlight @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:inflight"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-inflight"; turn_lineage_id = "turn:sha256:inflight"; turn_lineage_source = "codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:inflight"; phase = "request_trace"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "prepared"; detail = [ordered]@{ gateway_request_id = "gw-inflight"; turn_lineage_id = "turn:sha256:inflight"; turn_lineage_source = "codex_turn_state"; hard_affinity_continuity = "true"; sticky_boundary = "x_codex_turn_state" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:inflight"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-inflight"; turn_lineage_id = "turn:sha256:inflight"; lease_id = "inflight-1" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:inflight"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; streamState = "first_chunk_written"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-inflight"; turn_lineage_id = "turn:sha256:inflight" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:exhaust-trigger"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-exhaust-trigger"; turn_lineage_id = "turn:sha256:exhaust-trigger"; provider_code = "usage_limit_reached" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:exhaust-trigger"; phase = "quota_classification"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "classified"; detail = [ordered]@{ gateway_request_id = "gw-exhaust-trigger"; turn_lineage_id = "turn:sha256:exhaust-trigger"; provider_code = "usage_limit_reached" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:exhaust-trigger"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded"; detail = [ordered]@{ gateway_request_id = "gw-exhaust-trigger"; turn_lineage_id = "turn:sha256:exhaust-trigger" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:inflight"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; streamState = "finished"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-inflight"; turn_lineage_id = "turn:sha256:inflight" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "turn:sha256:inflight"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-inflight"; turn_lineage_id = "turn:sha256:inflight"; lease_id = "inflight-1"; upstream_response_id_hash = "response:sha256:inflight" } }
+  )
+  $accountExhaustionInFlightOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootAccountExhaustionInFlight `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireStreamCompletion `
+    -RequiredCompletedStreams 1 `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor account exhaustion in-flight fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $accountExhaustionInFlightSummary = Convert-JsonOutput $accountExhaustionInFlightOutput "account exhaustion in-flight fixture"
+  Assert-Equal $accountExhaustionInFlightSummary.overall "pass" "expected account exhaustion in-flight fixture overall"
+  Assert-Equal $accountExhaustionInFlightSummary.audit.accountExhaustionContinuityCount 1 "expected one exhausted account continuity summary"
+  Assert-Equal $accountExhaustionInFlightSummary.audit.inFlightAtAccountExhaustionCount 1 "expected one in-flight stream at exhaustion"
+  Assert-Equal $accountExhaustionInFlightSummary.audit.completedAfterAccountExhaustionCount 1 "expected in-flight stream to complete after exhaustion"
+  Assert-Equal $accountExhaustionInFlightSummary.audit.openAfterAccountExhaustionCount 0 "expected no open stream after exhaustion"
+  Assert-Equal (($accountExhaustionInFlightSummary.results | Where-Object name -eq "in_flight_streams_survive_account_exhaustion").status) "pass" "expected account exhaustion stream continuity result pass"
+  Assert-Equal $accountExhaustionInFlightSummary.continuitySummary.accountExhaustionInFlightContinuity.status "pass" "expected continuity summary for account exhaustion stream pass"
 
   $dataRootStickyResetTimeout = Join-Path $tempRoot "data-sticky-reset-timeout"
   $auditStickyResetTimeout = Join-Path $dataRootStickyResetTimeout "codex_local_access_audit.jsonl"

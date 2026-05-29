@@ -82,6 +82,38 @@
   max-width: 100%;
 }
 
+.codex-accounts-page .codex-group-folder-card .folder-icon-btn,
+.codex-accounts-page .folder-table-actions .folder-icon-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.codex-accounts-page .codex-group-folder-card .folder-preview-remove-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+}
+
+.codex-accounts-page .folder-breadcrumb {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.codex-accounts-page .folder-breadcrumb .breadcrumb-back,
+.codex-accounts-page .folder-breadcrumb .breadcrumb-remove-btn {
+  min-height: 34px;
+  padding: 7px 12px;
+}
+
+.codex-accounts-page .folder-breadcrumb .breadcrumb-current + .breadcrumb-remove-btn {
+  margin-left: auto;
+}
+
+.codex-accounts-page .folder-breadcrumb .breadcrumb-remove-btn + .breadcrumb-remove-btn {
+  margin-left: 0;
+}
+
 .codex-local-access-card {
   --codex-local-card-bg: var(--bg-card);
   --codex-local-card-border: var(--border);

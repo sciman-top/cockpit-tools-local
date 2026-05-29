@@ -1122,6 +1122,22 @@ fn repair_runtime_projection_history_visibility() -> Result<(), String> {
     Ok(())
 }
 
+fn repair_runtime_projection_history_visibility_if_needed(source: &str) {
+    let mode = load_runtime_mode_state()
+        .map(|state| state.mode)
+        .unwrap_or(CodexRuntimeIntegrationMode::DirectProjection);
+    if mode != CodexRuntimeIntegrationMode::CockpitApiService {
+        return;
+    }
+
+    if let Err(err) = repair_runtime_projection_history_visibility() {
+        logger::log_warn(&format!(
+            "[CodexRuntimeMode] {} 后同步历史会话 provider 投影失败: {}",
+            source, err
+        ));
+    }
+}
+
 async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(), String> {
     let models_url = format!("http://{CODEX_LOCAL_ACCESS_URL_HOST}:{port}/v1/models");
     let client = Client::builder()
@@ -4312,6 +4328,151 @@ fn sanitize_provider_code(value: &str) -> Option<String> {
     Some(safe)
 }
 
+fn first_safe_json_metadata_field(value: &Value, keys: &[&str]) -> Option<String> {
+    keys.iter().find_map(|key| {
+        value
+            .get(*key)
+            .and_then(Value::as_str)
+            .and_then(sanitize_provider_code)
+    })
+}
+
+fn insert_safe_upstream_header_metadata(
+    log_fields: &mut BTreeMap<String, String>,
+    headers: Option<&HeaderMap>,
+    field_name: &str,
+    header_name: &str,
+) {
+    let Some(headers) = headers else {
+        return;
+    };
+    let Some(value) = headers
+        .get(header_name)
+        .and_then(|value| value.to_str().ok())
+        .and_then(sanitize_provider_code)
+    else {
+        return;
+    };
+
+    log_fields.insert(field_name.to_string(), value);
+}
+
+fn insert_codex_upstream_quota_metadata(
+    log_fields: &mut BTreeMap<String, String>,
+    headers: Option<&HeaderMap>,
+    parsed: Option<&Value>,
+) {
+    if let Some(root) = parsed {
+        let candidates = [
+            Some(root),
+            root.get("error"),
+            root.get("detail"),
+            root.get("data"),
+        ];
+
+        for candidate in candidates.into_iter().flatten() {
+            if !log_fields.contains_key("plan_type") {
+                if let Some(plan_type) =
+                    first_safe_json_metadata_field(candidate, &["plan_type", "planType"])
+                {
+                    log_fields.insert("plan_type".to_string(), plan_type);
+                }
+            }
+            if !log_fields.contains_key("provider_plan_type") {
+                if let Some(plan_type) = first_safe_json_metadata_field(
+                    candidate,
+                    &["provider_plan_type", "providerPlanType"],
+                ) {
+                    log_fields.insert("provider_plan_type".to_string(), plan_type);
+                }
+            }
+            if !log_fields.contains_key("reset_at") {
+                if let Some(reset_at) = first_i64_json_field(
+                    candidate,
+                    [
+                        "reset_at",
+                        "resets_at",
+                        "resetAt",
+                        "reset_at_seconds",
+                        "reset_timestamp",
+                        "reset_time",
+                    ],
+                )
+                .map(normalize_unix_timestamp_seconds)
+                {
+                    log_fields.insert("reset_at".to_string(), reset_at.to_string());
+                }
+            }
+            if !log_fields.contains_key("reset_after_seconds") {
+                if let Some(reset_after_seconds) = first_i64_json_field(
+                    candidate,
+                    [
+                        "reset_after_seconds",
+                        "resets_in_seconds",
+                        "resetAfterSeconds",
+                        "retry_after_seconds",
+                        "retry_after",
+                    ],
+                )
+                .filter(|seconds| *seconds >= 0)
+                {
+                    log_fields.insert(
+                        "reset_after_seconds".to_string(),
+                        reset_after_seconds.to_string(),
+                    );
+                }
+            }
+            if !log_fields.contains_key("active_limit") {
+                if let Some(active_limit) = first_safe_json_metadata_field(
+                    candidate,
+                    &["active_limit", "activeLimit"],
+                ) {
+                    log_fields.insert("active_limit".to_string(), active_limit);
+                }
+            }
+            if !log_fields.contains_key("rate_limit_reached_type") {
+                if let Some(limit_type) = first_safe_json_metadata_field(
+                    candidate,
+                    &["rate_limit_reached_type", "rateLimitReachedType"],
+                ) {
+                    log_fields.insert("rate_limit_reached_type".to_string(), limit_type);
+                }
+            }
+            if !log_fields.contains_key("promo_message_present")
+                && (candidate.get("promo_message").is_some()
+                    || candidate.get("promoMessage").is_some())
+            {
+                log_fields.insert("promo_message_present".to_string(), "true".to_string());
+            }
+        }
+    }
+
+    insert_safe_upstream_header_metadata(
+        log_fields,
+        headers,
+        "provider_plan_type",
+        "x-codex-plan-type",
+    );
+    insert_safe_upstream_header_metadata(
+        log_fields,
+        headers,
+        "active_limit",
+        "x-codex-active-limit",
+    );
+    insert_safe_upstream_header_metadata(
+        log_fields,
+        headers,
+        "rate_limit_reached_type",
+        "x-codex-rate-limit-reached-type",
+    );
+    if headers
+        .and_then(|headers| headers.get("x-codex-promo-message"))
+        .is_some()
+    {
+        log_fields.insert("promo_message_present".to_string(), "true".to_string());
+    }
+}
+
 fn extract_provider_error_code(parsed: &Value) -> Option<String> {
     for value in [
         parsed
@@ -4570,6 +4731,7 @@ fn classify_codex_upstream_error(
     if let Some(wait) = retry_after {
         log_fields.insert("retry_after_ms".to_string(), wait.as_millis().to_string());
     }
+    insert_codex_upstream_quota_metadata(&mut log_fields, headers, parsed.as_ref());
 
     ClassifiedCodexUpstreamError {
         error_type,
@@ -8122,15 +8284,23 @@ pub async fn set_local_access_enabled_with_options(
             risk.as_ref(),
         );
     }
+    if enabled {
+        repair_runtime_projection_history_visibility_if_needed("API 服务启用");
+    }
     snapshot_state().await
 }
 
 pub async fn restore_local_access_gateway() {
-    if let Err(err) = ensure_runtime_loaded().await {
-        let mut runtime = gateway_runtime().lock().await;
-        runtime.loaded = true;
-        runtime.last_error = Some(err.clone());
-        logger::log_codex_api_warn(&format!("[CodexLocalAccess] 初始化失败: {}", err));
+    match ensure_runtime_loaded().await {
+        Ok(()) => {
+            repair_runtime_projection_history_visibility_if_needed("Cockpit 启动恢复");
+        }
+        Err(err) => {
+            let mut runtime = gateway_runtime().lock().await;
+            runtime.loaded = true;
+            runtime.last_error = Some(err.clone());
+            logger::log_codex_api_warn(&format!("[CodexLocalAccess] 初始化失败: {}", err));
+        }
     }
 }
 
@@ -9247,7 +9417,8 @@ fn classified_audit_outcome(classified: &ClassifiedCodexUpstreamError) -> &'stat
 }
 
 fn classified_audit_detail(classified: &ClassifiedCodexUpstreamError) -> BTreeMap<String, String> {
-    let mut detail = BTreeMap::from([
+    let mut detail = classified.log_fields.clone();
+    detail.extend(BTreeMap::from([
         ("source".to_string(), classified.source.as_str().to_string()),
         ("scope".to_string(), classified.scope.as_str().to_string()),
         (
@@ -9258,7 +9429,7 @@ fn classified_audit_detail(classified: &ClassifiedCodexUpstreamError) -> BTreeMa
             "failover_safe".to_string(),
             classified.safe_for_request_failover().to_string(),
         ),
-    ]);
+    ]));
 
     if let Some(provider_code) = classified.provider_code.as_deref() {
         detail.insert("provider_code".to_string(), provider_code.to_string());
@@ -11937,6 +12108,10 @@ fn should_write_in_band_pool_unavailable_response(
     response_adapter: &GatewayResponseAdapter,
     error: &ProxyDispatchError,
 ) -> bool {
+    // Only independent /v1/responses requests may be closed with a local
+    // completed Responses payload. Official Codex sticky boundaries must keep
+    // the transport/error contract so a continuation is not mistaken for an
+    // upstream-completed turn.
     is_pool_unavailable_dispatch_error(error)
         && is_responses_request(&request.target)
         && matches!(response_adapter, GatewayResponseAdapter::Passthrough { .. })
@@ -12884,8 +13059,9 @@ mod tests {
         build_routing_pool_account_ids, build_runtime_account, build_runtime_mode_state,
         build_selector_audit_summary, cache_prepared_account,
         classify_active_stream_terminal_error, classify_codex_api_failure,
-        classify_codex_upstream_error, constrain_previous_response_affinity, empty_health_registry,
-        extract_usage_capture, filter_local_access_account_ids, first_audit_timestamp_from_path,
+        classify_codex_upstream_error, classified_audit_detail,
+        constrain_previous_response_affinity, empty_health_registry, extract_usage_capture,
+        filter_local_access_account_ids, first_audit_timestamp_from_path,
         first_stable_local_access_port, gateway_runtime, grant_active_stream_lease,
         grant_active_stream_lease_for_request, handle_connection,
         hard_affinity_inline_retry_wait_limit, health_registry_account_cooldown_wait,
@@ -18290,6 +18466,27 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             },
             &error
         ));
+
+        let metadata_only_request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                "x-codex-turn-metadata".to_string(),
+                r#"{"turn_id":"turn-observable-only"}"#.to_string(),
+            )]),
+            body: br#"{"model":"gpt-5.5","input":"new independent request"}"#.to_vec(),
+            gateway_request_id: "gw-test-sticky-pool-3".to_string(),
+        };
+        assert!(
+            should_write_in_band_pool_unavailable_response(
+                &metadata_only_request,
+                &GatewayResponseAdapter::Passthrough {
+                    request_is_stream: true
+                },
+                &error
+            ),
+            "x-codex-turn-metadata is official observability lineage, not a hard-affinity boundary"
+        );
     }
 
     #[test]

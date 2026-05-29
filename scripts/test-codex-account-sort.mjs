@@ -567,7 +567,7 @@ assert.deepEqual(
     refreshNowMs,
   ),
   ['healthy-a', 'healthy-b'],
-  'Local access refresh priority should use deterministic account metadata instead of preserving caller order',
+  'Local access refresh priority should use deterministic account metadata instead of trusting input sequence',
 );
 
 assert.deepEqual(
@@ -585,7 +585,7 @@ assert.deepEqual(
     )
     .map((account) => account.id),
   ['service-newer', 'service-saved-first'],
-  'API service recommended sort should not use the saved member order as a tie-breaker',
+  'API service recommended sort should not use membership sequence as a tie-breaker',
 );
 
 assert.deepEqual(
@@ -603,7 +603,7 @@ assert.deepEqual(
     )
     .map((account) => account.id),
   ['group-newer', 'group-saved-first'],
-  'Grouped recommended sort should not use the group-internal saved order as a tie-breaker',
+  'Grouped recommended sort should not use group membership sequence as a tie-breaker',
 );
 
 await rm(outdir, { force: true, recursive: true });

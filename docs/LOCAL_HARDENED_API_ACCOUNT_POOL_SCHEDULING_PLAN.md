@@ -91,7 +91,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 - 优先 `last_success_at` 最近的账号，保持同 IP 下账号连续性。
 - 对已耗尽但 reset 已到的账号，优先 `last_quota_exhausted_at` 更早的账号，避免刚恢复账号马上被重复打满。
-- 周额度相同且都健康时，继续按 reset/cooldown、最近成功、更新时间、账号创建时间和账号 ID 做稳定 tie-break；`collection.account_ids` 和分组 `accountIds` 只表示成员集合，不表达用户手动顺序。
+- 周额度相同且都健康时，继续按 reset/cooldown、最近成功、更新时间、账号创建时间和账号 ID 做稳定 tie-break；`collection.account_ids` 和分组 `accountIds` 只表示成员集合，不参与 tie-break。
 - `weekly_reset_time` 只用于判断恢复或展示等待，不应让“还没恢复但 reset 时间最近”的账号抢在健康账号前面。
 
 当前实现锚点：
@@ -107,7 +107,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 1. API 服务号池成员置顶；成员内部按 health/quota/reset/连续性证据排序，只在当前账号可用时置顶、当前账号耗尽时置末。
 2. 当前账号/本次已启用账号保留明显标记，避免用户误以为系统会频繁换号。
-3. Codex 分组内也不保留用户手动顺序；分组只表达成员集合，默认推荐排序按同一 comparator 展示。
+3. Codex 分组只表达成员集合；分组内默认推荐排序按同一 comparator 展示。
 4. 曾用且已重置的账号应排在新账号前面；新账号用“备用”语义展示，不应因为 100% 周额度排到最前。
 5. 已耗尽或冷却账号保留在可见列表中，按 nearest reset/cooldown 升序展示，方便判断何时恢复。
 6. auth/manual/suspicious 账号放到最后，明确需要人工动作，不参与自动切换。
@@ -241,7 +241,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 - [x] 在 API service health registry 或派生 read model 中暴露使用历史状态：已落地 `last_success_at_ms`、`last_selected_at_ms`、`last_quota_exhausted_at_ms`、`api_service_success_count`；独立 `last_weekly_reset_seen_at` 暂不需要，恢复由 reset/cooldown hint 估算。
 - [x] 新增 API service 推荐排序面：`effectiveAccountIds` 作为只读调度/展示顺序；`collection.accountIds` 只保存成员集合。
 - [x] 调整 Codex `recommended` 卡片排序：API 服务成员内部按 scheduling bucket 展示；新账号 reserve 不因 100% 周额度压过已恢复老账号。
-- [x] Codex 分组内推荐排序复用同一 comparator；普通分组也不再保留成员手动顺序。
+- [x] Codex 分组内推荐排序复用同一 comparator；普通分组也只保存成员集合。
 - [x] 刷新队列使用单独 refresh priority，不复用调度排序。
 
 验收：

@@ -1,0 +1,20 @@
+{
+  "startedAt": "2026-05-30T01:35:29.7423719+08:00",
+  "pid": 29364,
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\CODE\\external\\Cockpit-Tools-Local\\scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 3600 -PollIntervalSeconds 2 -CheckpointIntervalSeconds 5 -AuditPath C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529 -CheckpointPath D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529\\monitor-checkpoint.json -ExitCodeFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529\\monitor-exit-code.txt -StopSignalFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529\\stop.signal -IncludeExistingAudit -AuditSinceTimestampMs 1780075529682 -RequireQuotaFallback -RequireStreamCompletion -RequireCliConfigUntouched -RequireAppStable -RequireApiServiceRuntimeAvailable -RequiredFallbackCycles 1 -RequiredDistinctHealthyAccounts 1 -RequiredCompletedStreams 3 -WriteReport -Quiet",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "auditSinceTimestampMs": 1780075529682,
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529\\monitor-checkpoint.json",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529\\monitor-exit-code.txt",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529\\stop.signal",
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529\\monitor-stdout.log",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529\\monitor-stderr.log",
+  "mode": "read_only_sidecar_current_window_free_account_quota_drain",
+  "safety": {
+    "modifiesProvider": false,
+    "refreshesQuota": false,
+    "restartsCodexOrCockpit": false,
+    "consumesUpstreamQuota": false
+  }
+}

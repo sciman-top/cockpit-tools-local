@@ -1,0 +1,80 @@
+{
+  "generatedAt": "2026-05-30T00:01:25.1349465+08:00",
+  "mode": "read_only_monitoring_summary",
+  "secondAccountHash": "sha256:2593a2928966",
+  "previousFirstAccountHash": "sha256:78fa06267050",
+  "primaryReport": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-second-account-exhaustion-sidecar-20260529-233740\\live-monitor-20260529-235644.json",
+  "tailReport": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\live-monitor-20260530-000029.json",
+  "conclusion": {
+    "secondAccountExhausted": true,
+    "alreadyStartedStreamCompletedAfterExhaustion": true,
+    "allObservedHardAffinityTasksCompletedByUpstream": false,
+    "reason": "one second-account stream crossed the exhaustion timestamp and completed, but a hard-affinity fallback-blocked request closed via in-band local pool_unavailable completion, and one older gateway remained unresolved in the primary report"
+  },
+  "keyEvents": {
+    "secondAccountFirst429": {
+      "timestampMs": 1780070157664,
+      "localTime": "2026-05-29T23:55:57.6640000+08:00",
+      "accountHash": "sha256:2593a2928966",
+      "phase": "upstream_forward"
+    },
+    "cooldownAndFallback": {
+      "fallbackTimestampMs": 1780070157725,
+      "localTime": "2026-05-29T23:55:57.7250000+08:00",
+      "requestId": "x-codex-turn-metadata.turn_id:sha256:eb0a6553af4b",
+      "fromAccountHash": "sha256:2593a2928966",
+      "fallbackObserved": true
+    },
+    "metadataOnlyFallbackCompleted": {
+      "timestampMs": 1780070158720,
+      "localTime": "2026-05-29T23:55:58.7200000+08:00",
+      "requestId": "x-codex-turn-metadata.turn_id:sha256:eb0a6553af4b",
+      "next200AccountHash": "sha256:78fa06267050",
+      "next200Phase": "final_response",
+      "note": "metadata-only lineage; not a hard-affinity token"
+    },
+    "inFlightStreamCompletedAfterExhaustion": {
+      "gatewayRequestId": "gw-1780070154996-366",
+      "requestId": "x-codex-turn-state:sha256:2298efde7a83",
+      "accountHash": "sha256:2593a2928966",
+      "startedTimestampMs": 1780070156557,
+      "startedLocalTime": "2026-05-29T23:55:56.5570000+08:00",
+      "completedTimestampMs": 1780070159059,
+      "completedLocalTime": "2026-05-29T23:55:59.0590000+08:00",
+      "completedAfterFirst429": true,
+      "terminalError": false,
+      "interruptedByCooldown": false
+    },
+    "hardAffinityLocalCompletionFailure": {
+      "requestId": "x-codex-turn-state:sha256:5c8ceb041014",
+      "blockedAccountHash": "sha256:2593a2928966",
+      "blockedTimestampMs": 1780070159388,
+      "blockedLocalTime": "2026-05-29T23:55:59.3880000+08:00",
+      "localCompletionTimestampMs": 1780070159396,
+      "localCompletionLocalTime": "2026-05-29T23:55:59.3960000+08:00",
+      "completedByUpstream": false,
+      "outcome": "in_band_local_completion"
+    },
+    "unresolvedPrimaryGateway": {
+      "gatewayRequestId": "gw-1780070138120-364",
+      "requestId": "x-codex-turn-state:sha256:5c8ceb041014",
+      "accountHash": "sha256:2593a2928966",
+      "firstTimestampMs": 1780070140112,
+      "firstLocalTime": "2026-05-29T23:55:40.1120000+08:00",
+      "lastTimestampMs": 1780070140135,
+      "lastLocalTime": "2026-05-29T23:55:40.1350000+08:00",
+      "primaryReportStatus": "started_not_completed",
+      "tailObservation": "no matching events found after audit rotation/current tail window"
+    }
+  },
+  "monitorResults": {
+    "primaryOverall": "fail",
+    "acceptedStreamContinuity": "pass",
+    "sameTaskAffinityFallbackBlocked": "fail",
+    "retryLimitRegressionAbsent": "pass",
+    "apiRuntimeAvailableAtPrimaryFinal": "pass",
+    "codexAppProcessStableAtPrimaryFinal": "pass",
+    "codexCliConfigAuthUntouchedAtPrimaryFinal": "fail",
+    "tailRuntimeAvailable": "fail"
+  }
+}

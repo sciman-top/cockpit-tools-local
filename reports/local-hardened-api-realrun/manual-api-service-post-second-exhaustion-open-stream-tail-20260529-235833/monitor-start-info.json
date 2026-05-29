@@ -1,0 +1,18 @@
+{
+  "startedAt": "2026-05-29T23:58:33.0846057+08:00",
+  "pid": 27984,
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "focusGatewayRequestIds": [
+    "gw-1780070138120-364",
+    "gw-1780070168939-369"
+  ],
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\monitor-checkpoint.json",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\monitor-exit-code.txt",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\stop.signal",
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\monitor-stdout.log",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\monitor-stderr.log",
+  "durationSeconds": 1800,
+  "mode": "detached_read_only_sidecar_post_second_exhaustion_open_stream_tail",
+  "goal": "observe whether open streams from the second-account exhaustion report terminally complete or abort"
+}

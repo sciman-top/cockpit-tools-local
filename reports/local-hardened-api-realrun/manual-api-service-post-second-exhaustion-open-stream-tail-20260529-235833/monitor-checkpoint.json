@@ -1,0 +1,895 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-05-30T00:00:29.7106922+08:00",
+  "overall": "fail",
+  "reportStatus": "completed",
+  "terminationReason": "stop_signal_file",
+  "mode": "live_codex_app_monitor",
+  "startedAt": "2026-05-29T23:58:33.6867896+08:00",
+  "endedAt": "2026-05-30T00:00:29.7106922+08:00",
+  "elapsedSeconds": 116.0,
+  "dataRoot": "gw-1780070168939-369",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "auditWindow": {
+    "sinceTimestampMs": 1780070130000,
+    "untilTimestampMs": null,
+    "focusGatewayRequestIds": [
+      "gw-1780070138120-364"
+    ],
+    "rawObservedEventCount": 263,
+    "filteredEventCount": 0,
+    "droppedEventCount": 263
+  },
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\monitor-exit-code.txt",
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\monitor-checkpoint.json",
+  "reportPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\manual-api-service-post-second-exhaustion-open-stream-tail-20260529-235833\\live-monitor-20260530-000029.json",
+  "includeExistingAudit": true,
+  "requireQuotaFallback": false,
+  "requireStreamCompletion": true,
+  "requireCliConfigUntouched": true,
+  "requireAppStable": true,
+  "requireApiServiceRuntimeAvailable": true,
+  "requiredFallbackCycles": 1,
+  "requiredDistinctHealthyAccounts": 1,
+  "requiredCompletedStreams": 2,
+  "retryLimitRegressionCheck": "always_on",
+  "responsesPoolUnavailableTransport503RegressionCheck": "always_on",
+  "responsesPoolUnavailableFailedStreamRegressionCheck": "always_on",
+  "responsesPoolUnavailableSyntheticCompletionRegressionCheck": "always_on",
+  "poolWaitTerminalProgressRegressionCheck": "always_on",
+  "temporaryConfig": {
+    "managedByThisScript": false,
+    "restored": "not_applicable",
+    "reason": "live monitor is read-only; provider switching/restoration is performed outside this script"
+  },
+  "codexCliGuard": {
+    "before": {
+      "root": "C:\\Users\\sciman\\.codex",
+      "files": {
+        "config.toml": {
+          "exists": true,
+          "length": 4713,
+          "lastWriteTime": "2026-05-29T23:58:30.0442176+08:00",
+          "sha256": "B37928B26D3A22C42025F5853FA980B229321A1BDE616B9AA76E40314E16A527"
+        },
+        "auth.json": {
+          "exists": true,
+          "length": 146,
+          "lastWriteTime": "2026-05-29T23:16:10.5722985+08:00",
+          "sha256": "58183D5D6E2BD13F913DA06A217EC273738ED8ACAA8A41174DB68889E8145722"
+        }
+      }
+    },
+    "after": {
+      "root": "C:\\Users\\sciman\\.codex",
+      "files": {
+        "config.toml": {
+          "exists": true,
+          "length": 4713,
+          "lastWriteTime": "2026-05-29T23:58:30.0442176+08:00",
+          "sha256": "B37928B26D3A22C42025F5853FA980B229321A1BDE616B9AA76E40314E16A527"
+        },
+        "auth.json": {
+          "exists": true,
+          "length": 146,
+          "lastWriteTime": "2026-05-29T23:16:10.5722985+08:00",
+          "sha256": "58183D5D6E2BD13F913DA06A217EC273738ED8ACAA8A41174DB68889E8145722"
+        }
+      }
+    },
+    "comparison": {
+      "unchanged": true,
+      "changedFiles": []
+    }
+  },
+  "codexAppGuard": {
+    "before": {
+      "processNames": [
+        "Codex"
+      ],
+      "pathIncludePatterns": [
+        "*\\WindowsApps\\OpenAI.Codex_*\\app\\Codex.exe",
+        "*\\OpenAI.Codex_*\\app\\Codex.exe",
+        "*/Codex.app/Contents/MacOS/Codex"
+      ],
+      "pathExcludePatterns": [
+        "*\\node_modules\\@openai\\codex\\*",
+        "*\\@openai\\codex\\*",
+        "*\\vendor\\*\\codex\\codex.exe"
+      ],
+      "processes": [
+        {
+          "processName": "Codex",
+          "id": 13504,
+          "startTime": "2026-05-29T23:19:45.2170677+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        },
+        {
+          "processName": "Codex",
+          "id": 15284,
+          "startTime": "2026-05-29T23:19:43.6633073+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        },
+        {
+          "processName": "Codex",
+          "id": 22760,
+          "startTime": "2026-05-29T23:19:43.0983612+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        },
+        {
+          "processName": "Codex",
+          "id": 31136,
+          "startTime": "2026-05-29T23:19:43.6156577+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        },
+        {
+          "processName": "Codex",
+          "id": 33432,
+          "startTime": "2026-05-29T23:19:43.5155352+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        }
+      ]
+    },
+    "after": {
+      "processNames": [
+        "Codex"
+      ],
+      "pathIncludePatterns": [
+        "*\\WindowsApps\\OpenAI.Codex_*\\app\\Codex.exe",
+        "*\\OpenAI.Codex_*\\app\\Codex.exe",
+        "*/Codex.app/Contents/MacOS/Codex"
+      ],
+      "pathExcludePatterns": [
+        "*\\node_modules\\@openai\\codex\\*",
+        "*\\@openai\\codex\\*",
+        "*\\vendor\\*\\codex\\codex.exe"
+      ],
+      "processes": [
+        {
+          "processName": "Codex",
+          "id": 13504,
+          "startTime": "2026-05-29T23:19:45.2170677+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        },
+        {
+          "processName": "Codex",
+          "id": 15284,
+          "startTime": "2026-05-29T23:19:43.6633073+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        },
+        {
+          "processName": "Codex",
+          "id": 22760,
+          "startTime": "2026-05-29T23:19:43.0983612+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        },
+        {
+          "processName": "Codex",
+          "id": 31136,
+          "startTime": "2026-05-29T23:19:43.6156577+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        },
+        {
+          "processName": "Codex",
+          "id": 33432,
+          "startTime": "2026-05-29T23:19:43.5155352+08:00",
+          "path": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.519.11010.0_x64__2p2nqsd0c76g0\\app\\Codex.exe"
+        }
+      ]
+    },
+    "comparison": {
+      "stable": true,
+      "beforeCount": 5,
+      "afterCount": 5
+    }
+  },
+  "apiServiceRuntime": {
+    "available": false,
+    "reason": "local_access_config_missing",
+    "apiBaseUrl": null,
+    "localAccess": {
+      "path": "gw-1780070168939-369\\codex_local_access.json",
+      "exists": false,
+      "parseError": null,
+      "enabled": null,
+      "port": null,
+      "updatedAt": null,
+      "fallbackMode": null,
+      "accountCount": 1
+    },
+    "runtimeMode": {
+      "path": "gw-1780070168939-369\\codex_runtime_mode.json",
+      "exists": false,
+      "parseError": null,
+      "mode": null,
+      "accountKind": null,
+      "updatedAt": null
+    },
+    "server": {
+      "path": "gw-1780070168939-369\\server.json",
+      "exists": false,
+      "parseError": null,
+      "pid": null,
+      "wsPort": null,
+      "version": null,
+      "startedAt": null
+    },
+    "listener": {
+      "commandAvailable": true,
+      "checked": false,
+      "error": "port missing",
+      "listenerCount": 0,
+      "listening": false,
+      "listeners": []
+    }
+  },
+  "apiServiceRuntimeInitial": {
+    "available": false,
+    "reason": "local_access_config_missing",
+    "apiBaseUrl": null,
+    "localAccess": {
+      "path": "gw-1780070168939-369\\codex_local_access.json",
+      "exists": false,
+      "parseError": null,
+      "enabled": null,
+      "port": null,
+      "updatedAt": null,
+      "fallbackMode": null,
+      "accountCount": 1
+    },
+    "runtimeMode": {
+      "path": "gw-1780070168939-369\\codex_runtime_mode.json",
+      "exists": false,
+      "parseError": null,
+      "mode": null,
+      "accountKind": null,
+      "updatedAt": null
+    },
+    "server": {
+      "path": "gw-1780070168939-369\\server.json",
+      "exists": false,
+      "parseError": null,
+      "pid": null,
+      "wsPort": null,
+      "version": null,
+      "startedAt": null
+    },
+    "listener": {
+      "commandAvailable": true,
+      "checked": false,
+      "error": "port missing",
+      "listenerCount": 0,
+      "listening": false,
+      "listeners": []
+    }
+  },
+  "criticalSignals": [
+    {
+      "name": "api_service_runtime_unavailable",
+      "severity": "critical",
+      "reason": "local_access_config_missing",
+      "generatedAt": "2026-05-30T00:00:29.7106922+08:00",
+      "required": true,
+      "expectedRuntime": true,
+      "apiBaseUrl": null,
+      "localAccess": {
+        "path": "gw-1780070168939-369\\codex_local_access.json",
+        "exists": false,
+        "parseError": null,
+        "enabled": null,
+        "port": null,
+        "updatedAt": null,
+        "fallbackMode": null,
+        "accountCount": 1
+      },
+      "runtimeMode": {
+        "path": "gw-1780070168939-369\\codex_runtime_mode.json",
+        "exists": false,
+        "parseError": null,
+        "mode": null,
+        "accountKind": null,
+        "updatedAt": null
+      },
+      "initial": {
+        "available": false,
+        "reason": "local_access_config_missing",
+        "localAccess": {
+          "path": "gw-1780070168939-369\\codex_local_access.json",
+          "exists": false,
+          "parseError": null,
+          "enabled": null,
+          "port": null,
+          "updatedAt": null,
+          "fallbackMode": null,
+          "accountCount": 1
+        },
+        "runtimeMode": {
+          "path": "gw-1780070168939-369\\codex_runtime_mode.json",
+          "exists": false,
+          "parseError": null,
+          "mode": null,
+          "accountKind": null,
+          "updatedAt": null
+        }
+      },
+      "listenerCount": 0,
+      "server": {
+        "path": "gw-1780070168939-369\\server.json",
+        "exists": false,
+        "parseError": null,
+        "pid": null,
+        "wsPort": null,
+        "version": null,
+        "startedAt": null
+      }
+    }
+  ],
+  "audit": {
+    "eventCount": 0,
+    "parsedEventCount": 0,
+    "parseErrorCount": 0,
+    "has429": false,
+    "hasUsageLimitReached": false,
+    "hasModelCooldownApplied": false,
+    "hasFallbackSelected": false,
+    "hasFallbackBlocked": false,
+    "hasHardAffinityFallbackBlocked": false,
+    "hasDifferentAccount200AfterFallback": false,
+    "fallbackSelectedCount": 0,
+    "fallbackBlockedCount": 0,
+    "fallbackCycleCount": 0,
+    "distinctHealthyAccountCountAfterFallback": 0,
+    "distinctHealthyAccountHashesAfterFallback": [],
+    "fallbackTransitions": [],
+    "sameTaskAffinityFallbackBlockedCount": 0,
+    "sameTaskAffinityLocalCompletionCount": 0,
+    "sameTaskAffinityTerminalCompletionCount": 0,
+    "sameTaskAffinityTerminalCompletionRequestIds": [],
+    "sameTaskAffinityUnrecoveredTerminal429Count": 0,
+    "sameTaskAffinityUnrecoveredTerminal429RequestIds": [],
+    "sameTaskAffinityStructuredQuotaTerminal429Count": 0,
+    "sameTaskAffinityStructuredQuotaTerminal429RequestIds": [],
+    "sameTaskAffinityUnstructuredTerminal429Count": 0,
+    "sameTaskAffinityUnstructuredTerminal429RequestIds": [],
+    "sameTaskAffinityUnclosedBlockCount": 0,
+    "sameTaskAffinityUnclosedBlockRequestIds": [],
+    "sameTaskAffinityFallbackBlockedRequestIds": [],
+    "sameTaskAffinityFallbackBlockedTransitions": [],
+    "requestTraceCount": 0,
+    "hardAffinityContinuityRequestTraceCount": 0,
+    "routingDecisionCount": 0,
+    "quotaClassificationCount": 0,
+    "streamTerminalCount": 0,
+    "streamTerminalResponseCompletedCount": 0,
+    "streamTerminalCompactionSummaryCount": 0,
+    "behaviorTraceCoverage": {
+      "requestTraceCount": 0,
+      "hardAffinityContinuityRequestTraceCount": 0,
+      "routingDecisionCount": 0,
+      "quotaClassificationCount": 0,
+      "streamTerminalCount": 0,
+      "streamTerminalResponseCompletedCount": 0,
+      "streamTerminalCompactionSummaryCount": 0,
+      "hasStructuredBehaviorTrace": false
+    },
+    "stickyResetWaitRequestCount": 0,
+    "stickyResetWaitRecoveredCount": 0,
+    "stickyResetWaitKilledByLocalTimeoutCount": 0,
+    "stickyResetWaitExceededInlineBudgetCount": 0,
+    "stickyResetWaitRequestIds": [],
+    "stickyResetWaitRecoveredRequestIds": [],
+    "stickyResetWaitKilledByLocalTimeoutRequestIds": [],
+    "stickyResetWaitExceededInlineBudgetRequestIds": [],
+    "stickyResetWaitRequests": [],
+    "stickyResetWaitRecovered": [],
+    "stickyResetWaitKilledByLocalTimeout": [],
+    "stickyResetWaitExceededInlineBudget": [],
+    "distinctHealthyAccountCountAfterBlock": 0,
+    "distinctHealthyAccountHashesAfterBlock": [],
+    "first429AccountHash": null,
+    "firstFallbackAccountHash": null,
+    "firstBlockedAccountHash": null,
+    "blockedAccountCount": 0,
+    "blockedAccountHashes": [],
+    "newRequestAvoidanceCount": 0,
+    "newRequestAvoidanceRequestIds": [],
+    "newRequestAvoidance": [],
+    "newRequestBlockedReuseCount": 0,
+    "newRequestBlockedReuseRequestIds": [],
+    "newRequestBlockedReuse": [],
+    "retryLimitErrorFound": false,
+    "retryLimitErrorCount": 0,
+    "retryLimitTextMatchCount": 0,
+    "unrecoveredFallback429Count": 0,
+    "unrecoveredFallback429RequestIds": [],
+    "poolWaitCount": 0,
+    "poolWaitSleepingCount": 0,
+    "poolWaitRetryingCount": 0,
+    "poolWaitRequestIds": [],
+    "heartbeatPoolWaitCount": 0,
+    "heartbeatPoolWaitRequestIds": [],
+    "activeDrainPoolWaitCount": 0,
+    "activeDrainPoolWaitRequestIds": [],
+    "openPoolWaitCount": 0,
+    "openPoolWaitRequestIds": [],
+    "parkedPoolWaitCount": 0,
+    "parkedPoolWaitRequestIds": [],
+    "sseIdleErrorCount": 0,
+    "sseIdleRequestIds": [],
+    "localPoolUnavailableCount": 0,
+    "localPoolUnavailableRequestIds": [],
+    "inBandSyntheticPoolUnavailableCount": 0,
+    "inBandSyntheticPoolUnavailableRequestIds": [],
+    "responsesFailedPoolUnavailableCount": 0,
+    "responsesFailedPoolUnavailableRequestIds": [],
+    "responsesLocalCompletionPoolUnavailableCount": 0,
+    "responsesLocalCompletionPoolUnavailableRequestIds": [],
+    "responsesTransport503PoolUnavailableCount": 0,
+    "responsesTransport503PoolUnavailableAuditCount": 0,
+    "responsesTransport503PoolUnavailableTextCount": 0,
+    "responsesTransport503PoolUnavailableRequestIds": [],
+    "lineageCount": 0,
+    "lineageAccountSwitchCount": 0,
+    "lineageAccountSwitches": [],
+    "hardAffinityLineageAccountSwitchCount": 0,
+    "hardAffinityLineageAccountSwitches": [],
+    "metadataOnlyLineageAccountSwitchCount": 0,
+    "metadataOnlyLineageAccountSwitches": [],
+    "continuationReroutedCount": 0,
+    "continuationReroutes": [],
+    "autoCompactReroutedCount": 0,
+    "autoCompactReroutes": [],
+    "localCompletionAfterHardAffinityLineageCount": 0,
+    "localCompletionAfterHardAffinityLineages": [],
+    "lineageSummaries": [],
+    "auditFieldCoverage": {
+      "parsedEventCount": 0,
+      "detailEventCount": 0,
+      "gatewayRequestIdCount": 0,
+      "turnLineageIdCount": 0,
+      "explicitTurnLineageIdCount": 0,
+      "previousResponseIdHashCount": 0,
+      "upstreamResponseIdHashCount": 0,
+      "continuationFlagCount": 0,
+      "autoCompactFlagCount": 0,
+      "autoCompactCandidateCount": 0,
+      "lineageDiagnosticReady": false,
+      "continuationDiagnosticReady": false,
+      "autoCompactDiagnosticReady": false,
+      "presentFieldNames": [],
+      "missingFieldNames": [
+        "gateway_request_id",
+        "turn_lineage_id",
+        "previous_response_id_hash",
+        "upstream_response_id_hash",
+        "is_continuation",
+        "is_auto_compact_candidate"
+      ]
+    },
+    "requestTimelineCount": 0,
+    "requestTimelines": [],
+    "startedStreamCount": 0,
+    "completedStreamCount": 0,
+    "openStreamCount": 0,
+    "interruptedStreamCount": 0,
+    "terminalErrorStreamCount": 0,
+    "upstreamStreamErrorCount": 0,
+    "upstreamStreamErrorSummaries": [],
+    "clientAbortedStreamCount": 0,
+    "clientAbortedBeforeFirstChunkCount": 0,
+    "clientAbortedAfterFirstChunkCount": 0,
+    "clientAbortedStreamSummaries": [],
+    "streamSummaries": [],
+    "accountSummaries": []
+  },
+  "continuitySummary": {
+    "sameTaskAffinityFallbackBlocked": {
+      "status": "blocked",
+      "reason": "未在监测窗口内观察到同任务 429 -> cooldown -> fallback_blocked(hard_affinity)",
+      "evidence": {
+        "has429": false,
+        "hasUsageLimitReached": false,
+        "hasModelCooldownApplied": false,
+        "hasFallbackBlocked": false,
+        "hasHardAffinityFallbackBlocked": false,
+        "sameTaskAffinityFallbackBlockedCount": 0,
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "sameTaskAffinityTerminalCompletionCount": 0,
+        "sameTaskAffinityUnclosedBlockCount": 0,
+        "sameTaskAffinityUnrecoveredTerminal429Count": 0,
+        "sameTaskAffinityStructuredQuotaTerminal429Count": 0,
+        "sameTaskAffinityUnstructuredTerminal429Count": 0,
+        "sameTaskAffinityFallbackBlockedRequestIds": [],
+        "sameTaskAffinityTerminalCompletionRequestIds": [],
+        "sameTaskAffinityUnclosedBlockRequestIds": [],
+        "sameTaskAffinityUnrecoveredTerminal429RequestIds": [],
+        "requiredFallbackCycles": 1,
+        "retryLimitErrorFound": false,
+        "first429AccountHash": null
+      }
+    },
+    "newRequestAvoidsExhaustedCooldown": {
+      "status": "skipped",
+      "reason": "未要求观察新请求避开 exhausted/cooldown 账号",
+      "evidence": {
+        "blockedAccountCount": 0,
+        "blockedAccountHashes": [],
+        "newRequestAvoidanceCount": 0,
+        "newRequestAvoidanceRequestIds": [],
+        "newRequestBlockedReuseCount": 0,
+        "newRequestBlockedReuseRequestIds": []
+      }
+    },
+    "turnLineageAccountSwitchAbsent": {
+      "status": "blocked",
+      "reason": "未观察到 turn lineage 字段；只能给出 request 级结论",
+      "evidence": {
+        "lineageCount": 0,
+        "lineageAccountSwitchCount": 0,
+        "hardAffinityLineageAccountSwitchCount": 0,
+        "metadataOnlyLineageAccountSwitchCount": 0,
+        "continuationReroutedCount": 0,
+        "autoCompactReroutedCount": 0,
+        "lineageAccountSwitches": [],
+        "hardAffinityLineageAccountSwitches": [],
+        "metadataOnlyLineageAccountSwitches": [],
+        "continuationReroutes": [],
+        "autoCompactReroutes": []
+      }
+    },
+    "stickyResetWaitNotKilledByLocalTimeout": {
+      "status": "skipped",
+      "reason": null,
+      "evidence": {
+        "requestCount": 0,
+        "recoveredCount": 0,
+        "killedByLocalTimeoutCount": 0,
+        "exceededInlineBudgetCount": 0,
+        "requests": []
+      }
+    }
+  },
+  "results": [
+    {
+      "name": "api_service_runtime_available",
+      "status": "fail",
+      "reason": "API 服务 runtime 不可用；Codex 会把本地 gateway 断开表现为 error sending request，而不是结构化 quota 终态",
+      "evidence": {
+        "required": true,
+        "localAccess": {
+          "path": "gw-1780070168939-369\\codex_local_access.json",
+          "exists": false,
+          "parseError": null,
+          "enabled": null,
+          "port": null,
+          "updatedAt": null,
+          "fallbackMode": null,
+          "accountCount": 1
+        },
+        "reason": "local_access_config_missing",
+        "available": false,
+        "server": {
+          "path": "gw-1780070168939-369\\server.json",
+          "exists": false,
+          "parseError": null,
+          "pid": null,
+          "wsPort": null,
+          "version": null,
+          "startedAt": null
+        },
+        "runtimeMode": {
+          "path": "gw-1780070168939-369\\codex_runtime_mode.json",
+          "exists": false,
+          "parseError": null,
+          "mode": null,
+          "accountKind": null,
+          "updatedAt": null
+        },
+        "apiBaseUrl": null,
+        "listener": {
+          "commandAvailable": true,
+          "checked": false,
+          "error": "port missing",
+          "listenerCount": 0,
+          "listening": false,
+          "listeners": []
+        }
+      }
+    },
+    {
+      "name": "same_task_affinity_fallback_blocked",
+      "status": "skipped",
+      "reason": "未要求 quota hard-affinity 必须出现；仅记录 audit 观察结果",
+      "evidence": {
+        "sameTaskAffinityUnrecoveredTerminal429Count": 0,
+        "hasModelCooldownApplied": false,
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "requiredFallbackCycles": 1,
+        "first429AccountHash": null,
+        "hasUsageLimitReached": false,
+        "sameTaskAffinityTerminalCompletionCount": 0,
+        "has429": false,
+        "hasHardAffinityFallbackBlocked": false,
+        "sameTaskAffinityUnrecoveredTerminal429RequestIds": [],
+        "sameTaskAffinityFallbackBlockedCount": 0,
+        "sameTaskAffinityUnstructuredTerminal429Count": 0,
+        "hasFallbackBlocked": false,
+        "localPoolUnavailableCount": 0,
+        "responsesLocalCompletionPoolUnavailableCount": 0,
+        "sameTaskAffinityStructuredQuotaTerminal429Count": 0,
+        "sameTaskAffinityTerminalCompletionRequestIds": [],
+        "sameTaskAffinityUnclosedBlockCount": 0,
+        "sameTaskAffinityUnclosedBlockRequestIds": [],
+        "sameTaskAffinityFallbackBlockedRequestIds": []
+      }
+    },
+    {
+      "name": "sticky_reset_wait_not_killed_by_local_timeout",
+      "status": "skipped",
+      "reason": "未观察到 hard-affinity continuation request_trace；旧 audit 可能尚未包含该结构化追踪字段",
+      "evidence": {
+        "stickyResetWaitKilledByLocalTimeoutCount": 0,
+        "stickyResetWaitExceededInlineBudgetRequestIds": [],
+        "stickyResetWaitRequestIds": [],
+        "stickyResetWaitRecoveredRequestIds": [],
+        "stickyResetWaitKilledByLocalTimeoutRequestIds": [],
+        "stickyResetWaitRequestCount": 0,
+        "stickyResetWaitRequests": [],
+        "stickyResetWaitExceededInlineBudgetCount": 0,
+        "stickyResetWaitRecoveredCount": 0
+      }
+    },
+    {
+      "name": "structured_behavior_trace_present",
+      "status": "skipped",
+      "reason": "监测窗口内没有 audit 事件，无法评估结构化行为追踪覆盖率",
+      "evidence": {
+        "behaviorTraceCoverage": {
+          "requestTraceCount": 0,
+          "hardAffinityContinuityRequestTraceCount": 0,
+          "routingDecisionCount": 0,
+          "quotaClassificationCount": 0,
+          "streamTerminalCount": 0,
+          "streamTerminalResponseCompletedCount": 0,
+          "streamTerminalCompactionSummaryCount": 0,
+          "hasStructuredBehaviorTrace": false
+        },
+        "requestTraceCount": 0,
+        "streamTerminalCount": 0,
+        "streamTerminalCompactionSummaryCount": 0,
+        "streamTerminalResponseCompletedCount": 0,
+        "routingDecisionCount": 0,
+        "hardAffinityContinuityRequestTraceCount": 0,
+        "quotaClassificationCount": 0
+      }
+    },
+    {
+      "name": "new_request_avoids_exhausted_account",
+      "status": "skipped",
+      "reason": "未要求观察新请求避开 exhausted/cooldown 账号",
+      "evidence": {
+        "blockedAccountCount": 0,
+        "newRequestAvoidanceCount": 0,
+        "blockedAccountHashes": [],
+        "newRequestBlockedReuseRequestIds": [],
+        "newRequestAvoidanceRequestIds": [],
+        "newRequestBlockedReuseCount": 0
+      }
+    },
+    {
+      "name": "multi_account_fallback_observed",
+      "status": "skipped",
+      "reason": "未要求多账号 quota recovery 计数；仅记录多账号观察结果",
+      "evidence": {
+        "sameTaskAffinityTerminalCompletionCount": 0,
+        "distinctHealthyAccountCountAfterBlock": 0,
+        "requiredDistinctHealthyAccounts": 1,
+        "distinctHealthyAccountHashesAfterBlock": [],
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "requiredFallbackCycles": 1,
+        "sameTaskAffinityFallbackBlockedCount": 0
+      }
+    },
+    {
+      "name": "accepted_stream_continuity",
+      "status": "blocked",
+      "reason": "未在监测窗口内观察到已接纳 stream 完成",
+      "evidence": {
+        "clientAbortedStreamCount": 0,
+        "completedStreamCount": 0,
+        "clientAbortedStreamSummaries": [],
+        "terminalErrorStreamCount": 0,
+        "upstreamStreamErrorCount": 0,
+        "clientAbortedBeforeFirstChunkCount": 0,
+        "startedStreamCount": 0,
+        "requiredCompletedStreams": 2,
+        "clientAbortedAfterFirstChunkCount": 0,
+        "interruptedStreamCount": 0,
+        "openStreamCount": 0,
+        "upstreamStreamErrorSummaries": []
+      }
+    },
+    {
+      "name": "retry_limit_regression_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "retryLimitErrorFound": false,
+        "unrecoveredFallback429Count": 0,
+        "localPoolUnavailableCount": 0,
+        "retryLimitErrorCount": 0,
+        "localPoolUnavailableRequestIds": [],
+        "retryLimitTextMatchCount": 0,
+        "unrecoveredFallback429RequestIds": []
+      }
+    },
+    {
+      "name": "sse_idle_pool_wait_regression_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "sseIdleRequestIds": [],
+        "heartbeatPoolWaitCount": 0,
+        "parkedPoolWaitRequestIds": [],
+        "sseIdleErrorCount": 0,
+        "activeDrainPoolWaitRequestIds": [],
+        "activeDrainPoolWaitCount": 0,
+        "parkedPoolWaitCount": 0,
+        "heartbeatPoolWaitRequestIds": []
+      }
+    },
+    {
+      "name": "pool_wait_reaches_terminal_or_recovery",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "openPoolWaitCount": 0,
+        "responsesFailedPoolUnavailableRequestIds": [],
+        "heartbeatPoolWaitCount": 0,
+        "responsesLocalCompletionPoolUnavailableRequestIds": [],
+        "responsesFailedPoolUnavailableCount": 0,
+        "openPoolWaitRequestIds": [],
+        "poolWaitCount": 0,
+        "activeDrainPoolWaitCount": 0,
+        "responsesLocalCompletionPoolUnavailableCount": 0
+      }
+    },
+    {
+      "name": "responses_pool_unavailable_transport_503_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "responsesTransport503PoolUnavailableCount": 0,
+        "responsesFailedPoolUnavailableRequestIds": [],
+        "responsesTransport503PoolUnavailableAuditCount": 0,
+        "responsesLocalCompletionPoolUnavailableRequestIds": [],
+        "responsesFailedPoolUnavailableCount": 0,
+        "responsesTransport503PoolUnavailableTextCount": 0,
+        "responsesLocalCompletionPoolUnavailableCount": 0,
+        "inBandSyntheticPoolUnavailableCount": 0,
+        "responsesTransport503PoolUnavailableRequestIds": [],
+        "inBandSyntheticPoolUnavailableRequestIds": []
+      }
+    },
+    {
+      "name": "responses_pool_unavailable_local_completion_explicit",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "responsesFailedPoolUnavailableCount": 0,
+        "responsesFailedPoolUnavailableRequestIds": [],
+        "openPoolWaitRequestIds": [],
+        "responsesLocalCompletionPoolUnavailableRequestIds": [],
+        "sameTaskAffinityLocalCompletionCount": 0,
+        "openPoolWaitCount": 0,
+        "sameTaskAffinityFallbackBlockedRequestIds": [],
+        "responsesLocalCompletionPoolUnavailableCount": 0
+      }
+    },
+    {
+      "name": "responses_pool_unavailable_failed_stream_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "responsesFailedPoolUnavailableRequestIds": [],
+        "responsesFailedPoolUnavailableCount": 0
+      }
+    },
+    {
+      "name": "responses_pool_unavailable_legacy_synthetic_completion_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "heartbeatPoolWaitRequestIds": [],
+        "heartbeatPoolWaitCount": 0,
+        "inBandSyntheticPoolUnavailableRequestIds": [],
+        "inBandSyntheticPoolUnavailableCount": 0
+      }
+    },
+    {
+      "name": "turn_lineage_account_switch_absent",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "lineageAccountSwitchCount": 0,
+        "hardAffinityLineageAccountSwitches": [],
+        "metadataOnlyLineageAccountSwitchCount": 0,
+        "continuationReroutes": [],
+        "continuationReroutedCount": 0,
+        "lineageAccountSwitches": [],
+        "autoCompactReroutes": [],
+        "autoCompactReroutedCount": 0,
+        "hardAffinityLineageAccountSwitchCount": 0,
+        "metadataOnlyLineageAccountSwitches": []
+      }
+    },
+    {
+      "name": "audit_lineage_fields_present",
+      "status": "skipped",
+      "reason": "监测窗口内没有 audit 事件，无法评估 lineage 字段覆盖率",
+      "evidence": {
+        "auditFieldCoverage": {
+          "parsedEventCount": 0,
+          "detailEventCount": 0,
+          "gatewayRequestIdCount": 0,
+          "turnLineageIdCount": 0,
+          "explicitTurnLineageIdCount": 0,
+          "previousResponseIdHashCount": 0,
+          "upstreamResponseIdHashCount": 0,
+          "continuationFlagCount": 0,
+          "autoCompactFlagCount": 0,
+          "autoCompactCandidateCount": 0,
+          "lineageDiagnosticReady": false,
+          "continuationDiagnosticReady": false,
+          "autoCompactDiagnosticReady": false,
+          "presentFieldNames": [],
+          "missingFieldNames": [
+            "gateway_request_id",
+            "turn_lineage_id",
+            "previous_response_id_hash",
+            "upstream_response_id_hash",
+            "is_continuation",
+            "is_auto_compact_candidate"
+          ]
+        }
+      }
+    },
+    {
+      "name": "client_aborted_streams_classified",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "clientAbortedStreamSummaries": [],
+        "clientAbortedAfterFirstChunkCount": 0,
+        "clientAbortedBeforeFirstChunkCount": 0,
+        "clientAbortedStreamCount": 0
+      }
+    },
+    {
+      "name": "codex_cli_config_auth_untouched",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "unchanged": true,
+        "changedFiles": []
+      }
+    },
+    {
+      "name": "codex_app_process_stable",
+      "status": "pass",
+      "reason": "",
+      "evidence": {
+        "stable": true,
+        "afterCount": 5,
+        "beforeCount": 5
+      }
+    }
+  ],
+  "safetyNotes": [
+    "this live monitor is read-only",
+    "it hashes ~/.codex/config.toml and ~/.codex/auth.json but does not read or write their contents",
+    "it does not start, stop, restart, or kill Codex App, Codex CLI, or Cockpit services",
+    "it does not switch providers or restore manual provider changes",
+    "use the App-safe isolated acceptance script when temporary provider config must be created and restored automatically"
+  ]
+}

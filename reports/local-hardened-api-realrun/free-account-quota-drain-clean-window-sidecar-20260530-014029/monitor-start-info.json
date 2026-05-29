@@ -1,0 +1,21 @@
+{
+  "startedAt": "2026-05-30T01:40:29.6820750+08:00",
+  "pid": 32204,
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\CODE\\external\\Cockpit-Tools-Local\\scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 3600 -PollIntervalSeconds 2 -CheckpointIntervalSeconds 5 -AuditPath C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029 -CheckpointPath D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029\\monitor-checkpoint.json -ExitCodeFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029\\monitor-exit-code.txt -StopSignalFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029\\stop.signal -IncludeExistingAudit -AuditSinceTimestampMs 1780076309632 -RequireQuotaFallback -RequireStreamCompletion -RequireCliConfigUntouched -RequireAppStable -RequireApiServiceRuntimeAvailable -RequiredFallbackCycles 1 -RequiredDistinctHealthyAccounts 1 -RequiredCompletedStreams 3 -WriteReport -Quiet",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "auditSinceTimestampMs": 1780076309632,
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029\\monitor-checkpoint.json",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029\\monitor-exit-code.txt",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029\\stop.signal",
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029\\monitor-stdout.log",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-clean-window-sidecar-20260530-014029\\monitor-stderr.log",
+  "parentContextReportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\free-account-quota-drain-sidecar-20260530-013529",
+  "mode": "read_only_sidecar_after_cli_config_change_clean_window",
+  "safety": {
+    "modifiesProvider": false,
+    "refreshesQuota": false,
+    "restartsCodexOrCockpit": false,
+    "consumesUpstreamQuota": false
+  }
+}

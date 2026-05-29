@@ -84,6 +84,7 @@ import {
   cleanupDeletedCodexAccounts,
   deleteCodexGroup,
   getCodexAccountGroups,
+  readCodexAccountGroupsSnapshot,
   removeAccountsFromCodexGroup,
 } from "../services/codexAccountGroupService";
 import {
@@ -263,6 +264,31 @@ function inferCodexAccountProviderMode(
     return "openai_builtin";
   }
   return "custom";
+}
+
+function normalizeCodexAccountIds(accountIds: Iterable<string>): string[] {
+  return Array.from(
+    new Set(
+      Array.from(accountIds)
+        .map((id) => id.trim())
+        .filter(Boolean),
+    ),
+  );
+}
+
+function collectCodexImportedAccountIds(
+  imported: CodexAccount | CodexAccount[] | null | undefined,
+): string[] {
+  const accounts = Array.isArray(imported)
+    ? imported
+    : imported
+      ? [imported]
+      : [];
+  return normalizeCodexAccountIds(
+    accounts
+      .map((account) => account.id)
+      .filter((id): id is string => typeof id === "string"),
+  );
 }
 const CODEX_OVERVIEW_LAYOUT_MODE_KEY =
   "agtools.codex.accounts.overview_layout_mode";
@@ -546,7 +572,13 @@ export function CodexAccountsPage() {
   } = useModalErrorState();
 
   // ─── Codex 账号分组 ────────────────────────────────────────────
-  const [codexGroups, setCodexGroups] = useState<CodexAccountGroup[]>([]);
+  const [codexGroups, setCodexGroups] = useState<CodexAccountGroup[]>(() =>
+    readCodexAccountGroupsSnapshot(),
+  );
+  const [codexGroupsLoaded, setCodexGroupsLoaded] = useState(
+    () => readCodexAccountGroupsSnapshot().length > 0,
+  );
+  const [codexGroupsHydrated, setCodexGroupsHydrated] = useState(false);
   const [groupFilter, setGroupFilter] = useState<string[]>(() =>
     readAccountsOverviewFilterPersistenceEnabled(CODEX_FILTER_PERSISTENCE_SCOPE)
       ? readAccountsOverviewFilterStringArray(
@@ -596,6 +628,9 @@ export function CodexAccountsPage() {
   const [removingGroupAccountIds, setRemovingGroupAccountIds] = useState<
     Set<string>
   >(new Set());
+  const pendingActiveGroupAssignmentsRef = useRef<
+    Array<{ groupId: string; accountIds: string[] }>
+  >([]);
   const [localAccessState, setLocalAccessState] =
     useState<CodexLocalAccessState | null>(null);
   const [codexRuntimeMode, setCodexRuntimeMode] =
@@ -654,8 +689,34 @@ export function CodexAccountsPage() {
     });
 
   const reloadCodexGroups = useCallback(async () => {
-    setCodexGroups(await getCodexAccountGroups());
+    const groups = await getCodexAccountGroups();
+    setCodexGroups(groups);
+    setCodexGroupsLoaded(true);
+    setCodexGroupsHydrated(true);
   }, []);
+
+  const assignAccountsToActiveCodexGroup = useCallback(
+    async (accountIds: string[]) => {
+      const targetIds = normalizeCodexAccountIds(accountIds);
+      if (!activeGroupId || targetIds.length === 0) return;
+      pendingActiveGroupAssignmentsRef.current.push({
+        groupId: activeGroupId,
+        accountIds: targetIds,
+      });
+    },
+    [activeGroupId],
+  );
+
+  const importCodexFromJsonIntoActiveGroup = useCallback(
+    async (jsonContent: string) => {
+      const imported = await codexService.importCodexFromJson(jsonContent);
+      await assignAccountsToActiveCodexGroup(
+        collectCodexImportedAccountIds(imported),
+      );
+      return imported;
+    },
+    [assignAccountsToActiveCodexGroup],
+  );
 
   useEffect(() => {
     reloadCodexGroups();
@@ -766,7 +827,7 @@ export function CodexAccountsPage() {
       updateAccountTags: store.updateAccountTags,
     },
     dataService: {
-      importFromJson: codexService.importCodexFromJson,
+      importFromJson: importCodexFromJsonIntoActiveGroup,
       exportAccounts: codexService.exportCodexAccounts,
     },
     getDisplayEmail: (account) => account.email ?? account.id,
@@ -850,6 +911,72 @@ export function CodexAccountsPage() {
     normalizeTag,
     saveJsonFile,
   } = page;
+
+  const flushPendingActiveGroupAssignments = useCallback(async () => {
+    const pending = pendingActiveGroupAssignmentsRef.current;
+    if (pending.length === 0) return;
+
+    const existingAccountIds = new Set(
+      store.accounts.map((account) => account.id),
+    );
+    const readyByGroup = new Map<string, string[]>();
+    const waiting: Array<{ groupId: string; accountIds: string[] }> = [];
+
+    for (const assignment of pending) {
+      const readyIds = assignment.accountIds.filter((accountId) =>
+        existingAccountIds.has(accountId),
+      );
+      const waitingIds = assignment.accountIds.filter(
+        (accountId) => !existingAccountIds.has(accountId),
+      );
+
+      if (readyIds.length > 0) {
+        readyByGroup.set(
+          assignment.groupId,
+          normalizeCodexAccountIds([
+            ...(readyByGroup.get(assignment.groupId) ?? []),
+            ...readyIds,
+          ]),
+        );
+      }
+      if (waitingIds.length > 0) {
+        waiting.push({
+          groupId: assignment.groupId,
+          accountIds: normalizeCodexAccountIds(waitingIds),
+        });
+      }
+    }
+
+    pendingActiveGroupAssignmentsRef.current = waiting;
+    if (readyByGroup.size === 0) return;
+
+    try {
+      for (const [groupId, accountIds] of readyByGroup.entries()) {
+        await assignAccountsToCodexGroup(groupId, accountIds);
+      }
+      await reloadCodexGroups();
+    } catch (error) {
+      console.error("Failed to assign imported codex accounts to group:", error);
+      pendingActiveGroupAssignmentsRef.current = [
+        ...Array.from(readyByGroup.entries()).map(([groupId, accountIds]) => ({
+          groupId,
+          accountIds,
+        })),
+        ...pendingActiveGroupAssignmentsRef.current,
+      ];
+      setMessage({
+        text: t("messages.actionFailed", {
+          action: t("accounts.groups.addAccounts"),
+          error: String(error),
+        }),
+        tone: "error",
+      });
+    }
+  }, [reloadCodexGroups, setMessage, store.accounts, t]);
+
+  useEffect(() => {
+    void flushPendingActiveGroupAssignments();
+  }, [flushPendingActiveGroupAssignments]);
 
   useEffect(() => {
     if (!filterPersistenceEnabled) {
@@ -2320,42 +2447,47 @@ export function CodexAccountsPage() {
     [t],
   );
 
-  const completeOauthSuccess = useCallback(async () => {
-    oauthLog("授权完成并保存成功", { loginId: oauthLoginIdRef.current });
-    await fetchAccounts();
-    await fetchCurrentAccount();
-    await emitAccountsChanged({
-      platformId: "codex",
-      reason: "oauth",
-    });
-    setAddStatus("success");
-    setAddMessage(t("common.shared.oauth.success", "授权成功"));
-    oauthActiveRef.current = false;
-    oauthCompletingRef.current = false;
-    oauthLoginIdRef.current = null;
-    setOauthUrl("");
-    setOauthUrlCopied(false);
-    setOauthPrepareError(null);
-    setOauthPortInUse(null);
-    setOauthTimeoutInfo(null);
-    setOauthCallbackInput("");
-    setOauthCallbackSubmitting(false);
-    setOauthCallbackError(null);
-    setOauthTokenExchangeRetryVisible(false);
-    setTimeout(() => {
-      setShowAddModal(false);
-      resetAddModalState();
-    }, 1200);
-  }, [
-    fetchAccounts,
-    fetchCurrentAccount,
-    t,
-    oauthLog,
-    setAddStatus,
-    setAddMessage,
-    setShowAddModal,
-    resetAddModalState,
-  ]);
+  const completeOauthSuccess = useCallback(
+    async (accountIds: string[] = []) => {
+      oauthLog("授权完成并保存成功", { loginId: oauthLoginIdRef.current });
+      await assignAccountsToActiveCodexGroup(accountIds);
+      await fetchAccounts();
+      await fetchCurrentAccount();
+      await emitAccountsChanged({
+        platformId: "codex",
+        reason: "oauth",
+      });
+      setAddStatus("success");
+      setAddMessage(t("common.shared.oauth.success", "授权成功"));
+      oauthActiveRef.current = false;
+      oauthCompletingRef.current = false;
+      oauthLoginIdRef.current = null;
+      setOauthUrl("");
+      setOauthUrlCopied(false);
+      setOauthPrepareError(null);
+      setOauthPortInUse(null);
+      setOauthTimeoutInfo(null);
+      setOauthCallbackInput("");
+      setOauthCallbackSubmitting(false);
+      setOauthCallbackError(null);
+      setOauthTokenExchangeRetryVisible(false);
+      setTimeout(() => {
+        setShowAddModal(false);
+        resetAddModalState();
+      }, 1200);
+    },
+    [
+      assignAccountsToActiveCodexGroup,
+      fetchAccounts,
+      fetchCurrentAccount,
+      t,
+      oauthLog,
+      setAddStatus,
+      setAddMessage,
+      setShowAddModal,
+      resetAddModalState,
+    ],
+  );
 
   const completeOauthError = useCallback(
     (e: unknown, allowTokenExchangeRetry = false) => {
@@ -2401,8 +2533,8 @@ export function CodexAccountsPage() {
         setAddMessage(t("codex.oauth.exchanging", "正在交换令牌..."));
         oauthCompletingRef.current = true;
         try {
-          await codexService.completeCodexOAuthLogin(loginId);
-          await completeOauthSuccess();
+          const account = await codexService.completeCodexOAuthLogin(loginId);
+          await completeOauthSuccess(collectCodexImportedAccountIds(account));
         } catch (e) {
           completeOauthError(e, true);
         } finally {
@@ -2650,8 +2782,8 @@ export function CodexAccountsPage() {
       setAddStatus("loading");
       setAddMessage(t("codex.oauth.exchanging", "正在交换令牌..."));
       tokenExchangeStarted = true;
-      await codexService.completeCodexOAuthLogin(loginId);
-      await completeOauthSuccess();
+      const account = await codexService.completeCodexOAuthLogin(loginId);
+      await completeOauthSuccess(collectCodexImportedAccountIds(account));
     } catch (e) {
       completeOauthError(e, tokenExchangeStarted);
       setOauthCallbackError(String(e).replace(/^Error:\s*/, ""));
@@ -2671,8 +2803,8 @@ export function CodexAccountsPage() {
     setAddMessage(t("codex.oauth.exchanging", "正在交换令牌..."));
     oauthCompletingRef.current = true;
     try {
-      await codexService.completeCodexOAuthLogin(loginId);
-      await completeOauthSuccess();
+      const account = await codexService.completeCodexOAuthLogin(loginId);
+      await completeOauthSuccess(collectCodexImportedAccountIds(account));
     } catch (e) {
       completeOauthError(e, true);
       setOauthCallbackError(String(e).replace(/^Error:\s*/, ""));
@@ -3090,6 +3222,9 @@ export function CodexAccountsPage() {
     page.setAddMessage(t("codex.import.importing", "正在导入本地账号..."));
     try {
       const account = await codexService.importCodexFromLocal();
+      await assignAccountsToActiveCodexGroup(
+        collectCodexImportedAccountIds(account),
+      );
       await fetchAccounts();
       await new Promise((resolve) => setTimeout(resolve, 180));
       await fetchAccounts();
@@ -3149,6 +3284,9 @@ export function CodexAccountsPage() {
 
       const result = await codexService.importCodexFromFiles(paths);
       const { imported, failed } = result;
+      await assignAccountsToActiveCodexGroup(
+        collectCodexImportedAccountIds(imported),
+      );
       await fetchAccounts();
       if (imported.length > 0) {
         await emitAccountsChanged({
@@ -3400,6 +3538,9 @@ export function CodexAccountsPage() {
         providerPayload.apiProviderId,
         providerPayload.apiProviderName,
       );
+      await assignAccountsToActiveCodexGroup(
+        collectCodexImportedAccountIds(account),
+      );
       if (
         validation.apiBaseUrl &&
         providerPayload.apiProviderMode === "custom" &&
@@ -3465,7 +3606,7 @@ export function CodexAccountsPage() {
     page.setAddStatus("loading");
     page.setAddMessage(t("common.shared.token.importing", "正在导入..."));
     try {
-      const imported = await codexService.importCodexFromJson(trimmed);
+      const imported = await importCodexFromJsonIntoActiveGroup(trimmed);
       await fetchAccounts();
       if (imported.length > 0) {
         await emitAccountsChanged({
@@ -4446,14 +4587,10 @@ export function CodexAccountsPage() {
 
   const refreshingAll = baseRefreshingAll || groupRefreshingAll;
 
-  const handleRefreshAll = useCallback(async () => {
-    if (!activeGroup) {
-      await handleBaseRefreshAll();
-      return;
-    }
-
+  const activeGroupRefreshTargetIds = useMemo(() => {
+    if (!activeGroup) return [];
     const groupAccountIds = new Set(activeGroup.accountIds);
-    const targetAccountIds = sortCodexLocalAccessAccountIdsForRefresh(
+    return sortCodexLocalAccessAccountIdsForRefresh(
       activeGroup.accountIds,
       accounts,
     ).filter((accountId) => {
@@ -4464,6 +4601,15 @@ export function CodexAccountsPage() {
           !isCodexApiKeyAccount(account),
       );
     });
+  }, [accounts, activeGroup]);
+
+  const handleRefreshAll = useCallback(async () => {
+    if (!activeGroup) {
+      await handleBaseRefreshAll();
+      return;
+    }
+
+    const targetAccountIds = activeGroupRefreshTargetIds;
 
     if (targetAccountIds.length === 0) {
       setMessage({
@@ -4526,8 +4672,8 @@ export function CodexAccountsPage() {
       setGroupRefreshingAll(false);
     }
   }, [
-    accounts,
     activeGroup,
+    activeGroupRefreshTargetIds,
     fetchAccounts,
     fetchCurrentAccount,
     handleBaseRefreshAll,
@@ -4551,33 +4697,37 @@ export function CodexAccountsPage() {
   }, [codexGroups, groupMemberRemoveGroupId]);
 
   useEffect(() => {
+    if (!codexGroupsHydrated) return;
     if (
       activeGroupId &&
       !codexGroups.some((group) => group.id === activeGroupId)
     ) {
       setActiveGroupId(null);
     }
-  }, [activeGroupId, codexGroups]);
+  }, [activeGroupId, codexGroups, codexGroupsHydrated]);
 
   useEffect(() => {
+    if (!codexGroupsHydrated) return;
     if (
       groupQuickAddGroupId &&
       !codexGroups.some((group) => group.id === groupQuickAddGroupId)
     ) {
       setGroupQuickAddGroupId(null);
     }
-  }, [codexGroups, groupQuickAddGroupId]);
+  }, [codexGroups, codexGroupsHydrated, groupQuickAddGroupId]);
 
   useEffect(() => {
+    if (!codexGroupsHydrated) return;
     if (
       groupMemberRemoveGroupId &&
       !codexGroups.some((group) => group.id === groupMemberRemoveGroupId)
     ) {
       setGroupMemberRemoveGroupId(null);
     }
-  }, [codexGroups, groupMemberRemoveGroupId]);
+  }, [codexGroups, codexGroupsHydrated, groupMemberRemoveGroupId]);
 
   useEffect(() => {
+    if (!codexGroupsHydrated) return;
     const existingAccountIds = new Set(accounts.map((account) => account.id));
     const hasStaleAccountIds = codexGroups.some((group) =>
       group.accountIds.some((accountId) => !existingAccountIds.has(accountId)),
@@ -4590,7 +4740,7 @@ export function CodexAccountsPage() {
       await cleanupDeletedCodexAccounts(existingAccountIds);
       await reloadCodexGroups();
     })();
-  }, [accounts, codexGroups, reloadCodexGroups]);
+  }, [accounts, codexGroups, codexGroupsHydrated, reloadCodexGroups]);
 
   const handleEnterGroup = useCallback(
     (groupId: string) => {
@@ -5493,6 +5643,9 @@ export function CodexAccountsPage() {
       }
       result = result.filter((a) => groupAccountIds.has(a.id));
     }
+    if (!codexGroupsLoaded) {
+      return [];
+    }
     if (!activeGroupId && activeGroupFilter.length === 0) {
       result = result.filter((account) => !groupedAccountIdSet.has(account.id));
     }
@@ -5511,6 +5664,7 @@ export function CodexAccountsPage() {
   }, [
     activeGroupId,
     codexGroups,
+    codexGroupsLoaded,
     compareAccountsBySort,
     filterTypes,
     groupFilter,
@@ -5529,6 +5683,21 @@ export function CodexAccountsPage() {
     [filteredAccounts],
   );
   const exportSelectionCount = getScopedSelectedCount(filteredIds);
+  const refreshAllButtonDisabled =
+    refreshingAll ||
+    (activeGroup
+      ? activeGroupRefreshTargetIds.length === 0
+      : !codexGroupsLoaded || accounts.length === 0);
+  const refreshAllButtonTitle = activeGroup
+    ? t("accounts.groups.refreshGroup", "刷新本分组")
+    : t("common.shared.refreshAll", "刷新全部");
+  const exportButtonTitle = activeGroup
+    ? exportSelectionCount > 0
+      ? `${t("accounts.groups.exportGroup", "导出本分组")} (${exportSelectionCount})`
+      : t("accounts.groups.exportGroup", "导出本分组")
+    : exportSelectionCount > 0
+      ? `${t("common.shared.export.title", "导出")} (${exportSelectionCount})`
+      : t("common.shared.export.title", "导出");
   const pagination = usePagination({
     items: filteredAccounts,
     storageKey: buildPaginationPageSizeStorageKey("Codex"),
@@ -7876,6 +8045,10 @@ export function CodexAccountsPage() {
   const hasGroupEntryCards = Boolean(
     inlineFolderCards && inlineFolderCards.length > 0,
   );
+  const showOverviewLoading =
+    (loading && accounts.length === 0) ||
+    (!codexGroupsLoaded && accounts.length > 0) ||
+    (Boolean(activeGroupId) && !activeGroup && !codexGroupsHydrated);
   const showOverviewSelectionBar =
     !groupByTag && !activeGroupId && paginatedAccounts.length > 0;
   const externalImportRunning = [
@@ -8662,15 +8835,19 @@ export function CodexAccountsPage() {
               <button
                 className="btn btn-primary icon-only"
                 onClick={() => openAddModal("oauth")}
-                title={t("common.shared.addAccount", "添加账号")}
+                title={
+                  activeGroup
+                    ? t("accounts.groups.addAccountToGroup", "添加到本分组")
+                    : t("common.shared.addAccount", "添加账号")
+                }
               >
                 <Plus size={14} />
               </button>
               <button
                 className="btn btn-secondary icon-only"
                 onClick={handleRefreshAll}
-                disabled={refreshingAll || accounts.length === 0}
-                title={t("common.shared.refreshAll", "刷新全部")}
+                disabled={refreshAllButtonDisabled}
+                title={refreshAllButtonTitle}
               >
                 <RefreshCw
                   size={14}
@@ -8692,11 +8869,7 @@ export function CodexAccountsPage() {
                 className="btn btn-secondary export-btn icon-only"
                 onClick={() => void handleExport(filteredIds)}
                 disabled={exporting || filteredIds.length === 0}
-                title={
-                  exportSelectionCount > 0
-                    ? `${t("common.shared.export.title", "导出")} (${exportSelectionCount})`
-                    : t("common.shared.export.title", "导出")
-                }
+                title={exportButtonTitle}
               >
                 <Upload size={14} />
               </button>
@@ -8759,7 +8932,7 @@ export function CodexAccountsPage() {
             </div>
           </div>
 
-          {loading && accounts.length === 0 ? (
+          {showOverviewLoading ? (
             <div className="loading-container">
               <RefreshCw size={24} className="loading-spinner" />
               <p>{t("common.loading", "加载中...")}</p>

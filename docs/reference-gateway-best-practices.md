@@ -1,6 +1,6 @@
 # Reference Gateway Best Practices Review
 
-审查时间：2026-05-24
+审查时间：2026-05-29
 
 审查目标：为 Cockpit Tools Local 的个人本机 API service / Hardened Local API Mode 提炼可借鉴实践。本文只作为设计参考，不把社区项目的策略直接等同于本仓应启用的默认行为。Codex-facing 行为以官方 `openai-codex` 源码和本仓实测为最高语义锚点，社区项目只用于调度结构、cooldown、限流和可观测性启发。
 
@@ -8,11 +8,11 @@
 
 | Project | Local path | Revision | Role |
 | --- | --- | --- | --- |
-| OpenAI Codex | `D:\CODE\external\_reference_gateway_sources\openai-codex` | `7d47056` | 官方 Codex 源码；Codex-facing `/v1/responses`、stream terminal、turn metadata、重放/连续性语义 |
-| New API | `D:\CODE\external\_reference_gateway_sources\new-api` | `49bc3a1` | 渠道网关、渠道禁用、重试、限流 |
-| Sub2API | `D:\CODE\external\_reference_gateway_sources\sub2api` | `63b0631a` | 账号健康、调度、临时不可调度、粘性会话 |
-| CLIProxyAPI | `D:\CODE\external\_reference_gateway_sources\CLIProxyAPI` | `50d19e20` | CLI/OAuth 代理、凭据选择、模型冷却、流式重试边界 |
-| LiteLLM | `D:\CODE\external\_reference_gateway_sources\litellm` | `4148667` | 通用 router、cooldown、pre-call rate checks、proxy limits |
+| OpenAI Codex | `D:\CODE\external\_reference_gateway_sources\openai-codex` | `8a827d6` | 官方 Codex 源码；Codex-facing `/v1/responses`、stream terminal、turn metadata、重放/连续性语义 |
+| New API | `D:\CODE\external\_reference_gateway_sources\new-api` | `5b86ce0` | 渠道网关、渠道禁用、重试、限流 |
+| Sub2API | `D:\CODE\external\_reference_gateway_sources\sub2api` | `c3cd2b9f` | 账号健康、调度、临时不可调度、粘性会话 |
+| CLIProxyAPI | `D:\CODE\external\_reference_gateway_sources\CLIProxyAPI` | `2bcc7622` | CLI/OAuth 代理、凭据选择、模型冷却、流式重试边界 |
+| LiteLLM | `D:\CODE\external\_reference_gateway_sources\litellm` | `5699a06` | 通用 router、cooldown、pre-call rate checks、proxy limits |
 
 ## Evidence Precedence
 

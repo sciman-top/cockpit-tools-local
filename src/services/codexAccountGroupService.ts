@@ -9,6 +9,8 @@
 
 import { invoke } from '@tauri-apps/api/core'
 
+const GROUP_SNAPSHOT_STORAGE_KEY = 'agtools.codex_account_groups.snapshot';
+
 let idCounter = 0;
 function generateId(): string {
   return `cgrp_${Date.now()}_${++idCounter}`;
@@ -32,6 +34,39 @@ function cloneGroups(groups: CodexAccountGroup[]): CodexAccountGroup[] {
   }));
 }
 
+function sortCodexGroups(groups: CodexAccountGroup[]): CodexAccountGroup[] {
+  return [...groups].sort((left, right) => {
+    const sortDiff = left.sortOrder - right.sortOrder;
+    if (sortDiff !== 0) return sortDiff;
+    const createdDiff = left.createdAt - right.createdAt;
+    return createdDiff !== 0 ? createdDiff : left.id.localeCompare(right.id);
+  });
+}
+
+export function readCodexAccountGroupsSnapshot(): CodexAccountGroup[] {
+  try {
+    if (typeof localStorage === 'undefined') return [];
+    const raw = localStorage.getItem(GROUP_SNAPSHOT_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? sortCodexGroups(cloneGroups(parsed)) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeCodexAccountGroupsSnapshot(groups: CodexAccountGroup[]): void {
+  try {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(
+      GROUP_SNAPSHOT_STORAGE_KEY,
+      JSON.stringify(sortCodexGroups(cloneGroups(groups))),
+    );
+  } catch {
+    // localStorage 只服务首帧展示，磁盘文件仍是权威来源。
+  }
+}
+
 function normalizeCodexGroupAccountIds(accountIds: Iterable<string>): string[] {
   return Array.from(
     new Set(
@@ -46,9 +81,11 @@ async function loadGroupsFromDisk(): Promise<CodexAccountGroup[]> {
   try {
     const raw: string = await invoke('load_codex_account_groups');
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? cloneGroups(parsed) : [];
+    const groups = Array.isArray(parsed) ? cloneGroups(parsed) : [];
+    writeCodexAccountGroupsSnapshot(groups);
+    return groups;
   } catch {
-    return [];
+    return readCodexAccountGroupsSnapshot();
   }
 }
 
@@ -69,6 +106,7 @@ async function loadGroups(): Promise<CodexAccountGroup[]> {
 async function saveGroups(groups: CodexAccountGroup[]): Promise<void> {
   const nextGroups = cloneGroups(groups);
   cachedGroups = nextGroups;
+  writeCodexAccountGroupsSnapshot(nextGroups);
   await saveGroupsToDisk(nextGroups);
 }
 
@@ -77,7 +115,7 @@ async function saveGroups(groups: CodexAccountGroup[]): Promise<void> {
 export async function getCodexAccountGroups(): Promise<CodexAccountGroup[]> {
   cachedGroups = await loadGroupsFromDisk();
   const groups = cloneGroups(cachedGroups);
-  return groups.sort((a, b) => a.sortOrder - b.sortOrder);
+  return sortCodexGroups(groups);
 }
 
 export async function createCodexGroup(name: string, sortOrder?: number): Promise<CodexAccountGroup> {
@@ -134,7 +172,7 @@ export async function assignAccountsToCodexGroup(groupId: string, accountIds: st
     currentGroup.accountIds = currentGroup.accountIds.filter((id) => !targetIds.has(id));
   }
 
-  // 分组只保存成员集合，不保存用户手动顺序。
+  // 分组只保存去重后的成员集合。
   group.accountIds = normalizeCodexGroupAccountIds([
     ...group.accountIds,
     ...accountIds,

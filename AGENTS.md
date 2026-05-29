@@ -3,7 +3,7 @@
 **类型**: Tauri 2 desktop app, React 19/Vite frontend, Rust backend
 **承接来源**: `GlobalUser/AGENTS.md v9.53`
 **适用范围**: 项目级（仓库根）
-**最后更新**: 2026-05-24
+**最后更新**: 2026-05-29
 
 ## 1. 阅读指引
 - 本文件是三工具共同项目规则主体；Codex 直接读取，Claude/Gemini 通过各自 wrapper 的 `AGENTS.md` import 承接并只追加平台差异。
@@ -21,8 +21,8 @@
 ### A.2 执行锚点
 - 每轮先检查 `git status --short --branch`，区分用户改动、治理生成文件和本轮改动。
 - 默认中文沟通、中文解释、中文汇报；代码标识符、命令、日志、报错、API 名和 schema 字段保留英文原文。
-- 维护 Cockpit 时把当前 Codex 连续性当作硬护栏：未经当前任务明确确认，不停止、重启、kill 或自动拉起 `Codex App`、`codex`、Cockpit release exe 或 live dev app。
-- 需要 live UI 或 packaged exe 验证时，先说明确切命令、原因、端口/窗口/单实例唤醒/资源占用/会话连续性影响，并询问：`是否允许我现在执行 <command> 进行实时验证？`
+- 维护 Cockpit 时把当前 Codex 与正在运行中的 Cockpit 连续性当作硬护栏：未经当前任务明确确认，不停止、重启、kill、自动拉起、覆盖、替换或原地升级 `Codex App`、`codex`、Cockpit release exe、packaged exe、desktop shortcut 指向目标或 live dev app/server。
+- 需要 live UI、packaged exe 或“正在运行的 Cockpit 是否已是最新代码”验证时，先做只读进程、路径、hash、端口或配置探针；若仍需启动、重启、替换、覆盖、安装或单实例唤醒 Cockpit，先说明确切命令、原因、端口/窗口/单实例唤醒/资源占用/Codex 与 Cockpit 连续性影响，并询问：`是否允许我现在执行 <command> 进行实时验证？`
 - Codex API service、routing、quota、pool scheduling 或 failover 变更前，优先查本仓 `docs/reference-gateway-best-practices.md` 和 `D:\CODE\external\_reference_gateway_sources`；外部参考只作结构证据，不覆盖本仓运行事实。
 
 <!-- auto-merged target-local additions -->
