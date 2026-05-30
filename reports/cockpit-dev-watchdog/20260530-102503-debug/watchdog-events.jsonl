@@ -1,0 +1,22 @@
+{"pid":30488,"repoRoot":"D:\\CODE\\external\\Cockpit-Tools-Local","timestamp":"2026-05-30T10:25:04.7736853+08:00","reportDir":"D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-102503-debug","event":"watchdog_started"}
+{"launcherCount":3,"timestamp":"2026-05-30T11:04:21.6286564+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"timestamp":"2026-05-30T11:04:24.1647409+08:00","launchCount":1,"launch":{"processId":21856,"command":"npm run tauri dev","stdoutPath":"D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-102503-debug\\tauri-dev.stdout.log","stderrPath":"D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-102503-debug\\tauri-dev.stderr.log"},"event":"tauri_dev_launched"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:26.7002585+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:29.2273010+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:31.7218973+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:34.2146430+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:36.6959154+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:39.1203466+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:41.5215500+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:43.9020970+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:46.3022770+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:48.6725696+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:51.0364614+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:53.3890941+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:55.7412996+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:04:58.0938335+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":2,"timestamp":"2026-05-30T11:05:00.4619790+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":3,"timestamp":"2026-05-30T11:05:02.8424471+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":3,"timestamp":"2026-05-30T11:05:05.2604808+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":3,"timestamp":"2026-05-30T11:05:07.6395154+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"launcherCount":3,"timestamp":"2026-05-30T11:05:09.9993108+08:00","event":"waiting_for_existing_tauri_dev_launcher"}

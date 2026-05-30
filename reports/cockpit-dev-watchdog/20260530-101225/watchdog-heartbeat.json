@@ -1,0 +1,16 @@
+{
+  "timestamp": "2026-05-30T10:13:13.8866817+08:00",
+  "pid": 39544,
+  "runningCockpitProcessCount": 1,
+  "runningCockpitProcesses": [
+    {
+      "ProcessId": 34572,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe\" "
+    }
+  ],
+  "launchCount": 0,
+  "lastLaunchAt": null,
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-101225\\stop.signal"
+}

@@ -517,6 +517,22 @@ export function CodexLocalAccessModal({
   }, [concurrencyDiagnostics, t]);
   const concurrencyDiagnosis = useMemo<ConcurrencyDiagnosisView | null>(() => {
     if (!concurrencyDiagnostics) return null;
+    const needsBalancedSelfUse =
+      concurrencyDiagnostics.recentLocalBackpressureCount > 0 &&
+      concurrencyDiagnostics.maxConcurrentRequests === 1 &&
+      concurrencyDiagnostics.minRequestIntervalSeconds >= 60;
+    const balancedSelfUseApplied =
+      safetyPresetId === 'balanced_self_use' &&
+      concurrencyDiagnostics.maxConcurrentRequests === 1 &&
+      concurrencyDiagnostics.minRequestIntervalSeconds <= 20;
+    const balancedRecommendation = t(
+      'codex.localAccess.diagnostics.recommendBalanced',
+      'AI 推荐：切换到自用均衡，仍保持 1 并发，但把启动间隔降到 20s；先减少本地排队，不直接拉高并发。',
+    );
+    const balancedAppliedRecommendation = t(
+      'codex.localAccess.diagnostics.recommendBalancedApplied',
+      '已处于 AI 推荐配置：自用均衡（1 并发 · 20s · 2账号）；继续观察近窗口本地排队是否下降。',
+    );
     if (concurrencyDiagnostics.auditLoadError) {
       return {
         tone: 'warning',
@@ -524,23 +540,22 @@ export function CodexLocalAccessModal({
           error: concurrencyDiagnostics.auditLoadError,
           defaultValue: '审计日志读取降级：{{error}}',
         }),
+        recommendation: needsBalancedSelfUse
+          ? balancedRecommendation
+          : balancedSelfUseApplied
+            ? balancedAppliedRecommendation
+            : undefined,
+        recommendedPreset: needsBalancedSelfUse ? 'balanced_self_use' : undefined,
       };
     }
-    if (
-      concurrencyDiagnostics.recentLocalBackpressureCount > 0 &&
-      concurrencyDiagnostics.maxConcurrentRequests === 1 &&
-      concurrencyDiagnostics.minRequestIntervalSeconds >= 60
-    ) {
+    if (needsBalancedSelfUse) {
       return {
         tone: 'warning',
         text: t(
           'codex.localAccess.diagnostics.hintMaximumSafetyBackpressure',
           '当前更像是最高安全 preset 触发本地排队；这会保护上游，但会让多任务启动显著变慢。',
         ),
-        recommendation: t(
-          'codex.localAccess.diagnostics.recommendBalanced',
-          'AI 推荐：切换到自用均衡，仍保持 1 并发，但把启动间隔降到 20s；先减少本地排队，不直接拉高并发。',
-        ),
+        recommendation: balancedRecommendation,
         recommendedPreset: 'balanced_self_use',
       };
     }
@@ -603,7 +618,7 @@ export function CodexLocalAccessModal({
         'Cockpit 侧没有明显阻塞；若 Codex App 仍停在 Thinking，更可能是 App/session queue 或 UI 状态。',
       ),
     };
-  }, [concurrencyDiagnostics, t]);
+  }, [concurrencyDiagnostics, safetyPresetId, t]);
   const actionBusy =
     saving || refreshing || testing || starting || portCleanupBusy || statsRefreshing;
   const summaryStats = useMemo(
@@ -1500,39 +1515,6 @@ export function CodexLocalAccessModal({
     if (actionBusy) return;
     const removalIds = new Set(accountIds);
     if (removalIds.size === 0) return;
-    const removedAccountIds = selectedOrderForSave.filter((accountId) =>
-      removalIds.has(accountId),
-    );
-    const removedCount = removedAccountIds.length;
-    if (removedCount === 0) return;
-    const removedAccount =
-      removedCount === 1 ? accountById.get(removedAccountIds[0]) : null;
-    const removedAccountLabel = removedAccount
-      ? maskAccountText(buildCodexAccountPresentation(removedAccount, t).displayName)
-      : t('codex.localAccess.modal.thisAccount', '该账号');
-    const confirmed = await confirmDialog(
-      removedCount === 1
-        ? t('codex.localAccess.modal.removeMemberConfirmMessage', {
-            account: removedAccountLabel,
-            defaultValue:
-              '确定要将 {{account}} 移出 API 服务吗？移出后它不会参与本机 API 服务调度，账号本身不会被删除。',
-          })
-        : t('codex.localAccess.modal.removeMembersConfirmMessage', {
-            count: removedCount,
-            defaultValue:
-              '确定要将 {{count}} 个账号移出 API 服务吗？移出后这些账号不会参与本机 API 服务调度，账号本身不会被删除。',
-          }),
-      {
-        title: t(
-          'codex.localAccess.modal.removeMemberConfirmTitle',
-          '确认移出 API 服务',
-        ),
-        kind: 'warning',
-        okLabel: t('codex.localAccess.modal.removeMemberConfirmAction', '确认移出'),
-        cancelLabel: t('common.cancel', '取消'),
-      },
-    );
-    if (!confirmed) return;
     setError('');
     setNotice('');
     const nextSelected = new Set(selected);
@@ -1540,6 +1522,8 @@ export function CodexLocalAccessModal({
     const nextOrder = selectedOrderForSave.filter(
       (accountId) => !removalIds.has(accountId),
     );
+    const removedCount = selectedOrderForSave.length - nextOrder.length;
+    if (removedCount === 0) return;
     try {
       const filtered = buildPersistedMemberIds(nextOrder);
       await onSaveAccounts({

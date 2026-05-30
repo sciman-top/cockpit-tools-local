@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-05-30T11:26:20.7960464+08:00",
+  "pid": 30488,
+  "desiredInstance": "Debug",
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "runningCockpitProcessCount": 1,
+  "runningCockpitProcesses": [
+    {
+      "ProcessId": 28532,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe\""
+    }
+  ],
+  "runningDebugProcessCount": 1,
+  "runningDebugProcesses": [
+    {
+      "ProcessId": 28532,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe\""
+    }
+  ],
+  "runningNonDebugProcessCount": 0,
+  "runningNonDebugProcesses": [],
+  "tauriDevLauncherCount": 3,
+  "tauriDevLaunchers": [
+    {
+      "ProcessId": 21856,
+      "Name": "cmd.exe",
+      "ExecutablePath": "C:\\WINDOWS\\system32\\cmd.exe",
+      "CommandLine": "C:\\WINDOWS\\system32\\cmd.exe /c \"\"C:\\\\Program Files\\nodejs\\npm.cmd\" run tauri dev\""
+    },
+    {
+      "ProcessId": 26864,
+      "Name": "node.exe",
+      "ExecutablePath": "C:\\Program Files\\nodejs\\node.exe",
+      "CommandLine": "\"C:\\Program Files\\nodejs\\\\node.exe\"  \"C:\\Users\\sciman\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npm-cli.js\" run tauri dev"
+    },
+    {
+      "ProcessId": 36892,
+      "Name": "node.exe",
+      "ExecutablePath": "C:\\Program Files\\nodejs\\node.exe",
+      "CommandLine": "\"node\"   \"D:\\CODE\\external\\Cockpit-Tools-Local\\node_modules\\.bin\\\\..\\@tauri-apps\\cli\\tauri.js\" dev"
+    }
+  ],
+  "launchCount": 1,
+  "lastLaunchAt": "2026-05-30T11:04:24.1216428+08:00",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-102503-debug\\stop.signal"
+}

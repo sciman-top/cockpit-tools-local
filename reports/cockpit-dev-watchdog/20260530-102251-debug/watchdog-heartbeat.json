@@ -1,0 +1,38 @@
+{
+  "timestamp": "2026-05-30T10:25:01.0920009+08:00",
+  "pid": 29332,
+  "desiredInstance": "Debug",
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "runningCockpitProcessCount": 1,
+  "runningCockpitProcesses": [
+    {
+      "ProcessId": 35456,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe\""
+    }
+  ],
+  "runningDebugProcessCount": 1,
+  "runningDebugProcesses": [
+    {
+      "ProcessId": 35456,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe\""
+    }
+  ],
+  "runningNonDebugProcessCount": 0,
+  "runningNonDebugProcesses": [],
+  "tauriDevLauncherCount": 1,
+  "tauriDevLaunchers": [
+    {
+      "ProcessId": 4976,
+      "Name": "node.exe",
+      "ExecutablePath": "C:\\Program Files\\nodejs\\node.exe",
+      "CommandLine": "\"node\"   \"D:\\CODE\\external\\Cockpit-Tools-Local\\node_modules\\.bin\\\\..\\@tauri-apps\\cli\\tauri.js\" dev"
+    }
+  ],
+  "launchCount": 2,
+  "lastLaunchAt": "2026-05-30T10:23:40.2573735+08:00",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-102251-debug\\stop.signal"
+}

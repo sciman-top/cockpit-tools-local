@@ -1,0 +1,3 @@
+{"timestamp":"2026-05-30T10:12:25.9489421+08:00","pid":39544,"reportDir":"D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-101225","event":"watchdog_started","repoRoot":"D:\\CODE\\external\\Cockpit-Tools-Local"}
+{"event":"stop_signal_file","stopSignalFile":"D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-101225\\stop.signal","timestamp":"2026-05-30T10:13:18.8956122+08:00"}
+{"launchCount":0,"event":"watchdog_exited","timestamp":"2026-05-30T10:13:18.8999491+08:00"}

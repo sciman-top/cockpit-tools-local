@@ -1,0 +1,11 @@
+{
+  "startedAt": "2026-05-30T10:13:33.6171527+08:00",
+  "pid": 29384,
+  "repoRoot": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-101332",
+  "pollIntervalSeconds": 2,
+  "launchCooldownSeconds": 45,
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-101332\\stop.signal",
+  "trigger": "launch npm run tauri dev only when no cockpit-tools*.exe app process exists",
+  "stopSemantics": "create stop.signal; do not kill app/codex/cockpit processes"
+}
