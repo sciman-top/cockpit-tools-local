@@ -5,7 +5,12 @@ param(
   [int]$LaunchCooldownSeconds = 45,
   [ValidateSet("Any", "Debug")]
   [string]$DesiredInstance = "Any",
+  [ValidateSet("Immediate", "PrebuildThenStop")]
+  [string]$DebugSwitchMode = "PrebuildThenStop",
   [int]$GracefulStopTimeoutSeconds = 8,
+  [int]$DebugStartupGraceSeconds = 120,
+  [int]$ReleaseFallbackCooldownSeconds = 10,
+  [switch]$DisableReleaseFallback,
   [string]$StopSignalFile = "",
   [switch]$Quiet
 )
@@ -26,7 +31,25 @@ function Write-JsonFile {
   if ($parent) {
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
   }
-  $Value | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $Path -Encoding UTF8
+  $json = $Value | ConvertTo-Json -Depth 8
+  $tempPath = "{0}.{1}.{2}.tmp" -f $Path, $PID, ([guid]::NewGuid().ToString("N"))
+  $lastError = $null
+
+  for ($attempt = 1; $attempt -le 6; $attempt++) {
+    try {
+      Set-Content -LiteralPath $tempPath -Value $json -Encoding UTF8
+      Move-Item -LiteralPath $tempPath -Destination $Path -Force
+      return
+    } catch {
+      $lastError = $_.Exception.Message
+      Remove-Item -LiteralPath $tempPath -Force -ErrorAction SilentlyContinue
+      Start-Sleep -Milliseconds (120 * $attempt)
+    }
+  }
+
+  if (-not $Quiet) {
+    Write-Warning "failed to write json file '$Path': $lastError"
+  }
 }
 
 function Write-LogLine {
@@ -61,6 +84,10 @@ function Get-CockpitAppProcesses {
 
 function Get-CockpitDebugExePath {
   return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "target\debug\cockpit-tools.exe"))
+}
+
+function Get-CockpitReleaseExePath {
+  return [System.IO.Path]::GetFullPath((Join-Path $RepoRoot "target\release\cockpit-tools.exe"))
 }
 
 function Test-IsDebugCockpitProcess {
@@ -153,6 +180,51 @@ function Stop-CockpitProcessesForDebugSwitch {
   return $results
 }
 
+function Stop-ProcessTrees {
+  param([Parameter(Mandatory = $true)][array]$Processes)
+
+  $all = @(Get-CimInstance Win32_Process)
+  $ids = New-Object System.Collections.Generic.List[int]
+
+  function Add-ProcessTreeId {
+    param([Parameter(Mandatory = $true)][int]$ProcessId)
+
+    foreach ($child in @($all | Where-Object { [int]$_.ParentProcessId -eq $ProcessId })) {
+      Add-ProcessTreeId -ProcessId ([int]$child.ProcessId)
+    }
+    if (-not $ids.Contains($ProcessId)) {
+      $ids.Add($ProcessId)
+    }
+  }
+
+  foreach ($processInfo in $Processes) {
+    Add-ProcessTreeId -ProcessId ([int]$processInfo.ProcessId)
+  }
+
+  $results = @()
+  foreach ($id in $ids) {
+    $processInfo = $all | Where-Object { [int]$_.ProcessId -eq $id } | Select-Object -First 1
+    $result = [ordered]@{
+      processId = $id
+      name = if ($processInfo) { $processInfo.Name } else { $null }
+      executablePath = if ($processInfo) { $processInfo.ExecutablePath } else { $null }
+      stopped = $false
+      error = $null
+    }
+    try {
+      if (Get-Process -Id $id -ErrorAction SilentlyContinue) {
+        Stop-Process -Id $id -Force -ErrorAction Stop
+        $result.stopped = $true
+      }
+    } catch {
+      $result.error = $_.Exception.Message
+    }
+    $results += [pscustomobject]$result
+  }
+
+  return $results
+}
+
 function Start-CockpitTauriDev {
   $stdoutPath = Join-Path $ReportDir "tauri-dev.stdout.log"
   $stderrPath = Join-Path $ReportDir "tauri-dev.stderr.log"
@@ -170,6 +242,77 @@ function Start-CockpitTauriDev {
     command = "npm run tauri dev"
     stdoutPath = $stdoutPath
     stderrPath = $stderrPath
+  }
+}
+
+function Start-CockpitReleaseFallback {
+  $releaseExePath = Get-CockpitReleaseExePath
+  if (-not (Test-Path -LiteralPath $releaseExePath -PathType Leaf)) {
+    throw "Release fallback executable does not exist: $releaseExePath"
+  }
+
+  $process = Start-Process `
+    -FilePath $releaseExePath `
+    -WorkingDirectory $RepoRoot `
+    -PassThru
+
+  return [ordered]@{
+    processId = $process.Id
+    command = $releaseExePath
+    executablePath = $releaseExePath
+  }
+}
+
+function Start-CockpitDebugPrebuild {
+  $stdoutPath = Join-Path $ReportDir "debug-prebuild.stdout.log"
+  $stderrPath = Join-Path $ReportDir "debug-prebuild.stderr.log"
+  $manifestPath = Join-Path $RepoRoot "src-tauri\Cargo.toml"
+  $process = Start-Process `
+    -FilePath "cargo.exe" `
+    -ArgumentList @("build", "--manifest-path", $manifestPath, "--no-default-features", "--color", "never") `
+    -WorkingDirectory $RepoRoot `
+    -WindowStyle Hidden `
+    -PassThru `
+    -RedirectStandardOutput $stdoutPath `
+    -RedirectStandardError $stderrPath
+
+  return [ordered]@{
+    process = $process
+    processId = $process.Id
+    command = "cargo build --manifest-path src-tauri/Cargo.toml --no-default-features --color never"
+    stdoutPath = $stdoutPath
+    stderrPath = $stderrPath
+    startedAt = Get-Date
+  }
+}
+
+function Get-DebugPrebuildSnapshot {
+  param($Prebuild)
+
+  if (-not $Prebuild) {
+    return $null
+  }
+
+  $hasExited = $false
+  $exitCode = $null
+  try {
+    $hasExited = [bool]$Prebuild.process.HasExited
+    if ($hasExited) {
+      $exitCode = [int]$Prebuild.process.ExitCode
+    }
+  } catch {
+    $hasExited = $true
+    $exitCode = $null
+  }
+
+  return [ordered]@{
+    processId = $Prebuild.processId
+    command = $Prebuild.command
+    stdoutPath = $Prebuild.stdoutPath
+    stderrPath = $Prebuild.stderrPath
+    startedAt = $Prebuild.startedAt.ToString("o")
+    hasExited = $hasExited
+    exitCode = $exitCode
   }
 }
 
@@ -204,15 +347,28 @@ $startInfo = [ordered]@{
   pollIntervalSeconds = $PollIntervalSeconds
   launchCooldownSeconds = $LaunchCooldownSeconds
   desiredInstance = $DesiredInstance
+  debugSwitchMode = $DebugSwitchMode
+  releaseFallbackEnabled = -not [bool]$DisableReleaseFallback
+  releaseFallbackCooldownSeconds = $ReleaseFallbackCooldownSeconds
+  debugStartupGraceSeconds = $DebugStartupGraceSeconds
   debugExePath = Get-CockpitDebugExePath
+  releaseExePath = Get-CockpitReleaseExePath
   stopSignalFile = $StopSignalFile
   trigger = if ($DesiredInstance -eq "Debug") {
-    "keep target\debug\cockpit-tools.exe as the active Cockpit app process; launch npm run tauri dev when debug is absent"
+    if ($DebugSwitchMode -eq "PrebuildThenStop") {
+      "keep target\debug\cockpit-tools.exe as the active Cockpit app process; if debug exits, start target\release\cockpit-tools.exe as fallback, prebuild debug, then stop fallback only after debug prebuild succeeds"
+    } else {
+      "keep target\debug\cockpit-tools.exe as the active Cockpit app process; launch npm run tauri dev when debug is absent"
+    }
   } else {
     "launch npm run tauri dev only when no cockpit-tools*.exe app process exists"
   }
   stopSemantics = if ($DesiredInstance -eq "Debug") {
-    "create stop.signal to stop watchdog; non-debug cockpit-tools app processes may be closed/stopped to switch to debug; never kill Codex processes"
+    if ($DebugSwitchMode -eq "PrebuildThenStop") {
+      "create stop.signal to stop watchdog; non-debug cockpit-tools app processes are used as fallback and are preserved until debug prebuild succeeds or debug is already running; never kill Codex processes"
+    } else {
+      "create stop.signal to stop watchdog; non-debug cockpit-tools app processes may be closed/stopped to switch to debug; never kill Codex processes"
+    }
   } else {
     "create stop.signal; do not kill app/codex/cockpit processes"
   }
@@ -221,7 +377,13 @@ Write-JsonFile -Path $metaPath -Value $startInfo
 Write-LogLine @{ event = "watchdog_started"; pid = $PID; repoRoot = $RepoRoot; reportDir = $ReportDir }
 
 $lastLaunchAt = $null
+$lastPrebuildAt = $null
+$lastReleaseFallbackAt = $null
+$debugPrebuild = $null
+$debugMissingSince = $null
 $launchCount = 0
+$prebuildCount = 0
+$releaseFallbackCount = 0
 
 while ($true) {
   if (Test-Path -LiteralPath $StopSignalFile) {
@@ -233,11 +395,23 @@ while ($true) {
   $debugProcesses = @($processes | Where-Object { Test-IsDebugCockpitProcess $_ })
   $nonDebugProcesses = @($processes | Where-Object { -not (Test-IsDebugCockpitProcess $_) })
   $tauriDevLaunchers = @(Get-TauriDevLauncherProcesses)
+  $completedPrebuild = $null
+  if ($debugPrebuild -and $debugPrebuild.process.HasExited) {
+    $completedPrebuild = Get-DebugPrebuildSnapshot -Prebuild $debugPrebuild
+    $lastPrebuildAt = Get-Date
+    $debugPrebuild = $null
+    Write-LogLine @{ event = "debug_prebuild_completed"; prebuild = $completedPrebuild }
+  }
+
   $heartbeat = [ordered]@{
     timestamp = Get-NowIso
     pid = $PID
     desiredInstance = $DesiredInstance
+    debugSwitchMode = $DebugSwitchMode
+    releaseFallbackEnabled = -not [bool]$DisableReleaseFallback
+    releaseFallbackCooldownSeconds = $ReleaseFallbackCooldownSeconds
     debugExePath = Get-CockpitDebugExePath
+    releaseExePath = Get-CockpitReleaseExePath
     runningCockpitProcessCount = $processes.Count
     runningCockpitProcesses = $processes
     runningDebugProcessCount = $debugProcesses.Count
@@ -247,23 +421,135 @@ while ($true) {
     tauriDevLauncherCount = $tauriDevLaunchers.Count
     tauriDevLaunchers = $tauriDevLaunchers
     launchCount = $launchCount
+    prebuildCount = $prebuildCount
+    releaseFallbackCount = $releaseFallbackCount
     lastLaunchAt = if ($lastLaunchAt) { $lastLaunchAt.ToString("o") } else { $null }
+    lastPrebuildAt = if ($lastPrebuildAt) { $lastPrebuildAt.ToString("o") } else { $null }
+    lastReleaseFallbackAt = if ($lastReleaseFallbackAt) { $lastReleaseFallbackAt.ToString("o") } else { $null }
+    debugPrebuild = Get-DebugPrebuildSnapshot -Prebuild $debugPrebuild
+    debugMissingSince = if ($debugMissingSince) { $debugMissingSince.ToString("o") } else { $null }
     stopSignalFile = $StopSignalFile
   }
   Write-JsonFile -Path $heartbeatPath -Value $heartbeat
 
   $needsTauriDev = $false
+  $needsDebugPrebuild = $false
+  $needsReleaseFallback = $false
   $needsNonDebugStop = $false
   if ($DesiredInstance -eq "Debug") {
-    $needsTauriDev = $debugProcesses.Count -eq 0 -and $tauriDevLaunchers.Count -eq 0
-    $needsNonDebugStop = $nonDebugProcesses.Count -gt 0
+    if ($debugProcesses.Count -gt 0) {
+      $debugMissingSince = $null
+    } elseif (-not $debugMissingSince) {
+      $debugMissingSince = Get-Date
+    }
+
+    $hasPrebuildRunning = $null -ne $debugPrebuild
+    $canStartDebugWork = $debugProcesses.Count -eq 0 -and $tauriDevLaunchers.Count -eq 0 -and -not $hasPrebuildRunning
+    $usePrebuildSwitch = $DebugSwitchMode -eq "PrebuildThenStop" -and $nonDebugProcesses.Count -gt 0
+    $needsReleaseFallback = (
+      $DebugSwitchMode -eq "PrebuildThenStop" -and
+      -not [bool]$DisableReleaseFallback -and
+      $debugProcesses.Count -eq 0 -and
+      $nonDebugProcesses.Count -eq 0
+    )
+    $needsDebugPrebuild = $canStartDebugWork -and $usePrebuildSwitch
+    $needsTauriDev = $canStartDebugWork -and -not $usePrebuildSwitch
+    $needsNonDebugStop = $nonDebugProcesses.Count -gt 0 -and (
+      $DebugSwitchMode -eq "Immediate" -or
+      $debugProcesses.Count -gt 0
+    )
   } else {
     $needsTauriDev = $processes.Count -eq 0
   }
 
-  if ($DesiredInstance -eq "Debug" -and $debugProcesses.Count -gt 0 -and $nonDebugProcesses.Count -gt 0) {
+  if ($needsReleaseFallback) {
+    $now = Get-Date
+    $cooldownReady = $true
+    if ($lastReleaseFallbackAt) {
+      $cooldownReady = (($now - $lastReleaseFallbackAt).TotalSeconds -ge $ReleaseFallbackCooldownSeconds)
+    }
+
+    if ($cooldownReady) {
+      try {
+        $fallback = Start-CockpitReleaseFallback
+        $lastReleaseFallbackAt = $now
+        $releaseFallbackCount += 1
+        $needsTauriDev = $false
+        Write-LogLine @{
+          event = "release_fallback_started_for_missing_debug"
+          fallback = $fallback
+          releaseFallbackCount = $releaseFallbackCount
+          tauriDevLauncherCount = $tauriDevLaunchers.Count
+        }
+      } catch {
+        $lastReleaseFallbackAt = $now
+        Write-LogLine @{ event = "release_fallback_start_failed"; message = $_.Exception.Message }
+      }
+    } else {
+      $needsTauriDev = $false
+      Write-LogLine @{ event = "release_fallback_cooldown"; releaseFallbackCount = $releaseFallbackCount }
+    }
+  }
+
+  if ($DesiredInstance -eq "Debug" -and $needsNonDebugStop) {
     $stopResults = Stop-CockpitProcessesForDebugSwitch -Processes $nonDebugProcesses
-    Write-LogLine @{ event = "non_debug_processes_stopped_while_debug_running"; processes = $stopResults }
+    Write-LogLine @{
+      event = if ($debugProcesses.Count -gt 0) {
+        "non_debug_processes_stopped_while_debug_running"
+      } else {
+        "non_debug_processes_stopped_while_waiting_for_debug"
+      }
+      processes = $stopResults
+    }
+  }
+
+  if ($completedPrebuild -and $DesiredInstance -eq "Debug") {
+    if ($completedPrebuild.exitCode -eq 0) {
+      if ($debugProcesses.Count -eq 0) {
+        if ($nonDebugProcesses.Count -gt 0) {
+          $stopResults = Stop-CockpitProcessesForDebugSwitch -Processes $nonDebugProcesses
+          Write-LogLine @{ event = "non_debug_processes_stopped_after_debug_prebuild"; processes = $stopResults }
+        }
+        try {
+          $launch = Start-CockpitTauriDev
+          $lastLaunchAt = Get-Date
+          $launchCount += 1
+          Write-LogLine @{ event = "tauri_dev_launched_after_debug_prebuild"; launch = $launch; launchCount = $launchCount }
+        } catch {
+          Write-LogLine @{ event = "tauri_dev_launch_failed_after_debug_prebuild"; message = $_.Exception.Message }
+        }
+      }
+    } else {
+      Write-LogLine @{
+        event = "debug_prebuild_failed_release_preserved"
+        prebuild = $completedPrebuild
+        runningNonDebugProcessCount = $nonDebugProcesses.Count
+      }
+    }
+  } elseif ($needsDebugPrebuild) {
+    $now = Get-Date
+    $cooldownReady = $true
+    if ($lastPrebuildAt) {
+      $cooldownReady = (($now - $lastPrebuildAt).TotalSeconds -ge $LaunchCooldownSeconds)
+    }
+
+    if ($cooldownReady) {
+      try {
+        $debugPrebuild = Start-CockpitDebugPrebuild
+        $prebuildCount += 1
+        Write-LogLine @{
+          event = "debug_prebuild_started_release_preserved"
+          prebuild = Get-DebugPrebuildSnapshot -Prebuild $debugPrebuild
+          runningNonDebugProcessCount = $nonDebugProcesses.Count
+          prebuildCount = $prebuildCount
+        }
+      } catch {
+        $lastPrebuildAt = $now
+        Write-LogLine @{ event = "debug_prebuild_start_failed_release_preserved"; message = $_.Exception.Message }
+      }
+    } else {
+      Write-LogLine @{ event = "debug_prebuild_cooldown_release_preserved"; prebuildCount = $prebuildCount }
+    }
   }
 
   if ($needsTauriDev) {
@@ -290,10 +576,43 @@ while ($true) {
       Write-LogLine @{ event = "no_cockpit_process_cooldown"; launchCount = $launchCount }
     }
   } elseif ($DesiredInstance -eq "Debug" -and $debugProcesses.Count -eq 0 -and $tauriDevLaunchers.Count -gt 0) {
-    Write-LogLine @{ event = "waiting_for_existing_tauri_dev_launcher"; launcherCount = $tauriDevLaunchers.Count }
+    $missingSeconds = if ($debugMissingSince) { [int]((Get-Date) - $debugMissingSince).TotalSeconds } else { 0 }
+    if ($DebugSwitchMode -eq "PrebuildThenStop" -and $nonDebugProcesses.Count -gt 0) {
+      $stopResults = Stop-ProcessTrees -Processes $tauriDevLaunchers
+      Write-LogLine @{
+        event = "tauri_dev_launchers_stopped_for_release_fallback_prebuild"
+        missingSeconds = $missingSeconds
+        launcherCount = $tauriDevLaunchers.Count
+        processes = $stopResults
+      }
+      $lastLaunchAt = $null
+      $debugMissingSince = Get-Date
+    } elseif ($missingSeconds -ge $DebugStartupGraceSeconds) {
+      $stopResults = Stop-ProcessTrees -Processes $tauriDevLaunchers
+      Write-LogLine @{
+        event = "stale_tauri_dev_launchers_stopped"
+        missingSeconds = $missingSeconds
+        launcherCount = $tauriDevLaunchers.Count
+        processes = $stopResults
+      }
+      $lastLaunchAt = $null
+      $debugMissingSince = Get-Date
+    } else {
+      Write-LogLine @{
+        event = "waiting_for_existing_tauri_dev_launcher"
+        launcherCount = $tauriDevLaunchers.Count
+        missingSeconds = $missingSeconds
+        graceSeconds = $DebugStartupGraceSeconds
+      }
+    }
   }
 
   Start-Sleep -Seconds $PollIntervalSeconds
 }
 
-Write-LogLine @{ event = "watchdog_exited"; launchCount = $launchCount }
+Write-LogLine @{
+  event = "watchdog_exited"
+  launchCount = $launchCount
+  prebuildCount = $prebuildCount
+  releaseFallbackCount = $releaseFallbackCount
+}

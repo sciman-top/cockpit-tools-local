@@ -1039,7 +1039,13 @@ function New-RequestTimelines {
         previousResponseIdHashes = @()
         upstreamResponseIdHashes = @()
         terminalOrigins = @()
+        stickyBoundaries = @()
+        admissionStages = @()
+        admissionOutcomes = @()
+        safeAccountSwitches = @()
+        accountSwitchBlockReasons = @()
         hasContinuation = $false
+        hasStickyContinuation = $false
         hasAutoCompactCandidate = $false
         has429 = $false
         usageLimitReachedCount = 0
@@ -1112,8 +1118,31 @@ function New-RequestTimelines {
     if ($terminalOrigin) {
       $group.terminalOrigins += $terminalOrigin
     }
+    $stickyBoundary = Get-AuditDetailValue -Event $event -Name "sticky_boundary"
+    if ($stickyBoundary) {
+      $group.stickyBoundaries += $stickyBoundary
+    }
+    $admissionStage = Get-AuditDetailValue -Event $event -Name "admission_stage"
+    if ($admissionStage) {
+      $group.admissionStages += $admissionStage
+    }
+    $admissionOutcome = Get-AuditDetailValue -Event $event -Name "admission_outcome"
+    if ($admissionOutcome) {
+      $group.admissionOutcomes += $admissionOutcome
+    }
+    $safeAccountSwitch = Get-AuditDetailValue -Event $event -Name "safe_account_switch"
+    if ($safeAccountSwitch) {
+      $group.safeAccountSwitches += $safeAccountSwitch
+    }
+    $accountSwitchBlockReason = Get-AuditDetailValue -Event $event -Name "account_switch_block_reason"
+    if ($accountSwitchBlockReason) {
+      $group.accountSwitchBlockReasons += $accountSwitchBlockReason
+    }
     if (Get-AuditDetailBool -Event $event -Name "is_continuation") {
       $group.hasContinuation = $true
+    }
+    if (Get-AuditDetailBool -Event $event -Name "is_sticky_continuation") {
+      $group.hasStickyContinuation = $true
     }
     if (Get-AuditDetailBool -Event $event -Name "is_auto_compact_candidate") {
       $group.hasAutoCompactCandidate = $true
@@ -1189,6 +1218,11 @@ function New-RequestTimelines {
       previousResponseIdHash = $previousResponseIdHash
       upstreamResponseIdHash = $upstreamResponseIdHash
       terminalOrigin = $terminalOrigin
+      stickyBoundary = $stickyBoundary
+      admissionStage = $admissionStage
+      admissionOutcome = $admissionOutcome
+      safeAccountSwitch = $safeAccountSwitch
+      accountSwitchBlockReason = $accountSwitchBlockReason
     }
   }
 
@@ -1235,7 +1269,13 @@ function New-RequestTimelines {
       previousResponseIdHashes = @($_.previousResponseIdHashes | Select-Object -Unique)
       upstreamResponseIdHashes = @($_.upstreamResponseIdHashes | Select-Object -Unique)
       terminalOrigins = @($_.terminalOrigins | Select-Object -Unique)
+      stickyBoundaries = @($_.stickyBoundaries | Select-Object -Unique)
+      admissionStages = @($_.admissionStages | Select-Object -Unique)
+      admissionOutcomes = @($_.admissionOutcomes | Select-Object -Unique)
+      safeAccountSwitches = @($_.safeAccountSwitches | Select-Object -Unique)
+      accountSwitchBlockReasons = @($_.accountSwitchBlockReasons | Select-Object -Unique)
       hasContinuation = [bool]$_.hasContinuation
+      hasStickyContinuation = [bool]$_.hasStickyContinuation
       hasAutoCompactCandidate = [bool]$_.hasAutoCompactCandidate
       has429 = [bool]$_.has429
       usageLimitReachedCount = [int]$_.usageLimitReachedCount
@@ -1679,6 +1719,10 @@ function Get-AuditAcceptanceSummary {
         terminalTimestamp = $null
         firstAccountHash = $event.accountHash
         lastAccountHash = $event.accountHash
+        headersWritten = $false
+        firstChunkWritten = $false
+        headersWrittenTimestamp = $null
+        firstChunkTimestamp = $null
         phases = @()
         streamStates = @()
         statuses = @()
@@ -1707,6 +1751,10 @@ function Get-AuditAcceptanceSummary {
         terminalTimestamp = $null
         firstAccountHash = $event.accountHash
         lastAccountHash = $event.accountHash
+        headersWritten = $false
+        firstChunkWritten = $false
+        headersWrittenTimestamp = $null
+        firstChunkTimestamp = $null
         phases = @()
         streamStates = @()
         statuses = @()
@@ -1726,6 +1774,18 @@ function Get-AuditAcceptanceSummary {
     $group.phases += $event.phase
     if (-not [string]::IsNullOrWhiteSpace($event.streamState)) {
       $group.streamStates += $event.streamState
+    }
+    if ($event.phase -eq "stream_write" -and $event.streamState -eq "headers_written") {
+      $group.headersWritten = $true
+      if ($null -eq $group.headersWrittenTimestamp) {
+        $group.headersWrittenTimestamp = Get-AuditEventTimestampMs $event
+      }
+    }
+    if ($event.phase -eq "stream_write" -and $event.streamState -eq "first_chunk_written") {
+      $group.firstChunkWritten = $true
+      if ($null -eq $group.firstChunkTimestamp) {
+        $group.firstChunkTimestamp = Get-AuditEventTimestampMs $event
+      }
     }
     if ($null -ne $event.status) {
       $group.statuses += $event.status
@@ -1773,6 +1833,9 @@ function Get-AuditAcceptanceSummary {
   $streams = @($streamGroups)
   $startedStreams = @($streams | Where-Object { $_.started })
   $completedStreams = @($startedStreams | Where-Object { $_.completed })
+  $headersWrittenStreams = @($startedStreams | Where-Object { $_.headersWritten -or ($_.streamStates -contains "headers_written") })
+  $firstChunkStreams = @($startedStreams | Where-Object { $_.firstChunkWritten -or ($_.streamStates -contains "first_chunk_written") })
+  $completedFirstChunkStreams = @($firstChunkStreams | Where-Object { $_.completed })
   $openStreams = @($startedStreams | Where-Object { -not $_.completed -and -not $_.terminalError })
   $interruptedStreams = @($startedStreams | Where-Object { $_.interruptedByCooldown })
   $terminalErrorStreams = @($startedStreams | Where-Object { $_.terminalError })
@@ -1823,6 +1886,10 @@ function Get-AuditAcceptanceSummary {
       if ($null -ne $terminalAt -and $terminalAt -lt $exhaustedAt) {
         continue
       }
+      $headersWrittenTimestamp = if ($null -ne $stream.headersWrittenTimestamp) { [int64]$stream.headersWrittenTimestamp } else { $null }
+      $firstChunkTimestamp = if ($null -ne $stream.firstChunkTimestamp) { [int64]$stream.firstChunkTimestamp } else { $null }
+      $headersWrittenAtOrBeforeExhaustion = [bool]($null -ne $headersWrittenTimestamp -and $headersWrittenTimestamp -le $exhaustedAt)
+      $firstChunkAtOrBeforeExhaustion = [bool]($null -ne $firstChunkTimestamp -and $firstChunkTimestamp -le $exhaustedAt)
       $clientAborted = [bool]($stream.phases -contains "client_aborted")
       $terminalError = [bool]($stream.terminalError -or $stream.upstreamStreamError)
       $completed = [bool]$stream.completed
@@ -1833,7 +1900,13 @@ function Get-AuditAcceptanceSummary {
         gatewayRequestId = $stream.gatewayRequestId
         requestId = $stream.requestId
         startedTimestamp = $startedAt
+        headersWrittenTimestamp = $headersWrittenTimestamp
+        firstChunkTimestamp = $firstChunkTimestamp
         terminalTimestamp = $terminalAt
+        headersWritten = [bool]($stream.headersWritten -or ($stream.streamStates -contains "headers_written"))
+        firstChunkWritten = [bool]($stream.firstChunkWritten -or ($stream.streamStates -contains "first_chunk_written"))
+        headersWrittenAtOrBeforeExhaustion = $headersWrittenAtOrBeforeExhaustion
+        firstChunkAtOrBeforeExhaustion = $firstChunkAtOrBeforeExhaustion
         completed = $completed
         terminalError = $terminalError
         upstreamStreamError = [bool]$stream.upstreamStreamError
@@ -1851,6 +1924,13 @@ function Get-AuditAcceptanceSummary {
     $clientAbortedAfterExhaustion = @($inFlightStreams | Where-Object { $_.clientAborted })
     $interruptedAfterExhaustion = @($inFlightStreams | Where-Object { $_.interruptedByCooldown })
     $openAfterExhaustion = @($inFlightStreams | Where-Object { $_.openAfterExhaustion })
+    $headersWrittenInFlightAtExhaustion = @($inFlightStreams | Where-Object { $_.headersWrittenAtOrBeforeExhaustion })
+    $firstChunkInFlightAtExhaustion = @($inFlightStreams | Where-Object { $_.firstChunkAtOrBeforeExhaustion })
+    $completedAfterFirstChunkAtExhaustion = @($firstChunkInFlightAtExhaustion | Where-Object { $_.completed -and -not $_.terminalError -and -not $_.clientAborted })
+    $terminalErrorAfterFirstChunkAtExhaustion = @($firstChunkInFlightAtExhaustion | Where-Object { $_.terminalError })
+    $clientAbortedAfterFirstChunkAtExhaustion = @($firstChunkInFlightAtExhaustion | Where-Object { $_.clientAborted })
+    $interruptedAfterFirstChunkAtExhaustion = @($firstChunkInFlightAtExhaustion | Where-Object { $_.interruptedByCooldown })
+    $openAfterFirstChunkAtExhaustion = @($firstChunkInFlightAtExhaustion | Where-Object { $_.openAfterExhaustion })
     $accountExhaustionContinuitySummaries += [ordered]@{
       accountHash = $accountHash
       firstExhaustionTimestamp = $exhaustion.firstExhaustionTimestamp
@@ -1859,22 +1939,37 @@ function Get-AuditAcceptanceSummary {
       firstExhaustionPhase = $exhaustion.firstExhaustionPhase
       firstExhaustionStatus = $exhaustion.firstExhaustionStatus
       inFlightAtExhaustionCount = $inFlightStreams.Count
+      headersWrittenInFlightAtExhaustionCount = $headersWrittenInFlightAtExhaustion.Count
+      firstChunkInFlightAtExhaustionCount = $firstChunkInFlightAtExhaustion.Count
       completedAfterExhaustionCount = $completedAfterExhaustion.Count
+      completedAfterFirstChunkAtExhaustionCount = $completedAfterFirstChunkAtExhaustion.Count
       terminalErrorAfterExhaustionCount = $terminalErrorAfterExhaustion.Count
+      terminalErrorAfterFirstChunkAtExhaustionCount = $terminalErrorAfterFirstChunkAtExhaustion.Count
       clientAbortedAfterExhaustionCount = $clientAbortedAfterExhaustion.Count
+      clientAbortedAfterFirstChunkAtExhaustionCount = $clientAbortedAfterFirstChunkAtExhaustion.Count
       interruptedByCooldownAfterExhaustionCount = $interruptedAfterExhaustion.Count
+      interruptedByCooldownAfterFirstChunkAtExhaustionCount = $interruptedAfterFirstChunkAtExhaustion.Count
       openAfterExhaustionCount = $openAfterExhaustion.Count
+      openAfterFirstChunkAtExhaustionCount = $openAfterFirstChunkAtExhaustion.Count
       allInFlightTerminal = [bool]($inFlightStreams.Count -gt 0 -and $openAfterExhaustion.Count -eq 0)
       allInFlightCompleted = [bool]($inFlightStreams.Count -gt 0 -and $completedAfterExhaustion.Count -eq $inFlightStreams.Count)
+      allFirstChunkInFlightCompleted = [bool]($firstChunkInFlightAtExhaustion.Count -gt 0 -and $completedAfterFirstChunkAtExhaustion.Count -eq $firstChunkInFlightAtExhaustion.Count)
       inFlightStreams = @($inFlightStreams)
     }
   }
   $totalInFlightAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.inFlightAtExhaustionCount } | Measure-Object -Sum).Sum
+  $totalHeadersWrittenInFlightAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.headersWrittenInFlightAtExhaustionCount } | Measure-Object -Sum).Sum
+  $totalFirstChunkInFlightAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.firstChunkInFlightAtExhaustionCount } | Measure-Object -Sum).Sum
   $totalCompletedAfterAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.completedAfterExhaustionCount } | Measure-Object -Sum).Sum
+  $totalCompletedAfterFirstChunkAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.completedAfterFirstChunkAtExhaustionCount } | Measure-Object -Sum).Sum
   $totalTerminalErrorAfterAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.terminalErrorAfterExhaustionCount } | Measure-Object -Sum).Sum
+  $totalTerminalErrorAfterFirstChunkAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.terminalErrorAfterFirstChunkAtExhaustionCount } | Measure-Object -Sum).Sum
   $totalClientAbortedAfterAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.clientAbortedAfterExhaustionCount } | Measure-Object -Sum).Sum
+  $totalClientAbortedAfterFirstChunkAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.clientAbortedAfterFirstChunkAtExhaustionCount } | Measure-Object -Sum).Sum
   $totalInterruptedAfterAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.interruptedByCooldownAfterExhaustionCount } | Measure-Object -Sum).Sum
+  $totalInterruptedAfterFirstChunkAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.interruptedByCooldownAfterFirstChunkAtExhaustionCount } | Measure-Object -Sum).Sum
   $totalOpenAfterAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.openAfterExhaustionCount } | Measure-Object -Sum).Sum
+  $totalOpenAfterFirstChunkAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.openAfterFirstChunkAtExhaustionCount } | Measure-Object -Sum).Sum
 
   $unclosedHardAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { -not $_.completedLocally -and -not $_.completedByUpstream -and -not $_.unrecoveredTerminal429 })
   $stickyResetWaitRequests = @()
@@ -2352,18 +2447,28 @@ function Get-AuditAcceptanceSummary {
     requestTimelineCount = $requestTimelines.Count
     requestTimelines = @($requestTimelines)
     startedStreamCount = $startedStreams.Count
+    headersWrittenStreamCount = $headersWrittenStreams.Count
+    firstChunkStreamCount = $firstChunkStreams.Count
     completedStreamCount = $completedStreams.Count
+    completedFirstChunkStreamCount = $completedFirstChunkStreams.Count
     openStreamCount = $openStreams.Count
     interruptedStreamCount = $interruptedStreams.Count
     terminalErrorStreamCount = $terminalErrorStreams.Count
     upstreamStreamErrorCount = $upstreamStreamErrorStreams.Count
     accountExhaustionContinuityCount = $accountExhaustionContinuitySummaries.Count
     inFlightAtAccountExhaustionCount = $totalInFlightAtAccountExhaustion
+    headersWrittenInFlightAtAccountExhaustionCount = $totalHeadersWrittenInFlightAtAccountExhaustion
+    firstChunkInFlightAtAccountExhaustionCount = $totalFirstChunkInFlightAtAccountExhaustion
     completedAfterAccountExhaustionCount = $totalCompletedAfterAccountExhaustion
+    completedAfterFirstChunkAtAccountExhaustionCount = $totalCompletedAfterFirstChunkAtAccountExhaustion
     terminalErrorAfterAccountExhaustionCount = $totalTerminalErrorAfterAccountExhaustion
+    terminalErrorAfterFirstChunkAtAccountExhaustionCount = $totalTerminalErrorAfterFirstChunkAtAccountExhaustion
     clientAbortedAfterAccountExhaustionCount = $totalClientAbortedAfterAccountExhaustion
+    clientAbortedAfterFirstChunkAtAccountExhaustionCount = $totalClientAbortedAfterFirstChunkAtAccountExhaustion
     interruptedAfterAccountExhaustionCount = $totalInterruptedAfterAccountExhaustion
+    interruptedAfterFirstChunkAtAccountExhaustionCount = $totalInterruptedAfterFirstChunkAtAccountExhaustion
     openAfterAccountExhaustionCount = $totalOpenAfterAccountExhaustion
+    openAfterFirstChunkAtAccountExhaustionCount = $totalOpenAfterFirstChunkAtAccountExhaustion
     accountExhaustionContinuitySummaries = @($accountExhaustionContinuitySummaries)
     upstreamStreamErrorSummaries = @($upstreamStreamErrorStreams | ForEach-Object {
       [ordered]@{
@@ -2419,6 +2524,10 @@ function Get-AuditAcceptanceSummary {
         completed = [bool]$_.completed
         terminalError = [bool]$_.terminalError
         interruptedByCooldown = [bool]$_.interruptedByCooldown
+        headersWritten = [bool]$_.headersWritten
+        firstChunkWritten = [bool]$_.firstChunkWritten
+        headersWrittenTimestamp = $_.headersWrittenTimestamp
+        firstChunkTimestamp = $_.firstChunkTimestamp
         firstAccountHash = $_.firstAccountHash
         lastAccountHash = $_.lastAccountHash
         accountHashes = @($_.accountHashes | Select-Object -Unique)
@@ -2614,7 +2723,10 @@ function New-AcceptanceResults {
   $stream = New-MonitorResult "accepted_stream_continuity"
   $streamEvidence = @{
     startedStreamCount = [int]$AuditSummary.startedStreamCount
+    headersWrittenStreamCount = [int]$AuditSummary.headersWrittenStreamCount
+    firstChunkStreamCount = [int]$AuditSummary.firstChunkStreamCount
     completedStreamCount = [int]$AuditSummary.completedStreamCount
+    completedFirstChunkStreamCount = [int]$AuditSummary.completedFirstChunkStreamCount
     requiredCompletedStreams = [int]$RequiredCompletedStreams
     openStreamCount = [int]$AuditSummary.openStreamCount
     interruptedStreamCount = [int]$AuditSummary.interruptedStreamCount
@@ -2642,11 +2754,18 @@ function New-AcceptanceResults {
   $accountExhaustionStreamEvidence = @{
     accountExhaustionContinuityCount = [int]$AuditSummary.accountExhaustionContinuityCount
     inFlightAtAccountExhaustionCount = [int]$AuditSummary.inFlightAtAccountExhaustionCount
+    headersWrittenInFlightAtAccountExhaustionCount = [int]$AuditSummary.headersWrittenInFlightAtAccountExhaustionCount
+    firstChunkInFlightAtAccountExhaustionCount = [int]$AuditSummary.firstChunkInFlightAtAccountExhaustionCount
     completedAfterAccountExhaustionCount = [int]$AuditSummary.completedAfterAccountExhaustionCount
+    completedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.completedAfterFirstChunkAtAccountExhaustionCount
     terminalErrorAfterAccountExhaustionCount = [int]$AuditSummary.terminalErrorAfterAccountExhaustionCount
+    terminalErrorAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.terminalErrorAfterFirstChunkAtAccountExhaustionCount
     clientAbortedAfterAccountExhaustionCount = [int]$AuditSummary.clientAbortedAfterAccountExhaustionCount
+    clientAbortedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.clientAbortedAfterFirstChunkAtAccountExhaustionCount
     interruptedAfterAccountExhaustionCount = [int]$AuditSummary.interruptedAfterAccountExhaustionCount
+    interruptedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.interruptedAfterFirstChunkAtAccountExhaustionCount
     openAfterAccountExhaustionCount = [int]$AuditSummary.openAfterAccountExhaustionCount
+    openAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.openAfterFirstChunkAtAccountExhaustionCount
     accountExhaustionContinuitySummaries = @($AuditSummary.accountExhaustionContinuitySummaries)
   }
   if ($AuditSummary.terminalErrorAfterAccountExhaustionCount -gt 0 -or $AuditSummary.interruptedAfterAccountExhaustionCount -gt 0) {
@@ -2661,6 +2780,21 @@ function New-AcceptanceResults {
     $results += Set-MonitorStatus $accountExhaustionStream "skipped" "已观察到账号耗尽，但耗尽瞬间没有已开始且未结束的 stream" $accountExhaustionStreamEvidence
   } else {
     $results += Set-MonitorStatus $accountExhaustionStream "skipped" "未观察到账号 usage_limit_reached 耗尽事件" $accountExhaustionStreamEvidence
+  }
+
+  $firstChunkExhaustionStream = New-MonitorResult "first_chunk_streams_survive_account_exhaustion"
+  if ($AuditSummary.terminalErrorAfterFirstChunkAtAccountExhaustionCount -gt 0 -or $AuditSummary.interruptedAfterFirstChunkAtAccountExhaustionCount -gt 0) {
+    $results += Set-MonitorStatus $firstChunkExhaustionStream "fail" "账号首次耗尽时已经 first_chunk_written 的 stream 出现 terminal error 或 cooldown interrupt" $accountExhaustionStreamEvidence
+  } elseif ($AuditSummary.clientAbortedAfterFirstChunkAtAccountExhaustionCount -gt 0) {
+    $results += Set-MonitorStatus $firstChunkExhaustionStream "blocked" "账号首次耗尽时已经 first_chunk_written 的 stream 后续被 client_aborted；仅凭 audit 不能归因为服务端连续性失败" $accountExhaustionStreamEvidence
+  } elseif ($AuditSummary.openAfterFirstChunkAtAccountExhaustionCount -gt 0) {
+    $results += Set-MonitorStatus $firstChunkExhaustionStream "blocked" "账号首次耗尽时已经 first_chunk_written 的 stream 在监测窗口结束时仍未观察到 terminal event" $accountExhaustionStreamEvidence
+  } elseif ($AuditSummary.firstChunkInFlightAtAccountExhaustionCount -gt 0 -and $AuditSummary.completedAfterFirstChunkAtAccountExhaustionCount -eq $AuditSummary.firstChunkInFlightAtAccountExhaustionCount) {
+    $results += Set-MonitorStatus $firstChunkExhaustionStream "pass" $null $accountExhaustionStreamEvidence
+  } elseif ($AuditSummary.accountExhaustionContinuityCount -gt 0) {
+    $results += Set-MonitorStatus $firstChunkExhaustionStream "skipped" "已观察到账号耗尽，但耗尽瞬间没有已 first_chunk_written 且未结束的 stream" $accountExhaustionStreamEvidence
+  } else {
+    $results += Set-MonitorStatus $firstChunkExhaustionStream "skipped" "未观察到账号 usage_limit_reached 耗尽事件" $accountExhaustionStreamEvidence
   }
 
   $retry = New-MonitorResult "retry_limit_regression_absent"
@@ -2966,11 +3100,32 @@ function New-ContinuitySummary {
       evidence = [ordered]@{
         accountExhaustionContinuityCount = [int]$AuditSummary.accountExhaustionContinuityCount
         inFlightAtAccountExhaustionCount = [int]$AuditSummary.inFlightAtAccountExhaustionCount
+        headersWrittenInFlightAtAccountExhaustionCount = [int]$AuditSummary.headersWrittenInFlightAtAccountExhaustionCount
+        firstChunkInFlightAtAccountExhaustionCount = [int]$AuditSummary.firstChunkInFlightAtAccountExhaustionCount
         completedAfterAccountExhaustionCount = [int]$AuditSummary.completedAfterAccountExhaustionCount
+        completedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.completedAfterFirstChunkAtAccountExhaustionCount
         terminalErrorAfterAccountExhaustionCount = [int]$AuditSummary.terminalErrorAfterAccountExhaustionCount
+        terminalErrorAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.terminalErrorAfterFirstChunkAtAccountExhaustionCount
         clientAbortedAfterAccountExhaustionCount = [int]$AuditSummary.clientAbortedAfterAccountExhaustionCount
+        clientAbortedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.clientAbortedAfterFirstChunkAtAccountExhaustionCount
         interruptedAfterAccountExhaustionCount = [int]$AuditSummary.interruptedAfterAccountExhaustionCount
+        interruptedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.interruptedAfterFirstChunkAtAccountExhaustionCount
         openAfterAccountExhaustionCount = [int]$AuditSummary.openAfterAccountExhaustionCount
+        openAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.openAfterFirstChunkAtAccountExhaustionCount
+        accountExhaustionContinuitySummaries = @($AuditSummary.accountExhaustionContinuitySummaries)
+      }
+    }
+    firstChunkInFlightContinuity = [ordered]@{
+      status = if ($AuditSummary.terminalErrorAfterFirstChunkAtAccountExhaustionCount -gt 0 -or $AuditSummary.interruptedAfterFirstChunkAtAccountExhaustionCount -gt 0) { "fail" } elseif ($AuditSummary.clientAbortedAfterFirstChunkAtAccountExhaustionCount -gt 0 -or $AuditSummary.openAfterFirstChunkAtAccountExhaustionCount -gt 0) { "blocked" } elseif ($AuditSummary.firstChunkInFlightAtAccountExhaustionCount -gt 0 -and $AuditSummary.completedAfterFirstChunkAtAccountExhaustionCount -eq $AuditSummary.firstChunkInFlightAtAccountExhaustionCount) { "pass" } elseif ($AuditSummary.accountExhaustionContinuityCount -gt 0) { "skipped" } else { "skipped" }
+      reason = if ($AuditSummary.terminalErrorAfterFirstChunkAtAccountExhaustionCount -gt 0 -or $AuditSummary.interruptedAfterFirstChunkAtAccountExhaustionCount -gt 0) { "first-chunk in-flight stream hit terminal error or cooldown interrupt after account exhaustion" } elseif ($AuditSummary.clientAbortedAfterFirstChunkAtAccountExhaustionCount -gt 0) { "first-chunk in-flight stream was client_aborted after account exhaustion" } elseif ($AuditSummary.openAfterFirstChunkAtAccountExhaustionCount -gt 0) { "first-chunk in-flight stream remained open at the end of the monitor window" } elseif ($AuditSummary.accountExhaustionContinuityCount -gt 0 -and $AuditSummary.firstChunkInFlightAtAccountExhaustionCount -eq 0) { "account exhaustion observed without first-chunk in-flight streams at that instant" } else { $null }
+      evidence = [ordered]@{
+        accountExhaustionContinuityCount = [int]$AuditSummary.accountExhaustionContinuityCount
+        firstChunkInFlightAtAccountExhaustionCount = [int]$AuditSummary.firstChunkInFlightAtAccountExhaustionCount
+        completedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.completedAfterFirstChunkAtAccountExhaustionCount
+        terminalErrorAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.terminalErrorAfterFirstChunkAtAccountExhaustionCount
+        clientAbortedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.clientAbortedAfterFirstChunkAtAccountExhaustionCount
+        interruptedAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.interruptedAfterFirstChunkAtAccountExhaustionCount
+        openAfterFirstChunkAtAccountExhaustionCount = [int]$AuditSummary.openAfterFirstChunkAtAccountExhaustionCount
         accountExhaustionContinuitySummaries = @($AuditSummary.accountExhaustionContinuitySummaries)
       }
     }

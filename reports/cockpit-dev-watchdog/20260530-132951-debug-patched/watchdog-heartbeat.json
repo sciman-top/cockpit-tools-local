@@ -1,0 +1,51 @@
+{
+  "timestamp": "2026-05-30T13:40:17.1083567+08:00",
+  "pid": 16516,
+  "desiredInstance": "Debug",
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "runningCockpitProcessCount": 1,
+  "runningCockpitProcesses": [
+    {
+      "ProcessId": 37892,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe\""
+    }
+  ],
+  "runningDebugProcessCount": 1,
+  "runningDebugProcesses": [
+    {
+      "ProcessId": 37892,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe\""
+    }
+  ],
+  "runningNonDebugProcessCount": 0,
+  "runningNonDebugProcesses": [],
+  "tauriDevLauncherCount": 3,
+  "tauriDevLaunchers": [
+    {
+      "ProcessId": 32352,
+      "Name": "cmd.exe",
+      "ExecutablePath": "C:\\WINDOWS\\system32\\cmd.exe",
+      "CommandLine": "C:\\WINDOWS\\system32\\cmd.exe /c \"\"C:\\\\Program Files\\nodejs\\npm.cmd\" run tauri dev\""
+    },
+    {
+      "ProcessId": 16240,
+      "Name": "node.exe",
+      "ExecutablePath": "C:\\Program Files\\nodejs\\node.exe",
+      "CommandLine": "\"C:\\Program Files\\nodejs\\\\node.exe\"  \"C:\\Users\\sciman\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npm-cli.js\" run tauri dev"
+    },
+    {
+      "ProcessId": 34700,
+      "Name": "node.exe",
+      "ExecutablePath": "C:\\Program Files\\nodejs\\node.exe",
+      "CommandLine": "\"node\"   \"D:\\CODE\\external\\Cockpit-Tools-Local\\node_modules\\.bin\\\\..\\@tauri-apps\\cli\\tauri.js\" dev"
+    }
+  ],
+  "launchCount": 0,
+  "lastLaunchAt": null,
+  "debugMissingSince": null,
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-132951-debug-patched\\stop.signal"
+}

@@ -404,7 +404,9 @@ struct AuditContext {
     turn_lineage_id: Option<String>,
     turn_lineage_source: Option<String>,
     previous_response_id_hash: Option<String>,
+    sticky_boundary: Option<String>,
     is_continuation: bool,
+    is_sticky_continuation: bool,
     is_auto_compact_candidate: bool,
 }
 
@@ -9303,6 +9305,8 @@ fn build_audit_context(request: &ParsedRequest, account_id: Option<&str>) -> Aud
     let (request_id, request_id_source) = failure_log_request_id_with_source(Some(request));
     let (turn_lineage_id, turn_lineage_source) = request_lineage_id_with_source(request);
     let previous_response_id_hash = previous_response_id_hash(request);
+    let sticky_boundary = official_codex_sticky_routing_boundary(request)
+        .map(|boundary| boundary.reason().to_string());
     AuditContext {
         request_id,
         request_id_source: request_id_source.to_string(),
@@ -9312,7 +9316,9 @@ fn build_audit_context(request: &ParsedRequest, account_id: Option<&str>) -> Aud
         gateway_request_id: request.gateway_request_id.clone(),
         turn_lineage_id,
         turn_lineage_source: turn_lineage_source.map(str::to_string),
+        sticky_boundary,
         is_continuation: previous_response_id_hash.is_some(),
+        is_sticky_continuation: official_codex_sticky_routing_boundary(request).is_some(),
         is_auto_compact_candidate: request_body_is_auto_compact_candidate(request),
         previous_response_id_hash,
     }
@@ -9427,9 +9433,22 @@ fn build_audit_event(
             .entry("previous_response_id_hash".to_string())
             .or_insert(value);
     }
+    if let Some(value) = context
+        .sticky_boundary
+        .as_deref()
+        .and_then(|value| safe_audit_label(Some(value), 64))
+    {
+        detail.entry("sticky_boundary".to_string()).or_insert(value);
+        detail
+            .entry("sticky_boundary_present".to_string())
+            .or_insert("true".to_string());
+    }
     detail
         .entry("is_continuation".to_string())
         .or_insert(context.is_continuation.to_string());
+    detail
+        .entry("is_sticky_continuation".to_string())
+        .or_insert(context.is_sticky_continuation.to_string());
     detail
         .entry("is_auto_compact_candidate".to_string())
         .or_insert(context.is_auto_compact_candidate.to_string());
@@ -9576,7 +9595,9 @@ fn record_manual_recovery_audit_event(account_id: &str, model: Option<&str>, cha
         turn_lineage_id: None,
         turn_lineage_source: None,
         previous_response_id_hash: None,
+        sticky_boundary: None,
         is_continuation: false,
+        is_sticky_continuation: false,
         is_auto_compact_candidate: false,
     };
     record_audit_event_from_context(
@@ -9607,7 +9628,9 @@ fn record_manual_pause_audit_event(account_id: &str, changed: bool) {
         turn_lineage_id: None,
         turn_lineage_source: None,
         previous_response_id_hash: None,
+        sticky_boundary: None,
         is_continuation: false,
+        is_sticky_continuation: false,
         is_auto_compact_candidate: false,
     };
     record_audit_event_from_context(
@@ -9643,7 +9666,9 @@ fn record_runtime_projection_audit_event(
         turn_lineage_id: None,
         turn_lineage_source: None,
         previous_response_id_hash: None,
+        sticky_boundary: None,
         is_continuation: false,
+        is_sticky_continuation: false,
         is_auto_compact_candidate: false,
     };
     let mut detail = BTreeMap::from([
@@ -10127,6 +10152,21 @@ fn proxy_dispatch_final_error_detail(
                 "upstream_quota_error".to_string(),
             );
             detail.insert("sticky_boundary".to_string(), boundary.reason().to_string());
+            detail.insert("sticky_boundary_present".to_string(), "true".to_string());
+            detail.insert("is_sticky_continuation".to_string(), "true".to_string());
+            detail.insert(
+                "admission_stage".to_string(),
+                "upstream_admission_rejected".to_string(),
+            );
+            detail.insert(
+                "admission_outcome".to_string(),
+                "terminal_quota_before_stream".to_string(),
+            );
+            detail.insert("safe_account_switch".to_string(), "false".to_string());
+            detail.insert(
+                "account_switch_block_reason".to_string(),
+                "hard_affinity_terminal_quota".to_string(),
+            );
         }
     }
 
@@ -19767,6 +19807,102 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
     }
 
     #[test]
+    fn audit_context_marks_turn_state_sticky_boundary_as_safe_lineage() {
+        let turn_state = "turn_state_secret_for_audit";
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([("x-codex-turn-state".to_string(), turn_state.to_string())]),
+            body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
+            gateway_request_id: "gw-lineage-sticky".to_string(),
+        };
+
+        let context = build_audit_context(&request, Some("sticky-account@example.com"));
+        let event = build_audit_event(
+            1_700_000_000_002,
+            &context,
+            "listener",
+            None,
+            None,
+            None,
+            Some("accepted"),
+            BTreeMap::new(),
+        );
+
+        assert_eq!(
+            event.detail.get("sticky_boundary").map(String::as_str),
+            Some("codex_turn_state")
+        );
+        assert_eq!(
+            event
+                .detail
+                .get("sticky_boundary_present")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            event
+                .detail
+                .get("is_sticky_continuation")
+                .map(String::as_str),
+            Some("true")
+        );
+        assert_eq!(
+            event.detail.get("is_continuation").map(String::as_str),
+            Some("false")
+        );
+        assert!(
+            !serde_json::to_string(&event).unwrap().contains(turn_state),
+            "raw x-codex-turn-state must not be written to audit"
+        );
+    }
+
+    #[test]
+    fn final_429_detail_attributes_sticky_failure_to_pre_stream_admission() {
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([(
+                "x-codex-turn-state".to_string(),
+                "turn-state-terminal-quota".to_string(),
+            )]),
+            body: br#"{"model":"gpt-5.5","input":"continue same turn"}"#.to_vec(),
+            gateway_request_id: "gw-final-429-attribution".to_string(),
+        };
+
+        let detail = proxy_dispatch_final_error_detail(
+            &request,
+            StatusCode::TOO_MANY_REQUESTS.as_u16(),
+            "usage_limit_reached",
+            Some(Duration::from_secs(3600)),
+            123,
+        );
+
+        assert_eq!(
+            detail.get("sticky_boundary").map(String::as_str),
+            Some("codex_turn_state")
+        );
+        assert_eq!(
+            detail.get("admission_stage").map(String::as_str),
+            Some("upstream_admission_rejected")
+        );
+        assert_eq!(
+            detail.get("admission_outcome").map(String::as_str),
+            Some("terminal_quota_before_stream")
+        );
+        assert_eq!(
+            detail.get("safe_account_switch").map(String::as_str),
+            Some("false")
+        );
+        assert_eq!(
+            detail
+                .get("account_switch_block_reason")
+                .map(String::as_str),
+            Some("hard_affinity_terminal_quota")
+        );
+    }
+
+    #[test]
     fn audit_event_append_writes_jsonl_and_rotates_by_size() {
         let path = temp_audit_path("rotate");
         let context = AuditContext {
@@ -19779,7 +19915,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             turn_lineage_id: None,
             turn_lineage_source: None,
             previous_response_id_hash: None,
+            sticky_boundary: None,
             is_continuation: false,
+            is_sticky_continuation: false,
             is_auto_compact_candidate: false,
         };
         let first = build_audit_event(
@@ -19828,7 +19966,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             turn_lineage_id: None,
             turn_lineage_source: None,
             previous_response_id_hash: None,
+            sticky_boundary: None,
             is_continuation: false,
+            is_sticky_continuation: false,
             is_auto_compact_candidate: false,
         };
         let first = build_audit_event(
@@ -19878,7 +20018,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             turn_lineage_id: None,
             turn_lineage_source: None,
             previous_response_id_hash: None,
+            sticky_boundary: None,
             is_continuation: false,
+            is_sticky_continuation: false,
             is_auto_compact_candidate: false,
         };
         let first = build_audit_event(
@@ -19947,7 +20089,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             turn_lineage_id: None,
             turn_lineage_source: None,
             previous_response_id_hash: None,
+            sticky_boundary: None,
             is_continuation: false,
+            is_sticky_continuation: false,
             is_auto_compact_candidate: false,
         };
         let headers = build_audit_event(
@@ -20459,7 +20603,9 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             turn_lineage_id: None,
             turn_lineage_source: None,
             previous_response_id_hash: None,
+            sticky_boundary: None,
             is_continuation: false,
+            is_sticky_continuation: false,
             is_auto_compact_candidate: false,
         };
         let mut lease = grant_active_stream_lease(&context, "acc-active");

@@ -1,0 +1,13 @@
+{
+  "startedAt": "2026-05-30T13:20:29.2342479+08:00",
+  "pid": 27608,
+  "repoRoot": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-132027-debug-recovered",
+  "pollIntervalSeconds": 2,
+  "launchCooldownSeconds": 45,
+  "desiredInstance": "Debug",
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-132027-debug-recovered\\stop.signal",
+  "trigger": "keep target\\debug\\cockpit-tools.exe as the active Cockpit app process; launch npm run tauri dev when debug is absent",
+  "stopSemantics": "create stop.signal to stop watchdog; non-debug cockpit-tools app processes may be closed/stopped to switch to debug; never kill Codex processes"
+}
