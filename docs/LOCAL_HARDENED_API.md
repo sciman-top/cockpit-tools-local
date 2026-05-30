@@ -27,7 +27,7 @@ API service 的默认安全配置等价于 `balanced_self_use`；需要更保守
 | `maxQueueWaitSeconds` | `21` | 本地排队等待上限，至少覆盖启动间隔并留 1 秒余量 |
 | `requestTimeoutSeconds` | `600` | 长任务允许继续写出 |
 | `maxRetries` | `1` | 单账号有限 retry |
-| `maxRetryAccounts` | `2` | 仅约束无硬亲和的新 admission 尝试账号数；带 `previous_response_id`、`X-Codex-Turn-State` 或 `X-Client-Request-Id` 亲和的同任务请求不得借此切到新账号 |
+| `maxRetryAccounts` | `2` | 约束无硬亲和的新 admission 默认尝试账号数；连续 `usage_limit_reached` 可触发最多 4 个账号的 bounded rescue；带 `previous_response_id` 或 `X-Codex-Turn-State` 的同任务请求不得借此切到新账号 |
 | `fallbackMode` | `disabled` | 下一个请求才重新选择账号 |
 | `logging.includePromptResponse` | `false` | 不记录正文 |
 | `logging.includeRawUpstreamBody` | `false` | 不记录上游原始 body |
@@ -134,7 +134,7 @@ Hardened API Mode 的目标是接近 Direct OAuth 的稳定体验，但不伪造
 .\scripts\smoke-local-hardened-api.ps1 -Stage small_pool -WriteReport
 ```
 
-只有小池稳定后，才在 `maxRetryAccounts >= 2` 下做有限 quota 探针；`fallbackMode` 可保持默认 `disabled`，它表示当前任务保持账号亲和，新独立请求重新选择账号：
+只有小池稳定后，才在 `maxRetryAccounts >= 2` 下做有限 quota 探针；`fallbackMode` 可保持默认 `disabled`，它表示当前任务保持账号亲和，新独立请求重新选择账号；若新独立请求连续遇到 `usage_limit_reached`，内部 bounded rescue 只扩展本次新 admission 的尝试上限，不改变 hard-affinity 边界：
 
 ```powershell
 .\scripts\smoke-local-hardened-api.ps1 -Stage fallback_probe -AcknowledgeLiveUpstreamRisk -RunUpstreamSmoke -WriteReport

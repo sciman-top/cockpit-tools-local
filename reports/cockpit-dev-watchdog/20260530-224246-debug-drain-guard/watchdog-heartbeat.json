@@ -1,6 +1,6 @@
 {
-  "timestamp": "2026-05-30T22:42:41.2805255+08:00",
-  "pid": 14620,
+  "timestamp": "2026-05-30T22:50:51.2667365+08:00",
+  "pid": 40596,
   "desiredInstance": "Debug",
   "debugSwitchMode": "PrebuildThenStop",
   "releaseFallbackEnabled": true,
@@ -29,13 +29,29 @@
   "runningNonDebugProcesses": [],
   "tauriDevLauncherCount": 0,
   "tauriDevLaunchers": [],
-  "launchCount": 2,
-  "prebuildCount": 2,
-  "releaseFallbackCount": 2,
-  "lastLaunchAt": "2026-05-30T19:43:31.6967459+08:00",
-  "lastPrebuildAt": "2026-05-30T19:43:23.0305187+08:00",
-  "lastReleaseFallbackAt": "2026-05-30T19:42:46.0170077+08:00",
+  "activeCodexStreamGuard": {
+    "activeStreamCount": 3,
+    "activeLeaseIds": [
+      "103",
+      "257",
+      "338"
+    ],
+    "auditPaths": [
+      "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl.1",
+      "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl"
+    ],
+    "dataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+    "windowMinutes": 720,
+    "lastEventTimestampMs": 1780152539632,
+    "parseErrorCount": 0
+  },
+  "launchCount": 0,
+  "prebuildCount": 0,
+  "releaseFallbackCount": 0,
+  "lastLaunchAt": null,
+  "lastPrebuildAt": null,
+  "lastReleaseFallbackAt": null,
   "debugPrebuild": null,
   "debugMissingSince": null,
-  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-183318-debug-release-fallback-patched2\\stop.signal"
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-224246-debug-drain-guard\\stop.signal"
 }

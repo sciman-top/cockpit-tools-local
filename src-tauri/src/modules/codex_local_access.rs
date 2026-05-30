@@ -46,8 +46,9 @@ const CODEX_LOCAL_ACCESS_DATA_ROOT_ENV: &str = "COCKPIT_LOCAL_ACCESS_DATA_ROOT";
 const CODEX_LOCAL_ACCESS_BIND_HOST: &str = "127.0.0.1";
 const CODEX_LOCAL_ACCESS_URL_HOST: &str = "127.0.0.1";
 const LITELLM_GATEWAY_HEALTH_TIMEOUT: Duration = Duration::from_secs(3);
-// Internal hard cap; HLA safety config is clamped to this value.
-const MAX_HTTP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+const DEFAULT_HTTP_REQUEST_BYTES: usize = 64 * 1024 * 1024;
+// Internal hard cap; HLA safety config may raise the per-request limit up to this value.
+const MAX_HTTP_REQUEST_BYTES: usize = 256 * 1024 * 1024;
 const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_INLINE_ACCOUNT_RETRY_WAIT: Duration = Duration::from_secs(3);
 const MAX_POOL_UNAVAILABLE_PRE_ADMISSION_WAIT: Duration = Duration::from_secs(3);
@@ -58,6 +59,7 @@ const SINGLE_ACCOUNT_STATUS_RETRY_BASE_DELAY: Duration = Duration::from_millis(3
 const SINGLE_ACCOUNT_STATUS_RETRY_MAX_DELAY: Duration = Duration::from_millis(1500);
 const STATS_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 const MAX_RETRY_CREDENTIALS_PER_REQUEST: usize = 24;
+const MAX_USAGE_LIMIT_RESCUE_CREDENTIALS_PER_REQUEST: usize = 4;
 const RESPONSE_AFFINITY_TTL_MS: i64 = 24 * 60 * 60 * 1000;
 const MAX_RESPONSE_AFFINITY_BINDINGS: usize = 4096;
 const REQUEST_AFFINITY_TTL_MS: i64 = 60 * 60 * 1000;
@@ -3976,6 +3978,32 @@ fn retry_failover_max_retries(config: &CodexLocalApiSafetyConfig) -> usize {
 
 fn retry_failover_account_attempt_limit(config: &CodexLocalApiSafetyConfig) -> usize {
     (config.max_retry_accounts.max(2) as usize).clamp(1, MAX_RETRY_CREDENTIALS_PER_REQUEST)
+}
+
+fn usage_limit_rescue_account_attempt_limit(current_limit: usize, total_accounts: usize) -> usize {
+    current_limit
+        .max(MAX_USAGE_LIMIT_RESCUE_CREDENTIALS_PER_REQUEST)
+        .min(total_accounts)
+        .min(MAX_RETRY_CREDENTIALS_PER_REQUEST)
+}
+
+fn should_extend_usage_limit_failover_attempts(
+    hard_affinity_bound: bool,
+    classified: &ClassifiedCodexUpstreamError,
+    attempts: usize,
+    current_limit: usize,
+    total_accounts: usize,
+) -> Option<usize> {
+    if hard_affinity_bound
+        || classified.error_type != CodexLocalAccessErrorType::UsageLimitReached
+        || attempts < current_limit
+        || current_limit >= total_accounts
+    {
+        return None;
+    }
+
+    let next_limit = usage_limit_rescue_account_attempt_limit(current_limit, total_accounts);
+    (next_limit > current_limit).then_some(next_limit)
 }
 
 fn build_effective_local_access_account_ids(
@@ -8664,9 +8692,11 @@ pub async fn set_local_access_enabled_with_options(
     }
 
     let was_enabled = collection.enabled;
-    collection.enabled = enabled;
-    collection.updated_at = now_ms();
-    save_collection_to_disk(&collection)?;
+    if was_enabled != enabled {
+        collection.enabled = enabled;
+        collection.updated_at = now_ms();
+        save_collection_to_disk(&collection)?;
+    }
 
     {
         let mut runtime = gateway_runtime().lock().await;
@@ -8731,10 +8761,30 @@ fn parse_content_length(header_bytes: &[u8]) -> Result<usize, String> {
     Ok(0)
 }
 
-async fn read_http_request<R>(stream: &mut R) -> Result<Vec<u8>, HttpRequestReadError>
+fn request_body_limit_bytes_from_safety_config(config: &CodexLocalApiSafetyConfig) -> usize {
+    let max_mb = (MAX_HTTP_REQUEST_BYTES / (1024 * 1024)) as u32;
+    (config.max_request_body_mb.clamp(1, max_mb) as usize) * 1024 * 1024
+}
+
+fn configured_request_body_limit_bytes() -> usize {
+    load_collection_from_disk()
+        .ok()
+        .flatten()
+        .map(|mut collection| {
+            normalize_local_api_safety_config(&mut collection);
+            request_body_limit_bytes_from_safety_config(&collection.safety_config)
+        })
+        .unwrap_or(DEFAULT_HTTP_REQUEST_BYTES)
+}
+
+async fn read_http_request<R>(
+    stream: &mut R,
+    max_request_bytes: usize,
+) -> Result<Vec<u8>, HttpRequestReadError>
 where
     R: AsyncRead + Unpin,
 {
+    let max_request_bytes = max_request_bytes.clamp(1, MAX_HTTP_REQUEST_BYTES);
     let mut buffer = Vec::with_capacity(4096);
     let mut chunk = [0u8; 2048];
     let mut header_end: Option<usize> = None;
@@ -8756,9 +8806,9 @@ where
             if let Some(end) = find_header_end(&buffer) {
                 content_length =
                     parse_content_length(&buffer[..end]).map_err(HttpRequestReadError::other)?;
-                if end.saturating_add(content_length) > MAX_HTTP_REQUEST_BYTES {
+                if end.saturating_add(content_length) > max_request_bytes {
                     return Err(HttpRequestReadError::RequestTooLarge {
-                        limit_bytes: MAX_HTTP_REQUEST_BYTES,
+                        limit_bytes: max_request_bytes,
                         observed_bytes: buffer.len(),
                         content_length: Some(content_length),
                     });
@@ -8767,9 +8817,9 @@ where
             }
         }
 
-        if buffer.len() > MAX_HTTP_REQUEST_BYTES {
+        if buffer.len() > max_request_bytes {
             return Err(HttpRequestReadError::RequestTooLarge {
-                limit_bytes: MAX_HTTP_REQUEST_BYTES,
+                limit_bytes: max_request_bytes,
                 observed_bytes: buffer.len(),
                 content_length: if content_length == 0 {
                     None
@@ -9278,16 +9328,19 @@ fn json_response(status: u16, status_text: &str, body: &Value) -> Vec<u8> {
 }
 
 fn request_body_too_large_response(error: &HttpRequestReadError) -> Vec<u8> {
-    let mut detail = BTreeMap::from([(
-        "max_request_body_mb".to_string(),
-        (MAX_HTTP_REQUEST_BYTES / (1024 * 1024)).to_string(),
-    )]);
+    let mut detail = BTreeMap::new();
     if let HttpRequestReadError::RequestTooLarge {
+        limit_bytes,
         observed_bytes,
         content_length,
         ..
     } = error
     {
+        detail.insert("limit_bytes".to_string(), limit_bytes.to_string());
+        detail.insert(
+            "max_request_body_mb".to_string(),
+            (limit_bytes / (1024 * 1024)).to_string(),
+        );
         detail.insert("observed_bytes".to_string(), observed_bytes.to_string());
         if let Some(content_length) = content_length {
             detail.insert("content_length".to_string(), content_length.to_string());
@@ -11740,7 +11793,7 @@ async fn proxy_request_with_account_pool(
     }
 
     let total = routing_account_ids.len();
-    let max_credential_attempts = total
+    let mut max_credential_attempts = total
         .min(retry_failover_account_attempt_limit(
             &collection.safety_config,
         ))
@@ -11780,8 +11833,9 @@ async fn proxy_request_with_account_pool(
             strategy_account_ids,
             hard_affinity_account_id.as_deref(),
         );
-        let selector_audit_summary = build_selector_audit_summary(
-            &strategy_account_ids,
+        let selector_candidate_ids = strategy_account_ids.clone();
+        let mut selector_audit_summary = build_selector_audit_summary(
+            &selector_candidate_ids,
             &health_registry,
             Some(&routing_hint.model_key),
             selector_now,
@@ -12263,15 +12317,30 @@ async fn proxy_request_with_account_pool(
                     let context = build_audit_context(request, Some(account.id.as_str()));
                     let mut detail = classified_audit_detail(&classified);
                     detail.insert("attempt".to_string(), attempts.to_string());
-                    detail.insert(
-                        "max_credential_attempts".to_string(),
-                        max_credential_attempts.to_string(),
-                    );
                     let hard_affinity_bound = hard_affinity_account_id.is_some();
                     let hard_affinity_active =
                         hard_affinity_account_id.as_deref() == Some(account.id.as_str());
                     let hard_affinity_retry_wait_limit =
                         hard_affinity_inline_retry_wait_limit(&collection.safety_config);
+                    let extended_attempt_limit = should_extend_usage_limit_failover_attempts(
+                        hard_affinity_bound,
+                        &classified,
+                        attempts,
+                        max_credential_attempts,
+                        total,
+                    );
+                    if let Some(next_limit) = extended_attempt_limit {
+                        max_credential_attempts = next_limit;
+                        selector_audit_summary = build_selector_audit_summary(
+                            &selector_candidate_ids,
+                            &health_registry,
+                            Some(&routing_hint.model_key),
+                            selector_now,
+                            max_credential_attempts,
+                            affinity_account_id.as_deref(),
+                            sticky_pruned,
+                        );
+                    }
                     detail.insert(
                         "hard_affinity_bound".to_string(),
                         hard_affinity_bound.to_string(),
@@ -12283,6 +12352,20 @@ async fn proxy_request_with_account_pool(
                     detail.insert(
                         "request_affinity_mode".to_string(),
                         request_affinity_mode.to_string(),
+                    );
+                    if let Some(next_limit) = extended_attempt_limit {
+                        detail.insert(
+                            "usage_limit_rescue_extended".to_string(),
+                            "true".to_string(),
+                        );
+                        detail.insert(
+                            "usage_limit_rescue_cap_limit".to_string(),
+                            next_limit.to_string(),
+                        );
+                    }
+                    detail.insert(
+                        "max_credential_attempts".to_string(),
+                        max_credential_attempts.to_string(),
                     );
                     if hard_affinity_bound {
                         detail.insert(
@@ -13095,7 +13178,8 @@ async fn handle_connection(
     mut stream: TcpStream,
     addr: std::net::SocketAddr,
 ) -> Result<(), String> {
-    let raw_request = match read_http_request(&mut stream).await {
+    let request_body_limit_bytes = configured_request_body_limit_bytes();
+    let raw_request = match read_http_request(&mut stream, request_body_limit_bytes).await {
         Ok(raw_request) => raw_request,
         Err(error @ HttpRequestReadError::RequestTooLarge { .. }) => {
             logger::log_codex_api_warn(&build_codex_api_failure_log(
@@ -14103,6 +14187,42 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(
             hard_affinity_inline_retry_wait_limit(&config),
             Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn usage_limit_rescue_extends_only_non_affinity_usage_limit() {
+        let usage_limit = classify_codex_upstream_error(
+            StatusCode::TOO_MANY_REQUESTS,
+            None,
+            r#"{"error":{"type":"usage_limit_reached"}}"#,
+        );
+
+        assert_eq!(
+            super::should_extend_usage_limit_failover_attempts(false, &usage_limit, 2, 2, 6),
+            Some(4)
+        );
+        assert_eq!(
+            super::should_extend_usage_limit_failover_attempts(false, &usage_limit, 2, 2, 3),
+            Some(3)
+        );
+        assert_eq!(
+            super::should_extend_usage_limit_failover_attempts(true, &usage_limit, 2, 2, 6),
+            None
+        );
+        assert_eq!(
+            super::should_extend_usage_limit_failover_attempts(false, &usage_limit, 1, 2, 6),
+            None
+        );
+
+        let server_error = classify_codex_upstream_error(
+            StatusCode::BAD_GATEWAY,
+            None,
+            "temporary upstream error",
+        );
+        assert_eq!(
+            super::should_extend_usage_limit_failover_attempts(false, &server_error, 2, 2, 6),
+            None
         );
     }
 
@@ -16737,6 +16857,253 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(!audit.contains("\"outcome\":\"hard_affinity\""));
         assert!(!audit.contains("\"outcome\":\"in_band_local_completion\""));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn usage_limit_rescue_extends_new_request_beyond_default_two_accounts() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let _backpressure_guard = LOCAL_BACKPRESSURE_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous_root = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let previous_accounts_root = std::env::var_os("COCKPIT_TOOLS_TEST_DATA_DIR");
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-usage-limit-rescue-test-{}-{}",
+            std::process::id(),
+            now_ms()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+        std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", &root);
+
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+
+        let upstream_seen = std::sync::Arc::new(tokio::sync::Mutex::new(Vec::<String>::new()));
+        let upstream_listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("fake upstream should bind");
+        let upstream_addr = upstream_listener
+            .local_addr()
+            .expect("fake upstream should have addr");
+        let upstream_seen_task = std::sync::Arc::clone(&upstream_seen);
+        let upstream_server = tokio::spawn(async move {
+            for _ in 0..3 {
+                let Ok(Ok((mut socket, _))) =
+                    tokio::time::timeout(Duration::from_secs(2), upstream_listener.accept()).await
+                else {
+                    break;
+                };
+                let mut request = Vec::new();
+                let mut chunk = [0u8; 1024];
+                loop {
+                    let read = socket
+                        .read(&mut chunk)
+                        .await
+                        .expect("fake upstream should read request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request_text = String::from_utf8_lossy(&request).to_string();
+                upstream_seen_task.lock().await.push(request_text.clone());
+
+                if request_text.contains("Bearer sk-local-rescue-c") {
+                    let body = concat!(
+                        "event: response.created\n",
+                        "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_usage_limit_rescue_ok\",\"model\":\"gpt-5.5\",\"status\":\"in_progress\",\"output\":[]}}\n\n",
+                        "event: response.output_text.delta\n",
+                        "data: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_1\",\"output_index\":0,\"content_index\":0,\"delta\":\"RESCUED\"}\n\n",
+                        "event: response.completed\n",
+                        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_usage_limit_rescue_ok\",\"model\":\"gpt-5.5\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\n",
+                        "data: [DONE]\n\n"
+                    );
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.as_bytes().len(),
+                        body
+                    );
+                    socket
+                        .write_all(response.as_bytes())
+                        .await
+                        .expect("fake upstream should write rescue-account response");
+                    continue;
+                }
+
+                let body =
+                    r#"{"error":{"type":"usage_limit_reached","code":"usage_limit_reached"}}"#;
+                let response = format!(
+                    "HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.as_bytes().len(),
+                    body
+                );
+                socket
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("fake upstream should write usage-limit response");
+            }
+        });
+
+        let now = now_ms();
+        let registry = empty_health_registry(now);
+        save_health_registry_to_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE), &registry)
+            .expect("health registry should be written to isolated test root");
+
+        let collection: CodexLocalAccessCollection = serde_json::from_value(json!({
+            "enabled": true,
+            "port": 0,
+            "apiKey": "test-local-key",
+            "safetyConfig": {
+                "schemaVersion": 1,
+                "hardenedLocalMode": true,
+                "maxConcurrentRequests": 1,
+                "minRequestIntervalSeconds": 0,
+                "maxQueueWaitSeconds": 1,
+                "requestTimeoutSeconds": 5,
+                "maxRequestBodyMb": 64,
+                "maxRetries": 1,
+                "maxRetryAccounts": 2,
+                "fallbackMode": "next_request_only",
+                "logging": {
+                    "redactSensitiveValues": true,
+                    "includeRequestId": true,
+                    "includeAccountHash": true,
+                    "includeRoute": true,
+                    "includeModel": true,
+                    "includeLatency": true,
+                    "includePromptResponse": false,
+                    "includeRawUpstreamBody": false
+                }
+            },
+            "routingStrategy": "auto",
+            "restrictFreeAccounts": false,
+            "followCurrentAccount": false,
+            "accountIds": ["api-001-limit-a", "api-002-limit-b", "api-003-rescue-c"],
+            "createdAt": now,
+            "updatedAt": now
+        }))
+        .expect("collection fixture should deserialize");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            runtime.loaded = true;
+            runtime.collection = Some(collection.clone());
+            runtime.running = true;
+        }
+
+        for (account_id, token) in [
+            ("api-001-limit-a", "sk-local-limit-a"),
+            ("api-002-limit-b", "sk-local-limit-b"),
+            ("api-003-rescue-c", "sk-local-rescue-c"),
+        ] {
+            let account = CodexAccount::new_api_key(
+                account_id.to_string(),
+                format!("{account_id}@example.com"),
+                token.to_string(),
+                CodexApiProviderMode::Custom,
+                Some(format!("http://127.0.0.1:{}/v1", upstream_addr.port())),
+                None,
+                None,
+            );
+            crate::modules::codex_account::save_account(&account)
+                .expect("test account should be persisted");
+        }
+
+        let request = ParsedRequest {
+            method: "POST".to_string(),
+            target: "/v1/responses".to_string(),
+            headers: HashMap::from([
+                ("accept".to_string(), "text/event-stream".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+            ]),
+            body: br#"{"model":"gpt-5.5","input":"new independent request"}"#.to_vec(),
+            gateway_request_id: "gw-usage-limit-rescue".to_string(),
+        };
+        assert_eq!(
+            request_affinity_key(&request),
+            None,
+            "rescue expansion only applies to new non-sticky requests"
+        );
+
+        let success = proxy_request_with_account_pool(&request, &collection)
+            .await
+            .expect("new request should try the rescue account after two usage-limit accounts");
+        assert_eq!(success.account_id, "api-003-rescue-c");
+        let response_text = success
+            .upstream
+            .text()
+            .await
+            .expect("rescue-account response should be readable");
+
+        let upstream_result = upstream_server.await;
+        assert!(
+            upstream_result.is_ok(),
+            "fake upstream task should join: {:?}",
+            upstream_result
+        );
+        let seen = upstream_seen.lock().await.clone();
+        let seen_text = seen.join("\n--- request ---\n");
+        let audit = fs::read_to_string(root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE))
+            .expect("audit should be written to isolated root");
+
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+        }
+        reset_local_api_backpressure_for_tests();
+        reset_active_stream_leases_for_tests();
+        match previous_root {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        match previous_accounts_root {
+            Some(value) => std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", value),
+            None => std::env::remove_var("COCKPIT_TOOLS_TEST_DATA_DIR"),
+        }
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(
+            seen.len(),
+            3,
+            "request should continue past the default two-account cap only for usage-limit rescue: {}",
+            seen_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("Bearer sk-local-limit-a")),
+            "first attempt should hit the first limited account: {}",
+            seen_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("Bearer sk-local-limit-b")),
+            "second attempt should hit the second limited account: {}",
+            seen_text
+        );
+        assert!(
+            seen.iter()
+                .any(|request| request.contains("Bearer sk-local-rescue-c")),
+            "rescue attempt should hit the third healthy account: {}",
+            seen_text
+        );
+        assert!(
+            response_text.contains("resp_usage_limit_rescue_ok")
+                && response_text.contains("RESCUED"),
+            "rescue response should be returned to the caller: {}",
+            response_text
+        );
+        assert!(audit.contains("\"phase\":\"fallback_selected\""));
+        assert!(audit.contains("\"usage_limit_rescue_extended\":\"true\""));
+        assert!(audit.contains("\"usage_limit_rescue_cap_limit\":\"3\""));
+        assert!(audit.contains("\"max_credential_attempts\":\"3\""));
+        assert!(!audit.contains("\"phase\":\"fallback_blocked\""));
+        assert!(!audit.contains("\"outcome\":\"hard_affinity\""));
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -20510,7 +20877,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert_eq!(collection.safety_config.request_timeout_seconds, 600);
         assert_eq!(
             collection.safety_config.max_request_body_mb,
-            (MAX_HTTP_REQUEST_BYTES / (1024 * 1024)) as u32
+            CodexLocalApiSafetyConfig::default().max_request_body_mb
         );
         assert_eq!(collection.safety_config.max_retries, 1);
         assert_eq!(collection.safety_config.max_retry_accounts, 2);
@@ -20563,6 +20930,58 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         assert!(collection.safety_config.logging.redact_sensitive_values);
         assert!(!collection.safety_config.logging.include_prompt_response);
         assert!(!collection.safety_config.logging.include_raw_upstream_body);
+    }
+
+    #[test]
+    fn request_body_limit_uses_configured_value_with_hard_cap() {
+        let mut config = CodexLocalApiSafetyConfig::default();
+        assert_eq!(
+            super::request_body_limit_bytes_from_safety_config(&config),
+            64 * 1024 * 1024
+        );
+
+        config.max_request_body_mb = 192;
+        assert_eq!(
+            super::request_body_limit_bytes_from_safety_config(&config),
+            192 * 1024 * 1024
+        );
+
+        config.max_request_body_mb = 999;
+        assert_eq!(
+            super::request_body_limit_bytes_from_safety_config(&config),
+            MAX_HTTP_REQUEST_BYTES
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn read_http_request_applies_configured_limit() {
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        client
+            .write_all(
+                b"POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 128\r\n\r\n",
+            )
+            .await
+            .expect("test request headers should be written");
+        client
+            .shutdown()
+            .await
+            .expect("test request writer should close cleanly");
+
+        let error = super::read_http_request(&mut server, 96)
+            .await
+            .expect_err("configured limit should reject a declared oversized body");
+
+        match error {
+            super::HttpRequestReadError::RequestTooLarge {
+                limit_bytes,
+                content_length,
+                ..
+            } => {
+                assert_eq!(limit_bytes, 96);
+                assert_eq!(content_length, Some(128));
+            }
+            other => panic!("expected RequestTooLarge, got {:?}", other),
+        }
     }
 
     #[test]

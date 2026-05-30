@@ -1,0 +1,16 @@
+{
+  "status": "already_running",
+  "baseUrl": "http://127.0.0.1:45336/v1",
+  "port": 45336,
+  "owners": {
+    "processId": 27728,
+    "processName": "cockpit-tools",
+    "path": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe"
+  },
+  "health": {
+    "ok": true,
+    "statusCode": 200,
+    "error": null
+  },
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\codex-stable-local-access-gateway\\check-20260530-224142"
+}

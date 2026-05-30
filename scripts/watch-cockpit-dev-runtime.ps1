@@ -10,6 +10,8 @@ param(
   [int]$GracefulStopTimeoutSeconds = 8,
   [int]$DebugStartupGraceSeconds = 120,
   [int]$ReleaseFallbackCooldownSeconds = 10,
+  [int]$ActiveStreamAuditWindowMinutes = 720,
+  [switch]$DisableStableLocalAccessGateway,
   [switch]$DisableReleaseFallback,
   [string]$StopSignalFile = "",
   [switch]$Quiet
@@ -123,6 +125,105 @@ function Get-TauriDevLauncherProcesses {
     Select-Object ProcessId, Name, ExecutablePath, CommandLine
 }
 
+function Get-LocalAccessDataRoot {
+  $envRoot = [Environment]::GetEnvironmentVariable("COCKPIT_LOCAL_ACCESS_DATA_ROOT", "Process")
+  if (-not [string]::IsNullOrWhiteSpace($envRoot)) {
+    return [System.IO.Path]::GetFullPath($envRoot)
+  }
+  return [System.IO.Path]::GetFullPath((Join-Path $HOME ".antigravity_cockpit"))
+}
+
+function Get-LocalAccessAuditPaths {
+  $root = Get-LocalAccessDataRoot
+  $path = Join-Path $root "codex_local_access_audit.jsonl"
+  @("$path.1", $path) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+}
+
+function Get-ObjectPropertyValue {
+  param($Object, [string]$Name)
+  if ($null -eq $Object) {
+    return $null
+  }
+  $property = $Object.PSObject.Properties[$Name]
+  if ($property) {
+    return $property.Value
+  }
+  return $null
+}
+
+function Get-ActiveCodexLocalAccessStreamGuard {
+  $activeLeases = @{}
+  $events = New-Object System.Collections.Generic.List[object]
+  $auditPaths = @(Get-LocalAccessAuditPaths)
+  $nowMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  $windowStartMs = $nowMs - ([int64]$ActiveStreamAuditWindowMinutes * 60 * 1000)
+  $sequence = 0
+  $lastEventTimestampMs = $null
+  $parseErrorCount = 0
+
+  foreach ($path in $auditPaths) {
+    try {
+      foreach ($line in @(Get-Content -LiteralPath $path -Tail 4000 -ErrorAction Stop)) {
+        if ([string]::IsNullOrWhiteSpace($line)) {
+          continue
+        }
+        try {
+          $event = $line | ConvertFrom-Json -ErrorAction Stop
+        } catch {
+          $parseErrorCount += 1
+          continue
+        }
+        $timestamp = Get-ObjectPropertyValue $event "timestamp"
+        if ($null -eq $timestamp) {
+          continue
+        }
+        $timestamp = [int64]$timestamp
+        if ($timestamp -lt $windowStartMs) {
+          continue
+        }
+        $phase = [string](Get-ObjectPropertyValue $event "phase")
+        if ($phase -ne "lease_granted" -and $phase -ne "lease_released") {
+          continue
+        }
+        $detail = Get-ObjectPropertyValue $event "detail"
+        $leaseId = [string](Get-ObjectPropertyValue $detail "lease_id")
+        if ([string]::IsNullOrWhiteSpace($leaseId)) {
+          continue
+        }
+        $events.Add([pscustomobject][ordered]@{
+            timestamp = $timestamp
+            sequence = $sequence
+            phase = $phase
+            leaseId = $leaseId
+            path = $path
+          })
+        $sequence += 1
+      }
+    } catch {
+      $parseErrorCount += 1
+    }
+  }
+
+  foreach ($event in @($events | Sort-Object timestamp, sequence)) {
+    $lastEventTimestampMs = $event.timestamp
+    if ($event.phase -eq "lease_granted") {
+      $activeLeases[$event.leaseId] = $event
+    } elseif ($event.phase -eq "lease_released") {
+      [void]$activeLeases.Remove($event.leaseId)
+    }
+  }
+
+  [ordered]@{
+    activeStreamCount = $activeLeases.Count
+    activeLeaseIds = @($activeLeases.Keys)
+    auditPaths = $auditPaths
+    dataRoot = Get-LocalAccessDataRoot
+    windowMinutes = $ActiveStreamAuditWindowMinutes
+    lastEventTimestampMs = $lastEventTimestampMs
+    parseErrorCount = $parseErrorCount
+  }
+}
+
 function Stop-CockpitProcessesForDebugSwitch {
   param([Parameter(Mandatory = $true)][array]$Processes)
 
@@ -220,6 +321,7 @@ function Stop-ProcessTrees {
 }
 
 function Start-CockpitTauriDev {
+  $gateway = Ensure-StableLocalAccessGateway -Reason "before_tauri_dev_launch"
   $stdoutPath = Join-Path $ReportDir "tauri-dev.stdout.log"
   $stderrPath = Join-Path $ReportDir "tauri-dev.stderr.log"
   $process = Start-Process `
@@ -236,10 +338,12 @@ function Start-CockpitTauriDev {
     command = "npm run tauri dev"
     stdoutPath = $stdoutPath
     stderrPath = $stderrPath
+    stableLocalAccessGateway = $gateway
   }
 }
 
 function Start-CockpitReleaseFallback {
+  $gateway = Ensure-StableLocalAccessGateway -Reason "before_release_fallback_launch"
   $releaseExePath = Get-CockpitReleaseExePath
   if (-not (Test-Path -LiteralPath $releaseExePath -PathType Leaf)) {
     throw "Release fallback executable does not exist: $releaseExePath"
@@ -254,6 +358,7 @@ function Start-CockpitReleaseFallback {
     processId = $process.Id
     command = $releaseExePath
     executablePath = $releaseExePath
+    stableLocalAccessGateway = $gateway
   }
 }
 
@@ -310,6 +415,74 @@ function Get-DebugPrebuildSnapshot {
   }
 }
 
+function Ensure-StableLocalAccessGateway {
+  param([string]$Reason)
+
+  if ($DisableStableLocalAccessGateway) {
+    return [ordered]@{
+      requested = $false
+      status = "disabled"
+      reason = "DisableStableLocalAccessGateway"
+    }
+  }
+
+  $scriptPath = Join-Path $RepoRoot "scripts\start-codex-stable-local-access-gateway.ps1"
+  if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf)) {
+    return [ordered]@{
+      requested = $true
+      status = "missing_script"
+      scriptPath = $scriptPath
+    }
+  }
+
+  $stamp = Get-Date -Format "yyyyMMdd-HHmmssfff"
+  $gatewayReportDir = Join-Path $ReportDir ("stable-local-access-gateway-{0}" -f $stamp)
+  $args = @(
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    $scriptPath,
+    "-RepoRoot",
+    $RepoRoot,
+    "-ReportDir",
+    $gatewayReportDir,
+    "-Quiet"
+  )
+
+  $summaryPath = Join-Path $gatewayReportDir "gateway-summary.json"
+  try {
+    & pwsh @args
+    $exitCode = $LASTEXITCODE
+    $summary = if (Test-Path -LiteralPath $summaryPath -PathType Leaf) {
+      Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
+    } else {
+      $null
+    }
+    $result = [ordered]@{
+      requested = $true
+      status = if ($summary -and $summary.status) { [string]$summary.status } else { "unknown" }
+      exitCode = $exitCode
+      reason = $Reason
+      reportDir = $gatewayReportDir
+      summaryPath = $summaryPath
+      summary = $summary
+    }
+    Write-LogLine @{ event = "stable_local_access_gateway_checked"; result = $result }
+    return $result
+  } catch {
+    $result = [ordered]@{
+      requested = $true
+      status = "error"
+      reason = $Reason
+      reportDir = $gatewayReportDir
+      message = $_.Exception.Message
+    }
+    Write-LogLine @{ event = "stable_local_access_gateway_check_failed"; result = $result }
+    return $result
+  }
+}
+
 $RepoRoot = [System.IO.Path]::GetFullPath($RepoRoot)
 if (-not (Test-Path -LiteralPath $RepoRoot -PathType Container)) {
   throw "RepoRoot does not exist: $RepoRoot"
@@ -344,6 +517,7 @@ $startInfo = [ordered]@{
   debugSwitchMode = $DebugSwitchMode
   releaseFallbackEnabled = -not [bool]$DisableReleaseFallback
   releaseFallbackCooldownSeconds = $ReleaseFallbackCooldownSeconds
+  stableLocalAccessGatewayEnabled = -not [bool]$DisableStableLocalAccessGateway
   debugStartupGraceSeconds = $DebugStartupGraceSeconds
   debugExePath = Get-CockpitDebugExePath
   releaseExePath = Get-CockpitReleaseExePath
@@ -389,6 +563,8 @@ while ($true) {
   $debugProcesses = @($processes | Where-Object { Test-IsDebugCockpitProcess $_ })
   $nonDebugProcesses = @($processes | Where-Object { -not (Test-IsDebugCockpitProcess $_) })
   $tauriDevLaunchers = @(Get-TauriDevLauncherProcesses)
+  $activeStreamGuard = Get-ActiveCodexLocalAccessStreamGuard
+  $hasActiveCodexStreams = ([int]$activeStreamGuard.activeStreamCount) -gt 0
   $completedPrebuild = $null
   if ($debugPrebuild -and $debugPrebuild.process.HasExited) {
     $completedPrebuild = Get-DebugPrebuildSnapshot -Prebuild $debugPrebuild
@@ -414,6 +590,7 @@ while ($true) {
     runningNonDebugProcesses = $nonDebugProcesses
     tauriDevLauncherCount = $tauriDevLaunchers.Count
     tauriDevLaunchers = $tauriDevLaunchers
+    activeCodexStreamGuard = $activeStreamGuard
     launchCount = $launchCount
     prebuildCount = $prebuildCount
     releaseFallbackCount = $releaseFallbackCount
@@ -488,31 +665,49 @@ while ($true) {
   }
 
   if ($DesiredInstance -eq "Debug" -and $needsNonDebugStop) {
-    $stopResults = Stop-CockpitProcessesForDebugSwitch -Processes $nonDebugProcesses
-    Write-LogLine @{
-      event = if ($debugProcesses.Count -gt 0) {
-        "non_debug_processes_stopped_while_debug_running"
-      } else {
-        "non_debug_processes_stopped_while_waiting_for_debug"
+    if ($hasActiveCodexStreams) {
+      Write-LogLine @{
+        event = "restart_deferred_active_stream"
+        action = "stop_non_debug_for_debug_switch"
+        activeCodexStreamGuard = $activeStreamGuard
+        runningNonDebugProcessCount = $nonDebugProcesses.Count
       }
-      processes = $stopResults
+    } else {
+      $stopResults = Stop-CockpitProcessesForDebugSwitch -Processes $nonDebugProcesses
+      Write-LogLine @{
+        event = if ($debugProcesses.Count -gt 0) {
+          "non_debug_processes_stopped_while_debug_running"
+        } else {
+          "non_debug_processes_stopped_while_waiting_for_debug"
+        }
+        processes = $stopResults
+      }
     }
   }
 
   if ($completedPrebuild -and $DesiredInstance -eq "Debug") {
     if ($completedPrebuild.exitCode -eq 0) {
       if ($debugProcesses.Count -eq 0) {
-        if ($nonDebugProcesses.Count -gt 0) {
-          $stopResults = Stop-CockpitProcessesForDebugSwitch -Processes $nonDebugProcesses
-          Write-LogLine @{ event = "non_debug_processes_stopped_after_debug_prebuild"; processes = $stopResults }
-        }
-        try {
-          $launch = Start-CockpitTauriDev
-          $lastLaunchAt = Get-Date
-          $launchCount += 1
-          Write-LogLine @{ event = "tauri_dev_launched_after_debug_prebuild"; launch = $launch; launchCount = $launchCount }
-        } catch {
-          Write-LogLine @{ event = "tauri_dev_launch_failed_after_debug_prebuild"; message = $_.Exception.Message }
+        if ($nonDebugProcesses.Count -gt 0 -and $hasActiveCodexStreams) {
+          Write-LogLine @{
+            event = "restart_deferred_active_stream"
+            action = "stop_release_and_launch_debug_after_prebuild"
+            activeCodexStreamGuard = $activeStreamGuard
+            runningNonDebugProcessCount = $nonDebugProcesses.Count
+          }
+        } else {
+          if ($nonDebugProcesses.Count -gt 0) {
+            $stopResults = Stop-CockpitProcessesForDebugSwitch -Processes $nonDebugProcesses
+            Write-LogLine @{ event = "non_debug_processes_stopped_after_debug_prebuild"; processes = $stopResults }
+          }
+          try {
+            $launch = Start-CockpitTauriDev
+            $lastLaunchAt = Get-Date
+            $launchCount += 1
+            Write-LogLine @{ event = "tauri_dev_launched_after_debug_prebuild"; launch = $launch; launchCount = $launchCount }
+          } catch {
+            Write-LogLine @{ event = "tauri_dev_launch_failed_after_debug_prebuild"; message = $_.Exception.Message }
+          }
         }
       }
     } else {
@@ -557,6 +752,16 @@ while ($true) {
 
     if ($cooldownReady) {
       try {
+        if ($needsNonDebugStop -and $hasActiveCodexStreams) {
+          Write-LogLine @{
+            event = "restart_deferred_active_stream"
+            action = "stop_non_debug_before_debug_launch"
+            activeCodexStreamGuard = $activeStreamGuard
+            runningNonDebugProcessCount = $nonDebugProcesses.Count
+          }
+          Start-Sleep -Seconds $PollIntervalSeconds
+          continue
+        }
         if ($needsNonDebugStop) {
           $stopResults = Stop-CockpitProcessesForDebugSwitch -Processes $nonDebugProcesses
           Write-LogLine @{ event = "non_debug_processes_stopped_before_debug_launch"; processes = $stopResults }
@@ -574,15 +779,25 @@ while ($true) {
   } elseif ($DesiredInstance -eq "Debug" -and $debugProcesses.Count -eq 0 -and $tauriDevLaunchers.Count -gt 0) {
     $missingSeconds = if ($debugMissingSince) { [int]((Get-Date) - $debugMissingSince).TotalSeconds } else { 0 }
     if ($missingSeconds -ge $DebugStartupGraceSeconds) {
-      $stopResults = Stop-ProcessTrees -Processes $tauriDevLaunchers
-      Write-LogLine @{
-        event = "stale_tauri_dev_launchers_stopped"
-        missingSeconds = $missingSeconds
-        launcherCount = $tauriDevLaunchers.Count
-        processes = $stopResults
+      if ($hasActiveCodexStreams) {
+        Write-LogLine @{
+          event = "restart_deferred_active_stream"
+          action = "stop_stale_tauri_dev_launchers"
+          activeCodexStreamGuard = $activeStreamGuard
+          missingSeconds = $missingSeconds
+          launcherCount = $tauriDevLaunchers.Count
+        }
+      } else {
+        $stopResults = Stop-ProcessTrees -Processes $tauriDevLaunchers
+        Write-LogLine @{
+          event = "stale_tauri_dev_launchers_stopped"
+          missingSeconds = $missingSeconds
+          launcherCount = $tauriDevLaunchers.Count
+          processes = $stopResults
+        }
+        $lastLaunchAt = $null
+        $debugMissingSince = Get-Date
       }
-      $lastLaunchAt = $null
-      $debugMissingSince = Get-Date
     } else {
       Write-LogLine @{
         event = "waiting_for_existing_tauri_dev_launcher"
