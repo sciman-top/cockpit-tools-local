@@ -18208,6 +18208,7 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         let _ = fs::remove_dir_all(&root);
         std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
         std::env::set_var("COCKPIT_TOOLS_TEST_DATA_DIR", &root);
+        let audit_path = root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE);
 
         reset_local_api_backpressure_for_tests();
         reset_active_stream_leases_for_tests();
@@ -18478,6 +18479,51 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         })
         .await
         .expect("old active stream lease should be granted");
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let audit = fs::read_to_string(&audit_path).unwrap_or_default();
+                let mut upstream_admitted_index: Option<usize> = None;
+                let mut headers_written_index: Option<usize> = None;
+                let mut first_chunk_written_index: Option<usize> = None;
+
+                for (index, line) in audit.lines().enumerate() {
+                    let Ok(event) = serde_json::from_str::<super::CodexLocalAccessAuditEvent>(line)
+                    else {
+                        continue;
+                    };
+                    if upstream_admitted_index.is_none() && event.phase == "upstream_admitted" {
+                        upstream_admitted_index = Some(index);
+                    }
+                    if headers_written_index.is_none()
+                        && event.phase == "stream_write"
+                        && event.stream_state.as_deref() == Some("headers_written")
+                    {
+                        headers_written_index = Some(index);
+                    }
+                    if first_chunk_written_index.is_none()
+                        && event.phase == "stream_write"
+                        && event.stream_state.as_deref() == Some("first_chunk_written")
+                    {
+                        first_chunk_written_index = Some(index);
+                    }
+                }
+
+                if let (Some(upstream_admitted), Some(headers_written), Some(first_chunk_written)) = (
+                    upstream_admitted_index,
+                    headers_written_index,
+                    first_chunk_written_index,
+                ) {
+                    assert!(
+                        upstream_admitted <= headers_written && headers_written <= first_chunk_written,
+                        "old stream audit should reach admitted -> headers -> first chunk before simulated quota exhaustion"
+                    );
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("old stream should reach admitted/headers/first-chunk before simulated quota exhaustion");
 
         let mut registry =
             load_health_registry_from_path(&root.join(super::CODEX_LOCAL_ACCESS_HEALTH_FILE))

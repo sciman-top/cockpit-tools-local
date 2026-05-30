@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-05-30T21:06:42.4833176+08:00",
+  "timestamp": "2026-05-30T22:08:29.7953114+08:00",
   "pid": 14620,
   "desiredInstance": "Debug",
   "debugSwitchMode": "PrebuildThenStop",
@@ -10,7 +10,7 @@
   "runningCockpitProcessCount": 1,
   "runningCockpitProcesses": [
     {
-      "ProcessId": 35036,
+      "ProcessId": 39360,
       "Name": "cockpit-tools.exe",
       "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
       "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe\""
@@ -19,7 +19,7 @@
   "runningDebugProcessCount": 1,
   "runningDebugProcesses": [
     {
-      "ProcessId": 35036,
+      "ProcessId": 39360,
       "Name": "cockpit-tools.exe",
       "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
       "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe\""
