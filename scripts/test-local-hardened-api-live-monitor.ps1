@@ -448,9 +448,44 @@ secret_token = "after-secret"
   Assert-True ($LASTEXITCODE -eq 2) "expected client-aborted fixture exit code 2"
   $clientAbortedSummary = Convert-JsonOutput $clientAbortedOutput "client-aborted fixture"
   Assert-Equal $clientAbortedSummary.audit.clientAbortedStreamCount 1 "expected one client_aborted stream"
+  Assert-Equal $clientAbortedSummary.audit.clientAbortedBeforeHeadersCount 0 "expected no pre-header client_aborted stream"
+  Assert-Equal $clientAbortedSummary.audit.clientAbortedBeforeFirstChunkCount 0 "expected no pre-first-chunk client_aborted stream"
+  Assert-Equal $clientAbortedSummary.audit.clientAbortedAfterHeadersBeforeFirstChunkCount 0 "expected no headers-only client_aborted stream"
   Assert-Equal $clientAbortedSummary.audit.clientAbortedAfterFirstChunkCount 1 "expected client_aborted after first chunk classification"
+  Assert-Equal $clientAbortedSummary.audit.clientAbortedStreamSummaries[0].observedAfterHeaders $true "expected client_aborted to observe headers"
+  Assert-Equal $clientAbortedSummary.audit.clientAbortedStreamSummaries[0].observedAfterFirstChunk $true "expected client_aborted to observe first chunk"
+  Assert-Equal $clientAbortedSummary.audit.clientAbortedStreamSummaries[0].attribution "client_or_app_aborted_after_first_chunk" "expected first-chunk client_aborted attribution"
   Assert-Equal (($clientAbortedSummary.results | Where-Object name -eq "client_aborted_streams_classified").status) "blocked" "client_aborted should be classified but not over-attributed"
   Assert-Equal (($clientAbortedSummary.results | Where-Object name -eq "audit_lineage_fields_present").status) "pass" "lineage fields should be considered present"
+
+  $dataRootClientAbortedHeadersOnly = Join-Path $tempRoot "data-client-aborted-headers-only"
+  $auditClientAbortedHeadersOnly = Join-Path $dataRootClientAbortedHeadersOnly "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditClientAbortedHeadersOnly @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "turn:sha256:abort-headers"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-abort-headers"; turn_lineage_id = "turn:sha256:abort-headers"; turn_lineage_source = "codex_turn_metadata_turn_id" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "turn:sha256:abort-headers"; phase = "upstream_forward"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; outcome = "response_received"; detail = [ordered]@{ gateway_request_id = "gw-abort-headers"; turn_lineage_id = "turn:sha256:abort-headers"; upstream_response_id_hash = "response:sha256:abort-headers" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 3; requestId = "turn:sha256:abort-headers"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-abort-headers"; turn_lineage_id = "turn:sha256:abort-headers"; lease_id = "42" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:abort-headers"; phase = "stream_write"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; streamState = "headers_written"; outcome = "ok"; detail = [ordered]@{ gateway_request_id = "gw-abort-headers"; turn_lineage_id = "turn:sha256:abort-headers" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:abort-headers"; phase = "client_aborted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 200; outcome = "client_aborted"; detail = [ordered]@{ gateway_request_id = "gw-abort-headers"; turn_lineage_id = "turn:sha256:abort-headers"; terminal_origin = "client_aborted" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:abort-headers"; phase = "lease_released"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; outcome = "client_aborted"; detail = [ordered]@{ gateway_request_id = "gw-abort-headers"; turn_lineage_id = "turn:sha256:abort-headers"; lease_id = "42" } }
+  )
+  $clientAbortedHeadersOnlyOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 0 `
+    -DataRoot $dataRootClientAbortedHeadersOnly `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -Quiet 2>$null
+
+  Assert-True ($LASTEXITCODE -eq 2) "expected headers-only client-aborted fixture exit code 2"
+  $clientAbortedHeadersOnlySummary = Convert-JsonOutput $clientAbortedHeadersOnlyOutput "headers-only client-aborted fixture"
+  Assert-Equal $clientAbortedHeadersOnlySummary.audit.clientAbortedStreamCount 1 "expected one headers-only client_aborted stream"
+  Assert-Equal $clientAbortedHeadersOnlySummary.audit.clientAbortedBeforeHeadersCount 0 "expected headers-only abort not to be pre-header"
+  Assert-Equal $clientAbortedHeadersOnlySummary.audit.clientAbortedBeforeFirstChunkCount 1 "expected headers-only abort to be before first chunk"
+  Assert-Equal $clientAbortedHeadersOnlySummary.audit.clientAbortedAfterHeadersBeforeFirstChunkCount 1 "expected headers-only abort count"
+  Assert-Equal $clientAbortedHeadersOnlySummary.audit.clientAbortedAfterFirstChunkCount 0 "headers-only abort must not count as after first chunk"
+  Assert-Equal $clientAbortedHeadersOnlySummary.audit.clientAbortedStreamSummaries[0].observedAfterHeaders $true "expected headers-only abort to observe headers"
+  Assert-Equal $clientAbortedHeadersOnlySummary.audit.clientAbortedStreamSummaries[0].observedAfterFirstChunk $false "headers-only abort must not observe first chunk"
+  Assert-Equal $clientAbortedHeadersOnlySummary.audit.clientAbortedStreamSummaries[0].attribution "client_or_app_aborted_after_headers_before_first_chunk" "expected headers-only client_aborted attribution"
 
   $dataRootNoNewRequest = Join-Path $tempRoot "data-no-new-request"
   $auditNoNewRequest = Join-Path $dataRootNoNewRequest "codex_local_access_audit.jsonl"
