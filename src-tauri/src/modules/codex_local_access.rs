@@ -394,6 +394,43 @@ struct ParsedRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum HttpRequestReadError {
+    RequestTooLarge {
+        limit_bytes: usize,
+        observed_bytes: usize,
+        content_length: Option<usize>,
+    },
+    Other(String),
+}
+
+impl HttpRequestReadError {
+    fn other(message: impl Into<String>) -> Self {
+        Self::Other(message.into())
+    }
+}
+
+impl std::fmt::Display for HttpRequestReadError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RequestTooLarge {
+                limit_bytes,
+                observed_bytes,
+                content_length,
+            } => write!(
+                formatter,
+                "请求体过大: limit_bytes={}, observed_bytes={}, content_length={}",
+                limit_bytes,
+                observed_bytes,
+                content_length
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "-".to_string())
+            ),
+            Self::Other(message) => formatter.write_str(message),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct AuditContext {
     request_id: String,
     request_id_source: String,
@@ -1408,6 +1445,37 @@ async fn assert_cockpit_local_access_ready(api_key: &str, port: u16) -> Result<(
     if !response.status().is_success() {
         return Err(format!(
             "Cockpit local access 健康检查失败: {} -> {}。已保留 Direct Projection；请先修复本地接入后再切换 API 服务模式。",
+            models_url,
+            response.status()
+        ));
+    }
+
+    Ok(())
+}
+
+async fn probe_existing_local_access_listener(api_key: &str, port: u16) -> Result<(), String> {
+    let trimmed_api_key = api_key.trim();
+    if trimmed_api_key.is_empty() {
+        return Err("本地接入 api_key 为空，无法确认现有监听是否为 Cockpit relay".to_string());
+    }
+
+    let models_url = format!("http://{CODEX_LOCAL_ACCESS_URL_HOST}:{port}/v1/models");
+    let client = Client::builder()
+        .timeout(LITELLM_GATEWAY_HEALTH_TIMEOUT)
+        .no_proxy()
+        .build()
+        .map_err(|e| format!("创建现有本地接入监听健康检查客户端失败: {}", e))?;
+
+    let response = client
+        .get(&models_url)
+        .bearer_auth(trimmed_api_key)
+        .send()
+        .await
+        .map_err(|e| format!("现有本地接入监听不可访问 {}: {}", models_url, e))?;
+
+    if !response.status().is_success() {
+        return Err(format!(
+            "现有本地接入监听健康检查失败: {} -> {}",
             models_url,
             response.status()
         ));
@@ -7773,17 +7841,19 @@ async fn ensure_runtime_loaded() -> Result<(), String> {
 }
 
 async fn ensure_gateway_matches_runtime() -> Result<(), String> {
-    let (collection, running, actual_port, stale_task) = {
+    let (collection, running, actual_port, external_running, stale_task) = {
         let mut runtime = gateway_runtime().lock().await;
         let stale_task = if !runtime.running {
             runtime.task.take()
         } else {
             None
         };
+        let external_running = runtime.running && runtime.shutdown_sender.is_none();
         (
             runtime.collection.clone(),
             runtime.running,
             runtime.actual_port,
+            external_running,
             stale_task,
         )
     };
@@ -7803,7 +7873,22 @@ async fn ensure_gateway_matches_runtime() -> Result<(), String> {
     }
 
     if running && actual_port == Some(collection.port) {
-        return Ok(());
+        if !external_running {
+            return Ok(());
+        }
+        match probe_existing_local_access_listener(&collection.api_key, collection.port).await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                logger::log_codex_api_warn(&format!(
+                    "[CodexLocalAccess] 外部本地接入监听已不可用，将尝试接管端口 {}: {}",
+                    collection.port, error
+                ));
+                let mut runtime = gateway_runtime().lock().await;
+                runtime.running = false;
+                runtime.actual_port = None;
+                runtime.last_error = Some(error);
+            }
+        }
     }
 
     stop_gateway().await;
@@ -7816,6 +7901,29 @@ async fn ensure_gateway_matches_runtime() -> Result<(), String> {
                 std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied
             ) {
                 let original_port = collection.port;
+                match probe_existing_local_access_listener(&collection.api_key, original_port).await
+                {
+                    Ok(()) => {
+                        let mut runtime = gateway_runtime().lock().await;
+                        sync_runtime_collection(&mut runtime, collection.clone());
+                        runtime.running = true;
+                        runtime.actual_port = Some(original_port);
+                        runtime.shutdown_sender = None;
+                        runtime.task = None;
+                        runtime.last_error = None;
+                        logger::log_codex_api_warn(&format!(
+                            "[CodexLocalAccess] 端口 {} 已有健康本地接入监听，复用外部 relay，未改写配置端口",
+                            original_port
+                        ));
+                        return Ok(());
+                    }
+                    Err(probe_error) => {
+                        logger::log_codex_api_warn(&format!(
+                            "[CodexLocalAccess] 端口 {} 被占用但不是可复用的健康本地接入监听: {}",
+                            original_port, probe_error
+                        ));
+                    }
+                }
                 collection.port = allocate_stable_local_access_port(Some(original_port))?;
                 collection.updated_at = now_ms();
                 save_collection_to_disk(&collection)?;
@@ -8623,7 +8731,7 @@ fn parse_content_length(header_bytes: &[u8]) -> Result<usize, String> {
     Ok(0)
 }
 
-async fn read_http_request<R>(stream: &mut R) -> Result<Vec<u8>, String>
+async fn read_http_request<R>(stream: &mut R) -> Result<Vec<u8>, HttpRequestReadError>
 where
     R: AsyncRead + Unpin,
 {
@@ -8635,23 +8743,40 @@ where
     loop {
         let bytes_read = timeout(REQUEST_READ_TIMEOUT, stream.read(&mut chunk))
             .await
-            .map_err(|_| "读取请求超时".to_string())?
-            .map_err(|e| format!("读取请求失败: {}", e))?;
+            .map_err(|_| HttpRequestReadError::other("读取请求超时"))?
+            .map_err(|e| HttpRequestReadError::other(format!("读取请求失败: {}", e)))?;
 
         if bytes_read == 0 {
             break;
         }
 
         buffer.extend_from_slice(&chunk[..bytes_read]);
-        if buffer.len() > MAX_HTTP_REQUEST_BYTES {
-            return Err("请求体过大".to_string());
-        }
 
         if header_end.is_none() {
             if let Some(end) = find_header_end(&buffer) {
-                content_length = parse_content_length(&buffer[..end])?;
+                content_length =
+                    parse_content_length(&buffer[..end]).map_err(HttpRequestReadError::other)?;
+                if end.saturating_add(content_length) > MAX_HTTP_REQUEST_BYTES {
+                    return Err(HttpRequestReadError::RequestTooLarge {
+                        limit_bytes: MAX_HTTP_REQUEST_BYTES,
+                        observed_bytes: buffer.len(),
+                        content_length: Some(content_length),
+                    });
+                }
                 header_end = Some(end);
             }
+        }
+
+        if buffer.len() > MAX_HTTP_REQUEST_BYTES {
+            return Err(HttpRequestReadError::RequestTooLarge {
+                limit_bytes: MAX_HTTP_REQUEST_BYTES,
+                observed_bytes: buffer.len(),
+                content_length: if content_length == 0 {
+                    None
+                } else {
+                    Some(content_length)
+                },
+            });
         }
 
         if let Some(end) = header_end {
@@ -8661,7 +8786,7 @@ where
         }
     }
 
-    Err("请求不完整".to_string())
+    Err(HttpRequestReadError::other("请求不完整"))
 }
 
 fn parse_http_request(raw: &[u8]) -> Result<ParsedRequest, String> {
@@ -9150,6 +9275,37 @@ fn json_response_with_extra_headers(
 
 fn json_response(status: u16, status_text: &str, body: &Value) -> Vec<u8> {
     json_response_with_extra_headers(status, status_text, body, &[])
+}
+
+fn request_body_too_large_response(error: &HttpRequestReadError) -> Vec<u8> {
+    let mut detail = BTreeMap::from([(
+        "max_request_body_mb".to_string(),
+        (MAX_HTTP_REQUEST_BYTES / (1024 * 1024)).to_string(),
+    )]);
+    if let HttpRequestReadError::RequestTooLarge {
+        observed_bytes,
+        content_length,
+        ..
+    } = error
+    {
+        detail.insert("observed_bytes".to_string(), observed_bytes.to_string());
+        if let Some(content_length) = content_length {
+            detail.insert("content_length".to_string(), content_length.to_string());
+        }
+    }
+
+    json_response(
+        StatusCode::PAYLOAD_TOO_LARGE.as_u16(),
+        "Payload Too Large",
+        &json!({
+            "error": {
+                "type": "request_body_too_large",
+                "code": "request_body_too_large",
+                "message": "Cockpit API service request body exceeds the local safety limit.",
+                "detail": detail,
+            }
+        }),
+    )
 }
 
 fn json_response_with_retry_after(
@@ -10013,6 +10169,12 @@ fn classify_codex_api_failure(status: Option<u16>, detail: &str) -> &'static str
         || detail.contains("local backpressure")
     {
         "local_backpressure"
+    } else if status == Some(StatusCode::PAYLOAD_TOO_LARGE.as_u16())
+        || detail.contains("请求体过大")
+        || detail.contains("request body")
+        || detail.contains("payload too large")
+    {
+        "request_body_too_large"
     } else if status == Some(StatusCode::TOO_MANY_REQUESTS.as_u16())
         || detail.contains("rate limit")
         || detail.contains("usage_limit")
@@ -12933,7 +13095,25 @@ async fn handle_connection(
     mut stream: TcpStream,
     addr: std::net::SocketAddr,
 ) -> Result<(), String> {
-    let raw_request = read_http_request(&mut stream).await?;
+    let raw_request = match read_http_request(&mut stream).await {
+        Ok(raw_request) => raw_request,
+        Err(error @ HttpRequestReadError::RequestTooLarge { .. }) => {
+            logger::log_codex_api_warn(&build_codex_api_failure_log(
+                None,
+                Some(StatusCode::PAYLOAD_TOO_LARGE.as_u16()),
+                None,
+                None,
+                &error.to_string(),
+            ));
+            let response = request_body_too_large_response(&error);
+            stream
+                .write_all(&response)
+                .await
+                .map_err(|e| format!("写入请求体过大响应失败: {}", e))?;
+            return Ok(());
+        }
+        Err(error) => return Err(error.to_string()),
+    };
     let mut parsed = parse_http_request(&raw_request)?;
 
     if parsed.method.eq_ignore_ascii_case("OPTIONS") {
@@ -21685,6 +21865,60 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
         ));
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn oversized_request_returns_413_instead_of_transport_disconnect() {
+        let listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("test listener should bind");
+        let addr = listener
+            .local_addr()
+            .expect("listener should have local addr");
+
+        let server = tokio::spawn(async move {
+            let (stream, peer) = listener.accept().await.expect("server should accept");
+            handle_connection(stream, peer).await
+        });
+
+        let mut client = TcpStream::connect(addr)
+            .await
+            .expect("client should connect");
+        let request = format!(
+            "POST /v1/responses HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer test-local-key\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            MAX_HTTP_REQUEST_BYTES + 1
+        );
+        client
+            .write_all(request.as_bytes())
+            .await
+            .expect("oversized request headers should be written");
+        client
+            .shutdown()
+            .await
+            .expect("client write side should close after headers");
+
+        let mut response = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), client.read_to_end(&mut response))
+            .await
+            .expect("oversized request should receive a prompt local response")
+            .expect("response read should succeed");
+        let response_text = String::from_utf8_lossy(&response);
+
+        assert!(
+            response_text.contains("HTTP/1.1 413 Payload Too Large"),
+            "expected explicit 413 response, got: {}",
+            response_text
+        );
+        assert!(
+            response_text.contains("request_body_too_large"),
+            "expected structured request-body error, got: {}",
+            response_text
+        );
+
+        server
+            .await
+            .expect("server task should not panic")
+            .expect("server should handle oversized request as a response, not an error");
+    }
+
     #[tokio::test]
     #[ignore = "live test mutates local Codex/Cockpit projection; set COCKPIT_TOOLS_LIVE_RUNTIME_SWITCH=1"]
     async fn live_runtime_mode_roundtrip_direct_and_api_service() {
@@ -21774,6 +22008,100 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             }),
             Some(expected)
         );
+    }
+
+    #[tokio::test]
+    async fn gateway_reuses_healthy_external_listener_on_configured_port_conflict() {
+        let _env_guard = LOCAL_ACCESS_ENV_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|err| err.into_inner());
+        let previous = std::env::var_os(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV);
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-external-relay-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).expect("test data root should be created");
+        std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, &root);
+
+        let listener = TcpListener::bind((super::CODEX_LOCAL_ACCESS_BIND_HOST, 0))
+            .await
+            .expect("external relay fixture should bind");
+        let external_port = listener
+            .local_addr()
+            .expect("listener should expose local addr")
+            .port();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener
+                .accept()
+                .await
+                .expect("external relay fixture should accept health probe");
+            let mut buffer = vec![0_u8; 4096];
+            let read = socket
+                .read(&mut buffer)
+                .await
+                .expect("health probe should be readable");
+            let request = String::from_utf8_lossy(&buffer[..read]);
+            let normalized_request = request.to_ascii_lowercase();
+            assert!(normalized_request.contains("get /v1/models"));
+            assert!(normalized_request.contains("authorization: bearer test-local-key"));
+            let body = r#"{"object":"list","data":[]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket
+                .write_all(response.as_bytes())
+                .await
+                .expect("health response should be written");
+        });
+
+        let now = now_ms();
+        let collection = CodexLocalAccessCollection {
+            enabled: true,
+            port: external_port,
+            api_key: "test-local-key".to_string(),
+            safety_config: CodexLocalApiSafetyConfig::default(),
+            routing_strategy: CodexLocalAccessRoutingStrategy::default(),
+            restrict_free_accounts: false,
+            follow_current_account: false,
+            account_ids: Vec::new(),
+            created_at: now,
+            updated_at: now,
+        };
+        super::save_collection_to_disk(&collection).expect("collection should be saved");
+        {
+            let mut runtime = gateway_runtime().lock().await;
+            *runtime = super::GatewayRuntime::default();
+            super::sync_runtime_collection(&mut runtime, collection.clone());
+        }
+
+        super::ensure_gateway_matches_runtime()
+            .await
+            .expect("healthy external relay should be reused");
+        server.await.expect("external relay fixture should finish");
+
+        let saved = super::load_collection_from_disk()
+            .expect("collection should load")
+            .expect("collection should exist");
+        assert_eq!(
+            saved.port, external_port,
+            "healthy external relay must not trigger persisted port rewrites"
+        );
+        let mut runtime = gateway_runtime().lock().await;
+        assert!(runtime.running);
+        assert_eq!(runtime.actual_port, Some(external_port));
+        assert!(runtime.shutdown_sender.is_none());
+        assert!(runtime.task.is_none());
+        assert!(runtime.last_error.is_none());
+        *runtime = super::GatewayRuntime::default();
+
+        match previous {
+            Some(value) => std::env::set_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV, value),
+            None => std::env::remove_var(super::CODEX_LOCAL_ACCESS_DATA_ROOT_ENV),
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
