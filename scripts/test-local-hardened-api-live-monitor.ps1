@@ -130,6 +130,69 @@ try {
   Assert-Equal $nextTimeline.accountHashes[0] "sha256:healthy" "expected independent turn healthy account"
   Assert-Equal $nextTimeline.classification "independent_request_completed" "expected independent timeline classification"
 
+  $driftCodexHome = Join-Path $tempRoot "codex-home-drift"
+  New-FakeCodexHome $driftCodexHome
+  $driftConfigPath = Join-Path $driftCodexHome "config.toml"
+  @"
+model = "gpt-5.5"
+model_provider = "cockpit_api_service"
+
+[model_providers.cockpit_api_service]
+name = "Cockpit API Service"
+base_url = "http://127.0.0.1:2876/v1"
+wire_api = "responses"
+env_key = "OPENAI_API_KEY"
+requires_openai_auth = false
+secret_token = "before-secret"
+"@ | Set-Content -LiteralPath $driftConfigPath -Encoding UTF8
+  $dataRootProjectionDrift = Join-Path $tempRoot "data-projection-drift"
+  $auditProjectionDrift = Join-Path $dataRootProjectionDrift "codex_local_access_audit.jsonl"
+  Write-AuditLines $auditProjectionDrift @(
+    [ordered]@{ schemaVersion = 1; timestamp = 1; requestId = "req-drift"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-drift"; turn_lineage_id = "turn:sha256:drift" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 2; requestId = "req-drift"; phase = "stream_completed"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "completed"; detail = [ordered]@{ gateway_request_id = "gw-drift"; turn_lineage_id = "turn:sha256:drift" } }
+  )
+  $modifier = Start-Job -ScriptBlock {
+    param([string]$Path)
+    Start-Sleep -Milliseconds 800
+    @"
+model = "gpt-5.5"
+model_provider = "direct-oauth"
+
+[model_providers.direct-oauth]
+name = "Direct OAuth"
+base_url = "https://chatgpt.com/backend-api/codex"
+wire_api = "responses"
+env_key = "OPENAI_API_KEY"
+requires_openai_auth = true
+secret_token = "after-secret"
+"@ | Set-Content -LiteralPath $Path -Encoding UTF8
+  } -ArgumentList $driftConfigPath
+  $projectionDriftOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 2 `
+    -PollIntervalSeconds 1 `
+    -CheckpointIntervalSeconds 1 `
+    -DataRoot $dataRootProjectionDrift `
+    -CodexHome $driftCodexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireCliConfigUntouched `
+    -CaptureCliConfigProjectionSummary `
+    -Quiet 2>$null
+  Wait-Job $modifier | Out-Null
+  Receive-Job $modifier | Out-Null
+  Remove-Job $modifier
+  Assert-True ($LASTEXITCODE -eq 1) "expected projection drift fixture exit code 1"
+  $projectionDriftSummary = Convert-JsonOutput $projectionDriftOutput "projection drift fixture"
+  Assert-Equal $projectionDriftSummary.hostDriftVerdict.status "fail" "expected projection drift to fail host drift verdict"
+  Assert-True ($null -ne $projectionDriftSummary.codexCliGuard.firstDrift) "expected first drift observation"
+  Assert-True (@($projectionDriftSummary.codexCliGuard.firstDrift.changedFiles) -contains "config.toml") "expected config.toml in first drift changed files"
+  Assert-Equal $projectionDriftSummary.codexCliGuard.projectionSummary.enabled $true "expected projection summary to be enabled"
+  Assert-Equal $projectionDriftSummary.codexCliGuard.projectionSummary.comparison.changed $true "expected projection comparison to flag provider-impacting drift"
+  Assert-Equal $projectionDriftSummary.hostDriftVerdict.evidence.cliProjectionComparison.changed $true "expected host drift verdict evidence to include provider-impacting drift"
+  Assert-Equal $projectionDriftSummary.codexCliGuard.firstDrift.projectionBefore.topLevel.model_provider "cockpit_api_service" "expected before projection provider"
+  Assert-Equal $projectionDriftSummary.codexCliGuard.firstDrift.projectionAtFirstDetection.topLevel.model_provider "direct-oauth" "expected first drift projection provider"
+  Assert-Equal $projectionDriftSummary.codexCliGuard.projectionSummary.after.modelProviders."direct-oauth".secret_token "[redacted]" "expected secret-like provider field to be redacted"
+
   $dataRootDisabledRuntime = Join-Path $tempRoot "data-disabled-runtime"
   $auditDisabledRuntime = Join-Path $dataRootDisabledRuntime "codex_local_access_audit.jsonl"
   Write-AuditLines $auditDisabledRuntime @(
@@ -330,6 +393,24 @@ try {
   Assert-Equal $structuredQuotaFromBlockSummary.quotaContinuityVerdict.terminalQuota $true "expected terminal quota flag"
   Assert-Equal $structuredQuotaFromBlockSummary.audit.quotaMetadataCoverage.planTypes[0] "free" "expected free plan metadata sample"
   Assert-Equal $structuredQuotaFromBlockSummary.audit.quotaMetadataCoverage.promoMessagePresentCount 2 "expected promo message presence to be counted without raw text"
+
+  $structuredQuotaStopOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
+    -DurationSeconds 5 `
+    -PollIntervalSeconds 1 `
+    -DataRoot $dataRootStructuredQuotaFromBlock `
+    -CodexHome $codexHome `
+    -CodexAppProcessNames "__cockpit_no_such_process__" `
+    -IncludeExistingAudit `
+    -RequireQuotaFallback `
+    -StopWhenSatisfied `
+    -Quiet 2>$null
+
+  if ($LASTEXITCODE -ne 0) {
+    throw "live monitor structured quota StopWhenSatisfied fixture failed with exit_code=$LASTEXITCODE"
+  }
+  $structuredQuotaStopSummary = Convert-JsonOutput $structuredQuotaStopOutput "structured quota StopWhenSatisfied fixture"
+  Assert-Equal $structuredQuotaStopSummary.terminationReason "stop_when_quota_key_signal" "expected StopWhenSatisfied to stop on terminal quota key signal"
+  Assert-Equal $structuredQuotaStopSummary.quotaContinuityVerdict.status "terminal_quota" "expected quota key stop to preserve terminal quota verdict"
 
   $dataRootClientAborted = Join-Path $tempRoot "data-client-aborted"
   $auditClientAborted = Join-Path $dataRootClientAborted "codex_local_access_audit.jsonl"

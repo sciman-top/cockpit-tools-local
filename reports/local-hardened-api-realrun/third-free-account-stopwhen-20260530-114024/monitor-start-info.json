@@ -1,0 +1,12 @@
+{
+  "startedAt": "2026-05-30T11:40:24.2794635+08:00",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\third-free-account-stopwhen-20260530-114024",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "auditSinceTimestampMs": 1780112424252,
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\third-free-account-stopwhen-20260530-114024\\monitor-checkpoint.json",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\third-free-account-stopwhen-20260530-114024\\monitor-exit-code.txt",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\third-free-account-stopwhen-20260530-114024\\stop.signal",
+  "stopWhenSatisfied": true,
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\CODE\\external\\Cockpit-Tools-Local\\scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 14400 -PollIntervalSeconds 2 -CheckpointIntervalSeconds 5 -AuditPath C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\third-free-account-stopwhen-20260530-114024 -CheckpointPath D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\third-free-account-stopwhen-20260530-114024\\monitor-checkpoint.json -ExitCodeFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\third-free-account-stopwhen-20260530-114024\\monitor-exit-code.txt -StopSignalFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\third-free-account-stopwhen-20260530-114024\\stop.signal -IncludeExistingAudit -AuditSinceTimestampMs 1780112424252 -RequireQuotaFallback -RequireStreamCompletion -RequireCliConfigUntouched -RequireAppStable -RequireApiServiceRuntimeAvailable -RequiredFallbackCycles 1 -RequiredDistinctHealthyAccounts 1 -RequiredCompletedStreams 3 -StopWhenSatisfied -WriteReport -Quiet",
+  "note": "third free-account API service run; read-only sidecar monitor; no provider switch; no upstream calls from monitor"
+}

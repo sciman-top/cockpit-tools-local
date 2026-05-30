@@ -39,6 +39,7 @@ param(
   [string]$StopSignalFile,
   [switch]$StopWhenSatisfied,
   [switch]$WriteReport,
+  [switch]$CaptureCliConfigProjectionSummary,
   [switch]$Quiet
 )
 
@@ -131,6 +132,173 @@ function Compare-FileGuardState {
   [ordered]@{
     unchanged = ($changed.Count -eq 0)
     changedFiles = @($changed)
+  }
+}
+
+function Convert-TomlScalarForProjectionSummary {
+  param([string]$RawValue)
+  if ($null -eq $RawValue) {
+    return $null
+  }
+  $value = $RawValue.Trim()
+  if ($value -match '^\s*"([^"]*)"\s*$') {
+    return $Matches[1]
+  }
+  if ($value -match "^\s*'([^']*)'\s*$") {
+    return $Matches[1]
+  }
+  if ($value -match '^\s*(true|false)\s*$') {
+    return $value.ToLowerInvariant()
+  }
+  if ($value -match '^\s*\[') {
+    return "[array]"
+  }
+  if ($value -match '^\s*\{') {
+    return "[table]"
+  }
+  return $value
+}
+
+function Get-CodexConfigProjectionSummary {
+  param([string]$Root)
+
+  $path = Join-Path $Root "config.toml"
+  if (-not (Test-Path -LiteralPath $path)) {
+    return [ordered]@{
+      enabled = [bool]$CaptureCliConfigProjectionSummary
+      exists = $false
+      path = $path
+      topLevel = [ordered]@{}
+      profiles = [ordered]@{}
+      modelProviders = [ordered]@{}
+    }
+  }
+
+  $item = Get-Item -LiteralPath $path
+  $hash = Get-FileHash -LiteralPath $path -Algorithm SHA256
+  $topLevel = [ordered]@{}
+  $profiles = [ordered]@{}
+  $modelProviders = [ordered]@{}
+  $section = ""
+  $topLevelKeys = @("model", "model_provider", "openai_base_url", "chatgpt_base_url", "profile", "service_tier", "experimental_realtime_ws_base_url")
+  $profileKeys = @("model", "model_provider", "openai_base_url", "chatgpt_base_url", "service_tier")
+  $providerKeys = @("name", "base_url", "wire_api", "env_key", "requires_openai_auth", "query_params")
+
+  foreach ($line in Get-Content -LiteralPath $path) {
+    if ($line -match '^\s*\[([^\]]+)\]\s*$') {
+      $section = $Matches[1].Trim()
+      continue
+    }
+    if ($line -notmatch '^\s*([A-Za-z0-9_.-]+)\s*=\s*(.+?)\s*(?:#.*)?$') {
+      continue
+    }
+    $key = $Matches[1].Trim()
+    $value = Convert-TomlScalarForProjectionSummary $Matches[2]
+
+    if ([string]::IsNullOrWhiteSpace($section)) {
+      if ($topLevelKeys -contains $key) {
+        $topLevel[$key] = $value
+      }
+      continue
+    }
+
+    if ($section -match '^profiles\.([A-Za-z0-9_.-]+)$') {
+      $profileId = $Matches[1]
+      if (-not $profiles.Contains($profileId)) {
+        $profiles[$profileId] = [ordered]@{}
+      }
+      if ($profileKeys -contains $key) {
+        $profiles[$profileId][$key] = $value
+      }
+      continue
+    }
+
+    if ($section -match '^model_providers\.([A-Za-z0-9_.-]+)$') {
+      $providerId = $Matches[1]
+      if (-not $modelProviders.Contains($providerId)) {
+        $modelProviders[$providerId] = [ordered]@{}
+      }
+      if ($providerKeys -contains $key) {
+        $modelProviders[$providerId][$key] = $value
+      } elseif ($key -match 'auth|token|secret|password|credential|authorization|header') {
+        $modelProviders[$providerId][$key] = "[redacted]"
+      }
+    }
+  }
+
+  [ordered]@{
+    enabled = [bool]$CaptureCliConfigProjectionSummary
+    exists = $true
+    path = $path
+    length = $item.Length
+    lastWriteTime = $item.LastWriteTime.ToString("o")
+    sha256 = $hash.Hash
+    topLevel = $topLevel
+    profiles = $profiles
+    modelProviders = $modelProviders
+  }
+}
+
+function New-CliFirstDriftObservation {
+  param(
+    [System.Collections.IDictionary]$Before,
+    [System.Collections.IDictionary]$After,
+    [datetime]$ObservedAt,
+    [datetime]$StartedAt,
+    [System.Collections.IDictionary]$ProjectionBefore,
+    [System.Collections.IDictionary]$ProjectionAfter
+  )
+  $comparison = Compare-FileGuardState $Before $After
+  if ($comparison.unchanged) {
+    return $null
+  }
+  [ordered]@{
+    firstDetectedAt = $ObservedAt.ToString("o")
+    elapsedSeconds = [math]::Round(($ObservedAt - $StartedAt).TotalSeconds, 1)
+    changedFiles = @($comparison.changedFiles)
+    firstAfter = $After
+    projectionBefore = $ProjectionBefore
+    projectionAtFirstDetection = $ProjectionAfter
+  }
+}
+
+function Get-ProjectionComparisonPayload {
+  param([System.Collections.IDictionary]$Projection)
+  if ($null -eq $Projection -or -not [bool]$Projection.enabled -or -not [bool]$Projection.exists) {
+    return $null
+  }
+  [ordered]@{
+    topLevel = $Projection.topLevel
+    profiles = $Projection.profiles
+    modelProviders = $Projection.modelProviders
+  }
+}
+
+function Compare-CodexConfigProjectionSummary {
+  param(
+    [System.Collections.IDictionary]$Before,
+    [System.Collections.IDictionary]$After
+  )
+  $beforePayload = Get-ProjectionComparisonPayload $Before
+  $afterPayload = Get-ProjectionComparisonPayload $After
+  $available = ($null -ne $beforePayload -and $null -ne $afterPayload)
+  if (-not $available) {
+    return [ordered]@{
+      available = $false
+      unchanged = $null
+      changed = $null
+      reason = "projection_summary_unavailable"
+    }
+  }
+
+  $beforeJson = $beforePayload | ConvertTo-Json -Depth 16 -Compress
+  $afterJson = $afterPayload | ConvertTo-Json -Depth 16 -Compress
+  $unchanged = ($beforeJson -eq $afterJson)
+  [ordered]@{
+    available = $true
+    unchanged = $unchanged
+    changed = (-not $unchanged)
+    reason = if ($unchanged) { "projection_summary_unchanged" } else { "projection_summary_changed" }
   }
 }
 
@@ -2877,7 +3045,9 @@ function New-QuotaContinuityVerdict {
 function New-HostDriftVerdict {
   param(
     [System.Collections.IDictionary]$CliComparison,
-    [System.Collections.IDictionary]$AppComparison
+    [System.Collections.IDictionary]$AppComparison,
+    [System.Collections.IDictionary]$CliFirstDrift,
+    [System.Collections.IDictionary]$CliProjectionComparison
   )
 
   $cliUnchanged = [bool]$CliComparison.unchanged
@@ -2889,7 +3059,13 @@ function New-HostDriftVerdict {
     $reason = "Codex CLI config/auth 文件和 Codex App 进程集合均发生变化"
   } elseif (-not $cliUnchanged) {
     $status = "fail"
-    $reason = "Codex CLI config/auth 文件发生变化"
+    if ($CliProjectionComparison -and $CliProjectionComparison.available -and $CliProjectionComparison.unchanged) {
+      $reason = "Codex CLI config/auth 文件发生变化，但脱敏 provider 投影摘要未变化"
+    } elseif ($CliProjectionComparison -and $CliProjectionComparison.available -and $CliProjectionComparison.changed) {
+      $reason = "Codex CLI config/auth 文件发生变化，且脱敏 provider 投影摘要发生变化"
+    } else {
+      $reason = "Codex CLI config/auth 文件发生变化"
+    }
   } elseif (-not $appStable) {
     $status = "fail"
     $reason = "Codex App 进程集合发生变化"
@@ -2901,6 +3077,8 @@ function New-HostDriftVerdict {
     evidence = [ordered]@{
       cliConfigUnchanged = $cliUnchanged
       cliChangedFiles = @($CliComparison.changedFiles)
+      cliFirstDrift = $CliFirstDrift
+      cliProjectionComparison = $CliProjectionComparison
       codexAppStable = $appStable
       codexAppBeforeCount = [int]$AppComparison.beforeCount
       codexAppAfterCount = [int]$AppComparison.afterCount
@@ -2974,6 +3152,9 @@ function New-MonitorReport {
     [int]$WindowDroppedEventCount = 0,
     [System.Collections.IDictionary]$CliBefore,
     [System.Collections.IDictionary]$CliAfter,
+    [System.Collections.IDictionary]$CliFirstDrift,
+    [System.Collections.IDictionary]$CliProjectionBefore,
+    [System.Collections.IDictionary]$CliProjectionAfter,
     [System.Collections.IDictionary]$AppBefore,
     [System.Collections.IDictionary]$AppAfter,
     [string]$ReportPath,
@@ -2987,7 +3168,8 @@ function New-MonitorReport {
   $results = New-AcceptanceResults -AuditSummary $auditSummary -CliComparison $cliComparison -AppComparison $appComparison -ApiServiceRuntime $apiServiceRuntime
   $continuitySummary = New-ContinuitySummary $auditSummary
   $quotaContinuityVerdict = New-QuotaContinuityVerdict $auditSummary
-  $hostDriftVerdict = New-HostDriftVerdict -CliComparison $cliComparison -AppComparison $appComparison
+  $projectionComparison = Compare-CodexConfigProjectionSummary -Before $CliProjectionBefore -After $CliProjectionAfter
+  $hostDriftVerdict = New-HostDriftVerdict -CliComparison $cliComparison -AppComparison $appComparison -CliFirstDrift $CliFirstDrift -CliProjectionComparison $projectionComparison
   $criticalSignals = New-CriticalSignals -ApiServiceRuntime $apiServiceRuntime -GeneratedAt $EndedAt
   $overall = if ($results | Where-Object { $_.status -eq "fail" }) {
     "fail"
@@ -2995,6 +3177,31 @@ function New-MonitorReport {
     "blocked"
   } else {
     "pass"
+  }
+  $projectionSummary = if ($CaptureCliConfigProjectionSummary) {
+    [ordered]@{
+      enabled = $true
+      before = $CliProjectionBefore
+      after = $CliProjectionAfter
+      comparison = $projectionComparison
+    }
+  } else {
+    [ordered]@{
+      enabled = $false
+      reason = "not_requested"
+    }
+  }
+  $safetyNotes = @(
+    "this live monitor is read-only",
+    "it hashes ~/.codex/config.toml and ~/.codex/auth.json",
+    "it does not start, stop, restart, or kill Codex App, Codex CLI, or Cockpit services",
+    "it does not switch providers or restore manual provider changes",
+    "use the App-safe isolated acceptance script when temporary provider config must be created and restored automatically"
+  )
+  if ($CaptureCliConfigProjectionSummary) {
+    $safetyNotes += "it reads only a redacted allow-list projection summary from ~/.codex/config.toml; auth/header/token/secret-like values are redacted"
+  } else {
+    $safetyNotes += "it does not read ~/.codex/config.toml/auth.json contents unless -CaptureCliConfigProjectionSummary is explicitly provided"
   }
 
   [ordered]@{
@@ -3043,6 +3250,8 @@ function New-MonitorReport {
       before = $CliBefore
       after = $CliAfter
       comparison = $cliComparison
+      firstDrift = $CliFirstDrift
+      projectionSummary = $projectionSummary
     }
     codexAppGuard = [ordered]@{
       before = $AppBefore
@@ -3057,13 +3266,7 @@ function New-MonitorReport {
     quotaContinuityVerdict = $quotaContinuityVerdict
     hostDriftVerdict = $hostDriftVerdict
     results = $results
-    safetyNotes = @(
-      "this live monitor is read-only",
-      "it hashes ~/.codex/config.toml and ~/.codex/auth.json but does not read or write their contents",
-      "it does not start, stop, restart, or kill Codex App, Codex CLI, or Cockpit services",
-      "it does not switch providers or restore manual provider changes",
-      "use the App-safe isolated acceptance script when temporary provider config must be created and restored automatically"
-    )
+    safetyNotes = @($safetyNotes)
   }
 }
 
@@ -3108,6 +3311,12 @@ $events = @()
 $rawObservedEventCount = 0
 $windowDroppedEventCount = 0
 $cliBefore = Get-FileGuardState $CodexHome
+$cliProjectionBefore = if ($CaptureCliConfigProjectionSummary) {
+  Get-CodexConfigProjectionSummary $CodexHome
+} else {
+  $null
+}
+$cliFirstDrift = $null
 $appBefore = Get-CodexAppProcessState $CodexAppProcessNames $CodexAppPathIncludePatterns $CodexAppPathExcludePatterns
 $script:InitialApiServiceRuntime = Get-ApiServiceRuntimeState
 $terminationReason = "deadline"
@@ -3153,6 +3362,23 @@ do {
     $nowForCheckpoint = Get-Date
     if ($wroteEventsThisPoll -or ($nowForCheckpoint - $lastCheckpointAt).TotalSeconds -ge $CheckpointIntervalSeconds) {
       $cliCurrent = Get-FileGuardState $CodexHome
+      $cliProjectionCurrent = if ($CaptureCliConfigProjectionSummary) {
+        Get-CodexConfigProjectionSummary $CodexHome
+      } else {
+        $null
+      }
+      if ($null -eq $cliFirstDrift) {
+        $cliCurrentComparison = Compare-FileGuardState $cliBefore $cliCurrent
+        if (-not $cliCurrentComparison.unchanged) {
+          $cliFirstDrift = New-CliFirstDriftObservation `
+            -Before $cliBefore `
+            -After $cliCurrent `
+            -ObservedAt $nowForCheckpoint `
+            -StartedAt $startedAt `
+            -ProjectionBefore $cliProjectionBefore `
+            -ProjectionAfter $cliProjectionCurrent
+        }
+      }
       $appCurrent = Get-CodexAppProcessState $CodexAppProcessNames $CodexAppPathIncludePatterns $CodexAppPathExcludePatterns
       $checkpoint = New-MonitorReport `
         -StartedAt $startedAt `
@@ -3164,6 +3390,9 @@ do {
         -WindowDroppedEventCount $windowDroppedEventCount `
         -CliBefore $cliBefore `
         -CliAfter $cliCurrent `
+        -CliFirstDrift $cliFirstDrift `
+        -CliProjectionBefore $cliProjectionBefore `
+        -CliProjectionAfter $cliProjectionCurrent `
         -AppBefore $appBefore `
         -AppAfter $appCurrent `
         -ReportPath $null `
@@ -3193,6 +3422,8 @@ do {
       $terminationReason = "stop_when_key_signal_fail"
       break
     }
+    $quotaVerdictNow = New-QuotaContinuityVerdict $summaryNow
+    $quotaKeySignalObserved = $RequireQuotaFallback -and ($quotaVerdictNow.status -in @("plus_like", "terminal_quota"))
     $quotaSatisfied = (-not $RequireQuotaFallback) -or ($summaryNow.has429 -and $summaryNow.hasUsageLimitReached -and $summaryNow.hasModelCooldownApplied -and ($summaryNow.sameTaskAffinityTerminalCompletionCount + $summaryNow.sameTaskAffinityStructuredQuotaTerminal429Count) -ge $RequiredFallbackCycles -and $summaryNow.sameTaskAffinityLocalCompletionCount -eq 0 -and $summaryNow.newRequestAvoidanceCount -gt 0 -and $summaryNow.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts)
     $streamSatisfied = (-not $RequireStreamCompletion) -or ($summaryNow.completedStreamCount -ge $RequiredCompletedStreams)
     $retrySatisfied = (-not $summaryNow.retryLimitErrorFound)
@@ -3203,6 +3434,10 @@ do {
     $poolWaitProgressSatisfied = (-not $summaryNow.openPoolWaitCount)
     $stickyResetSatisfied = (-not $summaryNow.stickyResetWaitKilledByLocalTimeoutCount) -and (-not $summaryNow.stickyResetWaitExceededInlineBudgetCount)
     $runtimeSatisfied = (-not $RequireApiServiceRuntimeAvailable) -or (Get-ApiServiceRuntimeState).available
+    if ($quotaKeySignalObserved -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied -and $stickyResetSatisfied -and $runtimeSatisfied) {
+      $terminationReason = "stop_when_quota_key_signal"
+      break
+    }
     if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied -and $stickyResetSatisfied -and $runtimeSatisfied) {
       $terminationReason = "stop_when_satisfied"
       break
@@ -3225,6 +3460,23 @@ do {
 
 $endedAt = Get-Date
 $cliAfter = Get-FileGuardState $CodexHome
+$cliProjectionAfter = if ($CaptureCliConfigProjectionSummary) {
+  Get-CodexConfigProjectionSummary $CodexHome
+} else {
+  $null
+}
+if ($null -eq $cliFirstDrift) {
+  $cliFinalComparison = Compare-FileGuardState $cliBefore $cliAfter
+  if (-not $cliFinalComparison.unchanged) {
+    $cliFirstDrift = New-CliFirstDriftObservation `
+      -Before $cliBefore `
+      -After $cliAfter `
+      -ObservedAt $endedAt `
+      -StartedAt $startedAt `
+      -ProjectionBefore $cliProjectionBefore `
+      -ProjectionAfter $cliProjectionAfter
+  }
+}
 $appAfter = Get-CodexAppProcessState $CodexAppProcessNames $CodexAppPathIncludePatterns $CodexAppPathExcludePatterns
 $reportPath = $null
 if ($WriteReport) {
@@ -3243,6 +3495,9 @@ $report = New-MonitorReport `
   -WindowDroppedEventCount $windowDroppedEventCount `
   -CliBefore $cliBefore `
   -CliAfter $cliAfter `
+  -CliFirstDrift $cliFirstDrift `
+  -CliProjectionBefore $cliProjectionBefore `
+  -CliProjectionAfter $cliProjectionAfter `
   -AppBefore $appBefore `
   -AppAfter $appAfter `
   -ReportPath $reportPath `
