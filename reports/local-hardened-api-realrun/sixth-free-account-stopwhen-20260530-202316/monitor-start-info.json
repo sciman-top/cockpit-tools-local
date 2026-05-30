@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "startedAt": "2026-05-30T20:23:16.5228671+08:00",
+  "pid": 34380,
+  "processName": "pwsh",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316",
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316\\monitor-checkpoint.json",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316\\monitor-exit-code.txt",
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316\\stdout.log",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316\\stderr.log",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316\\stop.signal",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "mode": "sixth-free-account-stopwhen-sidecar",
+  "notes": [
+    "read-only sidecar monitor",
+    "watches newly appended audit JSONL only unless script checkpoint says otherwise",
+    "StopWhenSatisfied requires quota fallback, stream completion, post-quota replacement success, and API service runtime availability"
+  ],
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\CODE\\external\\Cockpit-Tools-Local\\scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 2400 -PollIntervalSeconds 2 -CheckpointIntervalSeconds 5 -DataRoot C:\\Users\\sciman\\.antigravity_cockpit -CodexHome C:\\Users\\sciman\\.codex -AuditPath C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316 -ExitCodeFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316\\monitor-exit-code.txt -CheckpointPath D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316\\monitor-checkpoint.json -StopSignalFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\sixth-free-account-stopwhen-20260530-202316\\stop.signal -RequireQuotaFallback -RequireStreamCompletion -RequirePostQuotaReplacementSuccess -RequireApiServiceRuntimeAvailable -RequiredFallbackCycles 1 -RequiredDistinctHealthyAccounts 1 -RequiredCompletedStreams 1 -StopWhenSatisfied -WriteReport -CaptureCliConfigProjectionSummary"
+}
