@@ -252,6 +252,23 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 - [x] API 服务号池和 Codex 分组成员顺序不再作为卡片推荐排序、刷新排序或调度排序依据。
 - [x] `npm run typecheck` 通过；排序纯函数有 focused unit test 或最小 comparator test。
 
+### Phase S4B - 前端 effective health order 对齐
+
+目标：补齐 S4A 的展示层细节，确保卡片主页的 API service 推荐排序能继承后端 health registry 的连续性判断，而不是只靠前端 quota/reset/created_at 推断。
+
+任务：
+
+- [x] 保留 `collection.accountIds` 只表达成员集合，不把成员插入顺序重新引入推荐排序。
+- [x] 从 `CodexLocalAccessState.effectiveAccountIds` 派生只读 `apiServiceHealthSortMeta`，仅在后端返回 effective order 时参与 tie-break。
+- [x] API service 成员在 quota 打平时优先使用后端 health order：曾成功使用并已恢复的账号排在从未使用的新 reserve 账号前面。
+- [x] 没有后端 effective order 时继续使用 quota/reset/created_at 稳定排序，避免把旧成员集合顺序误当成调度偏好。
+
+验收：
+
+- [x] focused comparator test 覆盖“周配额相同、成员顺序中新账号在前，但后端 health order 中老账号恢复在前”的场景。
+- [x] `scripts/test-codex-account-sort.mjs` 通过。
+- [x] `npm run typecheck` 通过。
+
 ### Phase S5 - 任务级连续性验收固化
 
 目标：把用户关心的 bug oracle 固化为可重复验收：一个账号 429 不应让当前 Codex 任务直接以 `exceeded retry limit, last status: 429 Too Many Requests` 结束。
@@ -282,6 +299,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 | APS-07 | 手动暂停/恢复闭环 | `src-tauri/src/modules/codex_local_access.rs`、`src/components/CodexLocalAccessModal.tsx` | health/manual recovery tests + typecheck | 中 |
 | APS-08 | 任务级连续性 summary 双结论 | `scripts/accept-local-hardened-api-continuity.ps1`、`scripts/monitor-live-codex-app-cockpit-acceptance.ps1` | app-safe isolated dry/static tests；live upstream 需 acknowledgement | 中 |
 | APS-09 | 账号卡片/分组/API 服务推荐排序合同 | `src/pages/CodexAccountsPage.tsx`、`src/types/codexLocalAccess.ts`、`src-tauri/src/modules/codex_local_access.rs` | comparator tests + `npm run typecheck` | 中 |
+| APS-09A | API service 卡片排序接入后端 effective health order | `src/pages/CodexAccountsPage.tsx`、`src/utils/codexAccountSort.ts`、`scripts/test-codex-account-sort.mjs` | focused comparator test + `npm run typecheck` | 低 |
 | APS-10 | 低频刷新排序与 live-risk guard 联动 | `src/hooks/useAutoRefresh.ts`、`scripts/test-local-hardened-api-live-risk-guard.ps1`、相关 docs | focused refresh tests + preflight | 中 |
 
 ## 验收矩阵

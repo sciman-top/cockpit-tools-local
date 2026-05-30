@@ -590,6 +590,28 @@ assert.deepEqual(
 
 assert.deepEqual(
   [
+    codexAccount('new-reserve', quota(100, 100), { created_at: 20 }),
+    codexAccount('used-recovered', quota(100, 100), { created_at: 10 }),
+  ]
+    .sort((left, right) =>
+      sort.compareCodexAccountsByRecommendedSort(left, right, {
+        apiServiceSortMeta: new Map([
+          ['new-reserve', 0],
+          ['used-recovered', 1],
+        ]),
+        apiServiceHealthSortMeta: new Map([
+          ['used-recovered', 0],
+          ['new-reserve', 1],
+        ]),
+      }),
+    )
+    .map((account) => account.id),
+  ['used-recovered', 'new-reserve'],
+  'API service recommended sort should use backend health order to keep used recovered accounts ahead of new reserve accounts when quota ties',
+);
+
+assert.deepEqual(
+  [
     codexAccount('group-saved-first', quota(60, 60), { created_at: 10 }),
     codexAccount('group-newer', quota(60, 60), { created_at: 20 }),
   ]

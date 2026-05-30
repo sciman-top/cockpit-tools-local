@@ -26,6 +26,7 @@ export interface CodexAccountSortOptions {
   sortBy: string;
   sortDirection: CodexNumericSortDirection;
   apiServiceSortMeta?: Map<string, number>;
+  apiServiceHealthSortMeta?: Map<string, number>;
   groupSortMeta?: Map<string, CodexGroupSortMeta>;
   currentAccountId?: string | null;
   getSubscriptionTimestampMs?: (account: CodexAccount) => number | null | undefined;
@@ -256,12 +257,34 @@ function compareCodexRecommendedGroupedAccounts(
   return compareCodexAccountTieBreak(left, right);
 }
 
+function compareCodexAccountsByOptionalSortMeta(
+  left: CodexAccount,
+  right: CodexAccount,
+  sortMeta?: Map<string, number>,
+): number {
+  if (!sortMeta || sortMeta.size === 0) return 0;
+  const leftIndex = sortMeta.get(left.id);
+  const rightIndex = sortMeta.get(right.id);
+  if (leftIndex == null && rightIndex == null) return 0;
+  if (leftIndex == null) return 1;
+  if (rightIndex == null) return -1;
+  return leftIndex - rightIndex;
+}
+
 function compareCodexRecommendedApiServiceAccounts(
   left: CodexAccount,
   right: CodexAccount,
+  apiServiceHealthSortMeta?: Map<string, number>,
 ): number {
   const quotaDiff = compareCodexAccountsByQuotaAvailability(left, right, "desc");
   if (quotaDiff !== 0) return quotaDiff;
+
+  const healthSortDiff = compareCodexAccountsByOptionalSortMeta(
+    left,
+    right,
+    apiServiceHealthSortMeta,
+  );
+  if (healthSortDiff !== 0) return healthSortDiff;
 
   const resetDiff = compareNullableSortNumber(
     getCodexEarliestQuotaResetSortValue(left),
@@ -545,10 +568,14 @@ export function compareCodexAccountsByRecommendedSort(
   right: CodexAccount,
   options: Pick<
     CodexAccountSortOptions,
-    "apiServiceSortMeta" | "groupSortMeta" | "currentAccountId"
+    | "apiServiceSortMeta"
+    | "apiServiceHealthSortMeta"
+    | "groupSortMeta"
+    | "currentAccountId"
   > = {},
 ): number {
   const apiServiceSortMeta = options.apiServiceSortMeta ?? new Map<string, number>();
+  const apiServiceHealthSortMeta = options.apiServiceHealthSortMeta;
   const groupSortMeta =
     options.groupSortMeta ?? new Map<string, CodexGroupSortMeta>();
   const currentAccountId = options.currentAccountId ?? null;
@@ -577,7 +604,11 @@ export function compareCodexAccountsByRecommendedSort(
     return leftBucket - rightBucket;
   }
   if (leftBucket === 0) {
-    return compareCodexRecommendedApiServiceAccounts(left, right);
+    return compareCodexRecommendedApiServiceAccounts(
+      left,
+      right,
+      apiServiceHealthSortMeta,
+    );
   }
   if (leftBucket === 1) {
     return compareCodexRecommendedGroupedAccounts(left, right, groupSortMeta);
@@ -596,6 +627,7 @@ export function compareCodexAccountsBySort(
   options: CodexAccountSortOptions,
 ): number {
   const apiServiceSortMeta = options.apiServiceSortMeta ?? new Map<string, number>();
+  const apiServiceHealthSortMeta = options.apiServiceHealthSortMeta;
   const groupSortMeta =
     options.groupSortMeta ?? new Map<string, CodexGroupSortMeta>();
   const currentAccountId = options.currentAccountId ?? null;
@@ -603,6 +635,7 @@ export function compareCodexAccountsBySort(
 
   if (sortBy === CODEX_RECOMMENDED_SORT_BY) {
     return compareCodexAccountsByRecommendedSort(left, right, {
+      apiServiceHealthSortMeta,
       apiServiceSortMeta,
       groupSortMeta,
       currentAccountId,

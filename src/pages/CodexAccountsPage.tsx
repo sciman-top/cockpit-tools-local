@@ -5549,6 +5549,17 @@ export function CodexAccountsPage() {
     });
     return map;
   }, [localAccessDisplayAccountIds]);
+  const apiServiceHealthSortMeta = useMemo(() => {
+    const map = new Map<string, number>();
+    const effectiveAccountIds = localAccessState?.effectiveAccountIds ?? [];
+    effectiveAccountIds.forEach((accountId) => {
+      if (!localAccessAccountIdSet.has(accountId) || map.has(accountId)) {
+        return;
+      }
+      map.set(accountId, map.size);
+    });
+    return map;
+  }, [localAccessAccountIdSet, localAccessState?.effectiveAccountIds]);
   useEffect(() => {
     if (!localAccessRuntimeActive && !showLocalAccessModal) {
       return;
@@ -5574,6 +5585,7 @@ export function CodexAccountsPage() {
       }
 
       return compareCodexAccountsBySort(a, b, {
+        apiServiceHealthSortMeta,
         apiServiceSortMeta,
         currentAccountId: overviewCurrentAccountId,
         getSubscriptionTimestampMs: (account) =>
@@ -5584,6 +5596,7 @@ export function CodexAccountsPage() {
       });
     },
     [
+      apiServiceHealthSortMeta,
       apiServiceSortMeta,
       customSortOrderIndex,
       groupSortMeta,
