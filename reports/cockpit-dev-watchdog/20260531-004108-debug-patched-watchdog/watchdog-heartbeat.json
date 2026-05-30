@@ -1,0 +1,68 @@
+{
+  "timestamp": "2026-05-31T00:51:13.3432285+08:00",
+  "pid": 22420,
+  "desiredInstance": "Debug",
+  "debugSwitchMode": "PrebuildThenStop",
+  "releaseFallbackEnabled": false,
+  "releaseFallbackCooldownSeconds": 10,
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "releaseExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+  "runningCockpitProcessCount": 0,
+  "runningCockpitProcesses": [],
+  "runningDebugProcessCount": 0,
+  "runningDebugProcesses": [],
+  "runningNonDebugProcessCount": 0,
+  "runningNonDebugProcesses": [],
+  "tauriDevLauncherCount": 4,
+  "tauriDevLaunchers": [
+    {
+      "ProcessId": 9056,
+      "Name": "cmd.exe",
+      "ExecutablePath": "C:\\WINDOWS\\system32\\cmd.exe",
+      "CommandLine": "C:\\WINDOWS\\system32\\cmd.exe /c \"\"C:\\\\Program Files\\nodejs\\npm.cmd\" run tauri dev\""
+    },
+    {
+      "ProcessId": 29396,
+      "Name": "node.exe",
+      "ExecutablePath": "C:\\Program Files\\nodejs\\node.exe",
+      "CommandLine": "\"C:\\Program Files\\nodejs\\\\node.exe\"  \"C:\\Users\\sciman\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npm-cli.js\" run tauri dev"
+    },
+    {
+      "ProcessId": 26536,
+      "Name": "cmd.exe",
+      "ExecutablePath": "C:\\WINDOWS\\system32\\cmd.exe",
+      "CommandLine": "C:\\WINDOWS\\system32\\cmd.exe /d /s /c npm run sync-version && tauri dev"
+    },
+    {
+      "ProcessId": 32032,
+      "Name": "node.exe",
+      "ExecutablePath": "C:\\Program Files\\nodejs\\node.exe",
+      "CommandLine": "\"node\"   \"D:\\CODE\\external\\Cockpit-Tools-Local\\node_modules\\.bin\\\\..\\@tauri-apps\\cli\\tauri.js\" dev"
+    }
+  ],
+  "activeCodexStreamGuard": {
+    "activeStreamCount": 1,
+    "activeLeaseIds": [
+      "66"
+    ],
+    "auditPaths": [
+      "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl.1",
+      "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl"
+    ],
+    "dataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+    "windowMinutes": 720,
+    "lastEventTimestampMs": 1780159116645,
+    "parseErrorCount": 0
+  },
+  "launchCount": 2,
+  "prebuildCount": 0,
+  "releaseFallbackCount": 0,
+  "lastLaunchAt": "2026-05-31T00:43:49.6139732+08:00",
+  "lastPrebuildAt": null,
+  "lastReleaseFallbackAt": null,
+  "debugPrebuild": null,
+  "pendingDebugLaunchAfterPrebuild": false,
+  "pendingDebugLaunchPrebuild": null,
+  "debugMissingSince": "2026-05-31T00:50:32.8187502+08:00",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-004108-debug-patched-watchdog\\stop.signal"
+}

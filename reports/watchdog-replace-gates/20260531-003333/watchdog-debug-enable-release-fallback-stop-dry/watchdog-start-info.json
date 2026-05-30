@@ -1,0 +1,19 @@
+{
+  "startedAt": "2026-05-31T00:40:38.1304087+08:00",
+  "pid": 23740,
+  "repoRoot": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\watchdog-replace-gates\\20260531-003333\\watchdog-debug-enable-release-fallback-stop-dry",
+  "pollIntervalSeconds": 5,
+  "launchCooldownSeconds": 45,
+  "desiredInstance": "Debug",
+  "debugSwitchMode": "PrebuildThenStop",
+  "releaseFallbackEnabled": true,
+  "releaseFallbackCooldownSeconds": 10,
+  "stableLocalAccessGatewayEnabled": true,
+  "debugStartupGraceSeconds": 120,
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "releaseExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+  "stopSignalFile": "reports\\watchdog-replace-gates\\20260531-003333\\watchdog-debug-enable-release-fallback-stop-dry\\stop.signal",
+  "trigger": "keep target\\debug\\cockpit-tools.exe as the active Cockpit app process; if debug exits, start target\\release\\cockpit-tools.exe as fallback, prebuild debug, then stop fallback only after debug prebuild succeeds",
+  "stopSemantics": "create stop.signal to stop watchdog; non-debug cockpit-tools app processes are used as fallback and are preserved until debug prebuild succeeds or debug is already running; never kill Codex processes"
+}

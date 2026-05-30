@@ -1,0 +1,3 @@
+{"repoRoot":"D:\\CODE\\external\\Cockpit-Tools-Local","timestamp":"2026-05-31T00:40:37.0495010+08:00","pid":37504,"reportDir":"D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\watchdog-replace-gates\\20260531-003333\\watchdog-debug-default-stop-dry","event":"watchdog_started"}
+{"timestamp":"2026-05-31T00:40:37.0580937+08:00","stopSignalFile":"reports\\watchdog-replace-gates\\20260531-003333\\watchdog-debug-default-stop-dry\\stop.signal","event":"stop_signal_file"}
+{"timestamp":"2026-05-31T00:40:37.0602008+08:00","prebuildCount":0,"releaseFallbackCount":0,"launchCount":0,"event":"watchdog_exited"}

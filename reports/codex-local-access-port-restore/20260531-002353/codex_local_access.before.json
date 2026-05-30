@@ -1,0 +1,36 @@
+{
+  "enabled": true,
+  "port": 45435,
+  "apiKey": "<redacted-local-api-key>",
+  "safetyConfig": {
+    "schemaVersion": 1,
+    "hardenedLocalMode": true,
+    "maxConcurrentRequests": 1,
+    "minRequestIntervalSeconds": 20,
+    "maxQueueWaitSeconds": 21,
+    "requestTimeoutSeconds": 600,
+    "maxRequestBodyMb": 64,
+    "maxRetries": 1,
+    "maxRetryAccounts": 2,
+    "fallbackMode": "disabled",
+    "logging": {
+      "redactSensitiveValues": true,
+      "includeRequestId": true,
+      "includeAccountHash": true,
+      "includeRoute": true,
+      "includeModel": true,
+      "includeLatency": true,
+      "includePromptResponse": false,
+      "includeRawUpstreamBody": false
+    }
+  },
+  "routingStrategy": "auto",
+  "restrictFreeAccounts": false,
+  "followCurrentAccount": false,
+  "accountIds": [
+    "codex_65eba9bbe4b6d16b5854330fa439c050",
+    "codex_6d6202913646a7858c8a578ffbc0a51e"
+  ],
+  "createdAt": 1778075699229,
+  "updatedAt": 1780158190985
+}

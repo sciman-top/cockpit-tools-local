@@ -1,0 +1,5 @@
+{"repoRoot":"D:\\CODE\\external\\Cockpit-Tools-Local","configPath":"C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access.json","timestamp":"2026-05-31T00:13:11.3598048+08:00","event":"stable_gateway_probe_started","dataRoot":"C:\\Users\\sciman\\.antigravity_cockpit"}
+{"timestamp":"2026-05-31T00:13:13.4948474+08:00","event":"gateway_build_started","command":"cargo build --manifest-path src-tauri/Cargo.toml --target-dir target --bin codex-local-access-gateway"}
+{"timestamp":"2026-05-31T00:15:11.6325170+08:00","event":"gateway_build_completed","exe":"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe"}
+{"processId":37980,"baseUrl":"http://127.0.0.1:45336/v1","timestamp":"2026-05-31T00:15:11.6654827+08:00","event":"stable_gateway_process_started","exe":"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe"}
+{"processId":37980,"port":45336,"baseUrl":"http://127.0.0.1:45336/v1","timestamp":"2026-05-31T00:15:13.3559053+08:00","event":"stable_gateway_ready"}

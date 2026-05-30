@@ -1,0 +1,2 @@
+{"configPath":"C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access.json","timestamp":"2026-05-31T00:28:34.0534238+08:00","event":"stable_gateway_probe_started","repoRoot":"D:\\CODE\\external\\Cockpit-Tools-Local","dataRoot":"C:\\Users\\sciman\\.antigravity_cockpit"}
+{"ownerCount":1,"timestamp":"2026-05-31T00:28:34.2198620+08:00","event":"stable_gateway_already_running","baseUrl":"http://127.0.0.1:45336/v1","port":45336}

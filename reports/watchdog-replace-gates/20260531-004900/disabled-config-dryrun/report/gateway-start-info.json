@@ -1,0 +1,11 @@
+{
+  "startedAt": "2026-05-31T00:50:29.3400175+08:00",
+  "pid": 20916,
+  "repoRoot": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\watchdog-replace-gates\\20260531-004900\\disabled-config-dryrun\\report",
+  "dataRoot": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\watchdog-replace-gates\\20260531-004900\\disabled-config-dryrun",
+  "configPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\watchdog-replace-gates\\20260531-004900\\disabled-config-dryrun\\codex_local_access.json",
+  "checkOnly": true,
+  "allowConfigEnable": true,
+  "readyTimeoutSeconds": 30
+}

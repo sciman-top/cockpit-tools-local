@@ -331,6 +331,25 @@ input:checked + .slider:before {
   border: 1px solid var(--border);
 }
 
+.version-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.build-time-tag {
+  color: var(--text-muted);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--border-light);
+  background: var(--bg-secondary);
+  white-space: nowrap;
+}
+
 .credits-list {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

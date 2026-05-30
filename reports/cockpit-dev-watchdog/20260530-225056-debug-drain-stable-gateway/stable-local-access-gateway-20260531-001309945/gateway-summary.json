@@ -1,0 +1,18 @@
+{
+  "status": "started",
+  "processId": 37980,
+  "exe": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe",
+  "command": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe\" --serve",
+  "baseUrl": "http://127.0.0.1:45336/v1",
+  "port": 45336,
+  "dataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-225056-debug-drain-stable-gateway\\stable-local-access-gateway-20260531-001309945\\gateway.stdout.log",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-225056-debug-drain-stable-gateway\\stable-local-access-gateway-20260531-001309945\\gateway.stderr.log",
+  "pidPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-225056-debug-drain-stable-gateway\\stable-local-access-gateway-20260531-001309945\\gateway.pid.txt",
+  "health": {
+    "ok": true,
+    "statusCode": 200,
+    "error": null
+  },
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-225056-debug-drain-stable-gateway\\stable-local-access-gateway-20260531-001309945"
+}

@@ -13,6 +13,7 @@ param(
   [int]$ActiveStreamAuditWindowMinutes = 720,
   [switch]$DisableStableLocalAccessGateway,
   [switch]$DisableReleaseFallback,
+  [switch]$EnableReleaseFallback,
   [string]$StopSignalFile = "",
   [switch]$Quiet
 )
@@ -137,6 +138,47 @@ function Get-LocalAccessAuditPaths {
   $root = Get-LocalAccessDataRoot
   $path = Join-Path $root "codex_local_access_audit.jsonl"
   @("$path.1", $path) | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+}
+
+function Get-LocalAccessConfigSnapshot {
+  $path = Join-Path (Get-LocalAccessDataRoot) "codex_local_access.json"
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    return [ordered]@{
+      exists = $false
+      path = $path
+      enabled = $null
+      port = $null
+      updatedAt = $null
+    }
+  }
+
+  try {
+    $config = Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    return [ordered]@{
+      exists = $true
+      path = $path
+      enabled = $config.enabled
+      port = $config.port
+      updatedAt = $config.updatedAt
+    }
+  } catch {
+    return [ordered]@{
+      exists = $true
+      path = $path
+      enabled = $null
+      port = $null
+      updatedAt = $null
+      error = $_.Exception.Message
+    }
+  }
+}
+
+function Get-StableLocalAccessGatewayProcesses {
+  Get-CimInstance Win32_Process |
+    Where-Object {
+      $_.Name -eq "codex-local-access-gateway.exe"
+    } |
+    Select-Object ProcessId, Name, ExecutablePath, CommandLine
 }
 
 function Get-ObjectPropertyValue {
@@ -447,6 +489,7 @@ function Ensure-StableLocalAccessGateway {
     $RepoRoot,
     "-ReportDir",
     $gatewayReportDir,
+    "-AllowConfigEnable",
     "-Quiet"
   )
 
@@ -498,6 +541,7 @@ New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
 if ([string]::IsNullOrWhiteSpace($StopSignalFile)) {
   $StopSignalFile = Join-Path $ReportDir "stop.signal"
 }
+$releaseFallbackEnabled = [bool]$EnableReleaseFallback -and -not [bool]$DisableReleaseFallback
 
 $script:EventLogPath = Join-Path $ReportDir "watchdog-events.jsonl"
 $heartbeatPath = Join-Path $ReportDir "watchdog-heartbeat.json"
@@ -515,7 +559,7 @@ $startInfo = [ordered]@{
   launchCooldownSeconds = $LaunchCooldownSeconds
   desiredInstance = $DesiredInstance
   debugSwitchMode = $DebugSwitchMode
-  releaseFallbackEnabled = -not [bool]$DisableReleaseFallback
+  releaseFallbackEnabled = $releaseFallbackEnabled
   releaseFallbackCooldownSeconds = $ReleaseFallbackCooldownSeconds
   stableLocalAccessGatewayEnabled = -not [bool]$DisableStableLocalAccessGateway
   debugStartupGraceSeconds = $DebugStartupGraceSeconds
@@ -523,8 +567,10 @@ $startInfo = [ordered]@{
   releaseExePath = Get-CockpitReleaseExePath
   stopSignalFile = $StopSignalFile
   trigger = if ($DesiredInstance -eq "Debug") {
-    if ($DebugSwitchMode -eq "PrebuildThenStop") {
+    if ($DebugSwitchMode -eq "PrebuildThenStop" -and $releaseFallbackEnabled) {
       "keep target\debug\cockpit-tools.exe as the active Cockpit app process; if debug exits, start target\release\cockpit-tools.exe as fallback, prebuild debug, then stop fallback only after debug prebuild succeeds"
+    } elseif ($DebugSwitchMode -eq "PrebuildThenStop") {
+      "keep target\debug\cockpit-tools.exe as the active Cockpit app process; launch npm run tauri dev when debug is absent, and only prebuild before stopping an already-running non-debug Cockpit process"
     } else {
       "keep target\debug\cockpit-tools.exe as the active Cockpit app process; launch npm run tauri dev when debug is absent"
     }
@@ -532,8 +578,10 @@ $startInfo = [ordered]@{
     "launch npm run tauri dev only when no cockpit-tools*.exe app process exists"
   }
   stopSemantics = if ($DesiredInstance -eq "Debug") {
-    if ($DebugSwitchMode -eq "PrebuildThenStop") {
+    if ($DebugSwitchMode -eq "PrebuildThenStop" -and $releaseFallbackEnabled) {
       "create stop.signal to stop watchdog; non-debug cockpit-tools app processes are used as fallback and are preserved until debug prebuild succeeds or debug is already running; never kill Codex processes"
+    } elseif ($DebugSwitchMode -eq "PrebuildThenStop") {
+      "create stop.signal to stop watchdog; no release fallback is started unless -EnableReleaseFallback is set; existing non-debug cockpit-tools app processes are preserved until debug prebuild succeeds or debug is already running; never kill Codex processes"
     } else {
       "create stop.signal to stop watchdog; non-debug cockpit-tools app processes may be closed/stopped to switch to debug; never kill Codex processes"
     }
@@ -548,6 +596,8 @@ $lastLaunchAt = $null
 $lastPrebuildAt = $null
 $lastReleaseFallbackAt = $null
 $debugPrebuild = $null
+$pendingDebugLaunchAfterPrebuild = $false
+$pendingDebugLaunchPrebuild = $null
 $debugMissingSince = $null
 $launchCount = 0
 $prebuildCount = 0
@@ -563,8 +613,19 @@ while ($true) {
   $debugProcesses = @($processes | Where-Object { Test-IsDebugCockpitProcess $_ })
   $nonDebugProcesses = @($processes | Where-Object { -not (Test-IsDebugCockpitProcess $_) })
   $tauriDevLaunchers = @(Get-TauriDevLauncherProcesses)
+  $stableGatewayProcesses = @(Get-StableLocalAccessGatewayProcesses)
+  $localAccessConfig = Get-LocalAccessConfigSnapshot
   $activeStreamGuard = Get-ActiveCodexLocalAccessStreamGuard
   $hasActiveCodexStreams = ([int]$activeStreamGuard.activeStreamCount) -gt 0
+  $periodicStableGatewayGuard = $null
+  if (-not $DisableStableLocalAccessGateway -and (
+      $stableGatewayProcesses.Count -eq 0 -or
+      $localAccessConfig.enabled -ne $true
+    )) {
+    $periodicStableGatewayGuard = Ensure-StableLocalAccessGateway -Reason "watchdog_periodic_guard"
+    $stableGatewayProcesses = @(Get-StableLocalAccessGatewayProcesses)
+    $localAccessConfig = Get-LocalAccessConfigSnapshot
+  }
   $completedPrebuild = $null
   if ($debugPrebuild -and $debugPrebuild.process.HasExited) {
     $completedPrebuild = Get-DebugPrebuildSnapshot -Prebuild $debugPrebuild
@@ -578,7 +639,7 @@ while ($true) {
     pid = $PID
     desiredInstance = $DesiredInstance
     debugSwitchMode = $DebugSwitchMode
-    releaseFallbackEnabled = -not [bool]$DisableReleaseFallback
+    releaseFallbackEnabled = $releaseFallbackEnabled
     releaseFallbackCooldownSeconds = $ReleaseFallbackCooldownSeconds
     debugExePath = Get-CockpitDebugExePath
     releaseExePath = Get-CockpitReleaseExePath
@@ -590,6 +651,9 @@ while ($true) {
     runningNonDebugProcesses = $nonDebugProcesses
     tauriDevLauncherCount = $tauriDevLaunchers.Count
     tauriDevLaunchers = $tauriDevLaunchers
+    stableLocalAccessGatewayProcesses = $stableGatewayProcesses
+    localAccessConfig = $localAccessConfig
+    periodicStableLocalAccessGateway = $periodicStableGatewayGuard
     activeCodexStreamGuard = $activeStreamGuard
     launchCount = $launchCount
     prebuildCount = $prebuildCount
@@ -598,6 +662,8 @@ while ($true) {
     lastPrebuildAt = if ($lastPrebuildAt) { $lastPrebuildAt.ToString("o") } else { $null }
     lastReleaseFallbackAt = if ($lastReleaseFallbackAt) { $lastReleaseFallbackAt.ToString("o") } else { $null }
     debugPrebuild = Get-DebugPrebuildSnapshot -Prebuild $debugPrebuild
+    pendingDebugLaunchAfterPrebuild = $pendingDebugLaunchAfterPrebuild
+    pendingDebugLaunchPrebuild = $pendingDebugLaunchPrebuild
     debugMissingSince = if ($debugMissingSince) { $debugMissingSince.ToString("o") } else { $null }
     stopSignalFile = $StopSignalFile
   }
@@ -610,6 +676,8 @@ while ($true) {
   if ($DesiredInstance -eq "Debug") {
     if ($debugProcesses.Count -gt 0) {
       $debugMissingSince = $null
+      $pendingDebugLaunchAfterPrebuild = $false
+      $pendingDebugLaunchPrebuild = $null
     } elseif (-not $debugMissingSince) {
       $debugMissingSince = Get-Date
     }
@@ -619,7 +687,7 @@ while ($true) {
     $usePrebuildSwitch = $DebugSwitchMode -eq "PrebuildThenStop" -and $nonDebugProcesses.Count -gt 0
     $needsReleaseFallback = (
       $DebugSwitchMode -eq "PrebuildThenStop" -and
-      -not [bool]$DisableReleaseFallback -and
+      $releaseFallbackEnabled -and
       $debugProcesses.Count -eq 0 -and
       $nonDebugProcesses.Count -eq 0 -and
       $tauriDevLaunchers.Count -eq 0 -and
@@ -633,6 +701,40 @@ while ($true) {
     )
   } else {
     $needsTauriDev = $processes.Count -eq 0
+  }
+
+  if ($pendingDebugLaunchAfterPrebuild -and $DesiredInstance -eq "Debug") {
+    $needsDebugPrebuild = $false
+    if ($debugProcesses.Count -gt 0) {
+      $pendingDebugLaunchAfterPrebuild = $false
+      $pendingDebugLaunchPrebuild = $null
+    } elseif ($tauriDevLaunchers.Count -eq 0) {
+      if ($nonDebugProcesses.Count -gt 0 -and $hasActiveCodexStreams) {
+        Write-LogLine @{
+          event = "restart_deferred_active_stream"
+          action = "pending_stop_release_and_launch_debug_after_prebuild"
+          activeCodexStreamGuard = $activeStreamGuard
+          runningNonDebugProcessCount = $nonDebugProcesses.Count
+          prebuild = $pendingDebugLaunchPrebuild
+        }
+      } else {
+        if ($nonDebugProcesses.Count -gt 0) {
+          $stopResults = Stop-CockpitProcessesForDebugSwitch -Processes $nonDebugProcesses
+          Write-LogLine @{ event = "pending_non_debug_processes_stopped_after_debug_prebuild"; processes = $stopResults }
+        }
+        try {
+          $launch = Start-CockpitTauriDev
+          $lastLaunchAt = Get-Date
+          $launchCount += 1
+          $pendingDebugLaunchAfterPrebuild = $false
+          $pendingDebugLaunchPrebuild = $null
+          $needsTauriDev = $false
+          Write-LogLine @{ event = "pending_tauri_dev_launched_after_debug_prebuild"; launch = $launch; launchCount = $launchCount }
+        } catch {
+          Write-LogLine @{ event = "pending_tauri_dev_launch_failed_after_debug_prebuild"; message = $_.Exception.Message }
+        }
+      }
+    }
   }
 
   if ($needsReleaseFallback) {
@@ -689,6 +791,8 @@ while ($true) {
     if ($completedPrebuild.exitCode -eq 0) {
       if ($debugProcesses.Count -eq 0) {
         if ($nonDebugProcesses.Count -gt 0 -and $hasActiveCodexStreams) {
+          $pendingDebugLaunchAfterPrebuild = $true
+          $pendingDebugLaunchPrebuild = $completedPrebuild
           Write-LogLine @{
             event = "restart_deferred_active_stream"
             action = "stop_release_and_launch_debug_after_prebuild"

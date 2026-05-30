@@ -1,0 +1,9 @@
+{"reportDir":"D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-005118-debug-self-heal-watchdog","timestamp":"2026-05-31T00:51:20.0685175+08:00","pid":2316,"event":"watchdog_started","repoRoot":"D:\\CODE\\external\\Cockpit-Tools-Local"}
+{"graceSeconds":120,"missingSeconds":0,"launcherCount":4,"timestamp":"2026-05-31T00:51:23.6483844+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"graceSeconds":120,"missingSeconds":8,"launcherCount":4,"timestamp":"2026-05-31T00:51:31.3529682+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"graceSeconds":120,"missingSeconds":16,"launcherCount":4,"timestamp":"2026-05-31T00:51:39.1812096+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"graceSeconds":120,"missingSeconds":23,"launcherCount":5,"timestamp":"2026-05-31T00:51:46.1507251+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"graceSeconds":120,"missingSeconds":30,"launcherCount":4,"timestamp":"2026-05-31T00:51:53.8745842+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"graceSeconds":120,"missingSeconds":39,"launcherCount":4,"timestamp":"2026-05-31T00:52:02.5978355+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"graceSeconds":120,"missingSeconds":47,"launcherCount":4,"timestamp":"2026-05-31T00:52:10.6657612+08:00","event":"waiting_for_existing_tauri_dev_launcher"}
+{"graceSeconds":120,"missingSeconds":55,"launcherCount":4,"timestamp":"2026-05-31T00:52:18.2042891+08:00","event":"waiting_for_existing_tauri_dev_launcher"}

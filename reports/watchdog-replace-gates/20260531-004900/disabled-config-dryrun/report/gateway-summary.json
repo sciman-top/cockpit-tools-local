@@ -1,0 +1,11 @@
+{
+  "status": "not_running",
+  "baseUrl": "http://127.0.0.1:45999/v1",
+  "port": 45999,
+  "health": {
+    "ok": false,
+    "statusCode": null,
+    "error": "The request was canceled due to the configured HttpClient.Timeout of 2 seconds elapsing."
+  },
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\watchdog-replace-gates\\20260531-004900\\disabled-config-dryrun\\report"
+}

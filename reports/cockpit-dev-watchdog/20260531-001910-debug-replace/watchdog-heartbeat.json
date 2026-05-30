@@ -1,0 +1,53 @@
+{
+  "timestamp": "2026-05-31T00:19:37.3342005+08:00",
+  "pid": 21284,
+  "desiredInstance": "Debug",
+  "debugSwitchMode": "PrebuildThenStop",
+  "releaseFallbackEnabled": true,
+  "releaseFallbackCooldownSeconds": 10,
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "releaseExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+  "runningCockpitProcessCount": 1,
+  "runningCockpitProcesses": [
+    {
+      "ProcessId": 22456,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe\" "
+    }
+  ],
+  "runningDebugProcessCount": 0,
+  "runningDebugProcesses": [],
+  "runningNonDebugProcessCount": 1,
+  "runningNonDebugProcesses": [
+    {
+      "ProcessId": 22456,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe\" "
+    }
+  ],
+  "tauriDevLauncherCount": 0,
+  "tauriDevLaunchers": [],
+  "activeCodexStreamGuard": {
+    "activeStreamCount": 0,
+    "activeLeaseIds": [],
+    "auditPaths": [
+      "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl.1",
+      "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl"
+    ],
+    "dataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+    "windowMinutes": 720,
+    "lastEventTimestampMs": 1780157583102,
+    "parseErrorCount": 0
+  },
+  "launchCount": 0,
+  "prebuildCount": 1,
+  "releaseFallbackCount": 1,
+  "lastLaunchAt": null,
+  "lastPrebuildAt": "2026-05-31T00:19:37.3324839+08:00",
+  "lastReleaseFallbackAt": "2026-05-31T00:19:14.3731964+08:00",
+  "debugPrebuild": null,
+  "debugMissingSince": "2026-05-31T00:19:14.3707248+08:00",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-001910-debug-replace\\stop.signal"
+}

@@ -1,0 +1,11 @@
+{
+  "startedAt": "2026-05-31T00:39:18.5699937+08:00",
+  "pid": 8420,
+  "repoRoot": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\watchdog-replace-gates\\20260531-003333\\stable-gateway-check",
+  "dataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+  "configPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access.json",
+  "checkOnly": true,
+  "allowConfigEnable": false,
+  "readyTimeoutSeconds": 30
+}

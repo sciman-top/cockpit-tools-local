@@ -1,0 +1,2 @@
+{"dataRoot":"C:\\Users\\sciman\\.antigravity_cockpit","event":"stable_gateway_probe_started","timestamp":"2026-05-31T00:43:50.8746271+08:00","configPath":"C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access.json","repoRoot":"D:\\CODE\\external\\Cockpit-Tools-Local"}
+{"port":45336,"event":"stable_gateway_blocked","timestamp":"2026-05-31T00:43:50.8863145+08:00","reason":"local access config is disabled; rerun with -AllowConfigEnable if this mutation is intended"}

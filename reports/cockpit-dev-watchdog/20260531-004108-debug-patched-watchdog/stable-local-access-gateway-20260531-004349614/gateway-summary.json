@@ -1,0 +1,7 @@
+{
+  "status": "blocked",
+  "reason": "local access config is disabled; rerun with -AllowConfigEnable if this mutation is intended",
+  "baseUrl": "http://127.0.0.1:45336/v1",
+  "port": 45336,
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-004108-debug-patched-watchdog\\stable-local-access-gateway-20260531-004349614"
+}

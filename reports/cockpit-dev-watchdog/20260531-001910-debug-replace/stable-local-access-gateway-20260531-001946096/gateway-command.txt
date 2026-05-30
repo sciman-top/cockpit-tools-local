@@ -1,0 +1,1 @@
+"D:\CODE\external\Cockpit-Tools-Local\target\debug\codex-local-access-gateway.exe" --serve

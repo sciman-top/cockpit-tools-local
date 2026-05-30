@@ -1,0 +1,19 @@
+{
+  "startedAt": "2026-05-31T00:41:09.3848257+08:00",
+  "pid": 22420,
+  "repoRoot": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-004108-debug-patched-watchdog",
+  "pollIntervalSeconds": 5,
+  "launchCooldownSeconds": 45,
+  "desiredInstance": "Debug",
+  "debugSwitchMode": "PrebuildThenStop",
+  "releaseFallbackEnabled": false,
+  "releaseFallbackCooldownSeconds": 10,
+  "stableLocalAccessGatewayEnabled": true,
+  "debugStartupGraceSeconds": 120,
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "releaseExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-004108-debug-patched-watchdog\\stop.signal",
+  "trigger": "keep target\\debug\\cockpit-tools.exe as the active Cockpit app process; launch npm run tauri dev when debug is absent, and only prebuild before stopping an already-running non-debug Cockpit process",
+  "stopSemantics": "create stop.signal to stop watchdog; no release fallback is started unless -EnableReleaseFallback is set; existing non-debug cockpit-tools app processes are preserved until debug prebuild succeeds or debug is already running; never kill Codex processes"
+}

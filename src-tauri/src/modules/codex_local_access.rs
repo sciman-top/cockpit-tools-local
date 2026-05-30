@@ -16633,6 +16633,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 };
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 1024];
+                let mut header_end = None;
+                let mut expected_len = None;
                 loop {
                     let read = socket
                         .read(&mut chunk)
@@ -16642,7 +16644,26 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                         break;
                     }
                     request.extend_from_slice(&chunk[..read]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    if header_end.is_none() {
+                        if let Some(index) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            let end = index + 4;
+                            let headers = String::from_utf8_lossy(&request[..index]);
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                                .unwrap_or(0);
+                            header_end = Some(end);
+                            expected_len = Some(end + content_length);
+                        }
+                    }
+                    if expected_len.is_some_and(|len| request.len() >= len) {
                         break;
                     }
                 }
@@ -17972,6 +17993,8 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                 };
                 let mut request = Vec::new();
                 let mut chunk = [0u8; 1024];
+                let mut header_end = None;
+                let mut expected_len = None;
                 loop {
                     let read = socket
                         .read(&mut chunk)
@@ -17981,7 +18004,26 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
                         break;
                     }
                     request.extend_from_slice(&chunk[..read]);
-                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    if header_end.is_none() {
+                        if let Some(index) =
+                            request.windows(4).position(|window| window == b"\r\n\r\n")
+                        {
+                            let end = index + 4;
+                            let headers = String::from_utf8_lossy(&request[..index]);
+                            let content_length = headers
+                                .lines()
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                                .unwrap_or(0);
+                            header_end = Some(end);
+                            expected_len = Some(end + content_length);
+                        }
+                    }
+                    if expected_len.is_some_and(|len| request.len() >= len) {
                         break;
                     }
                 }

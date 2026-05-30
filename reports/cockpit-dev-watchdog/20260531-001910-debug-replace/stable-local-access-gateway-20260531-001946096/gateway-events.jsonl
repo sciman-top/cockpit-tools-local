@@ -1,0 +1,3 @@
+{"dataRoot":"C:\\Users\\sciman\\.antigravity_cockpit","timestamp":"2026-05-31T00:19:48.3632776+08:00","event":"stable_gateway_probe_started","configPath":"C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access.json","repoRoot":"D:\\CODE\\external\\Cockpit-Tools-Local"}
+{"baseUrl":"http://127.0.0.1:45335/v1","event":"stable_gateway_process_started","processId":39948,"exe":"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe","timestamp":"2026-05-31T00:19:50.5762603+08:00"}
+{"port":45335,"event":"stable_gateway_ready","processId":39948,"baseUrl":"http://127.0.0.1:45335/v1","timestamp":"2026-05-31T00:19:51.8146784+08:00"}

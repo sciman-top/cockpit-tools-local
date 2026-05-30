@@ -63,6 +63,34 @@ function Get-LocalAccessConfig {
   Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
 }
 
+function Save-LocalAccessConfig {
+  param([Parameter(Mandatory = $true)]$Config)
+
+  $path = Get-LocalAccessConfigPath
+  $parent = Split-Path -Parent $path
+  if ($parent) {
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+  }
+
+  $tempPath = "{0}.{1}.{2}.tmp" -f $path, $PID, ([guid]::NewGuid().ToString("N"))
+  $Config | ConvertTo-Json -Depth 50 | Set-Content -LiteralPath $tempPath -Encoding UTF8
+  Move-Item -LiteralPath $tempPath -Destination $path -Force
+}
+
+function Enable-LocalAccessConfig {
+  param([Parameter(Mandatory = $true)]$Config)
+
+  $path = Get-LocalAccessConfigPath
+  $backupPath = Join-Path $ReportDir "codex_local_access.before-enable.json"
+  Copy-Item -LiteralPath $path -Destination $backupPath -Force
+
+  $Config.enabled = $true
+  $Config.updatedAt = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+  Save-LocalAccessConfig -Config $Config
+  Write-Event @{ event = "stable_gateway_config_enabled"; configPath = $path; backupPath = $backupPath }
+  return Get-LocalAccessConfig
+}
+
 function Resolve-BaseUrl {
   param($Config)
   if ($null -eq $Config -or -not $Config.port) {
@@ -284,17 +312,25 @@ if (-not $baseUrl -or -not $apiKey -or -not $port) {
   exit 2
 }
 
-if ($config.enabled -ne $true -and -not $AllowConfigEnable) {
-  $summary = [ordered]@{
-    status = "blocked"
-    reason = "local access config is disabled; rerun with -AllowConfigEnable if this mutation is intended"
-    baseUrl = $baseUrl
-    port = $port
-    reportDir = $ReportDir
+if ($config.enabled -ne $true) {
+  if (-not $AllowConfigEnable) {
+    $summary = [ordered]@{
+      status = "blocked"
+      reason = "local access config is disabled; rerun with -AllowConfigEnable if this mutation is intended"
+      baseUrl = $baseUrl
+      port = $port
+      reportDir = $ReportDir
+    }
+    Write-JsonFile -Path $summaryPath -Value $summary
+    Write-Event @{ event = "stable_gateway_blocked"; reason = $summary.reason; port = $port }
+    exit 2
   }
-  Write-JsonFile -Path $summaryPath -Value $summary
-  Write-Event @{ event = "stable_gateway_blocked"; reason = $summary.reason; port = $port }
-  exit 2
+
+  $config = Enable-LocalAccessConfig -Config $config
+  $baseUrl = Resolve-BaseUrl $config
+  $apiKey = Resolve-ApiKey $config
+  $port = if ($config -and $config.port) { [int]$config.port } else { $null }
+  $owners = if ($port) { @(Get-PortOwner -Port $port) } else { @() }
 }
 
 $initialHealth = Invoke-LocalAccessHealth -BaseUrl $baseUrl -ApiKey $apiKey -TimeoutSeconds 2
@@ -379,3 +415,4 @@ $summary = [ordered]@{
 }
 Write-JsonFile -Path $summaryPath -Value $summary
 Write-Event @{ event = "stable_gateway_ready"; processId = $process.Id; baseUrl = $baseUrl; port = $port }
+exit 0

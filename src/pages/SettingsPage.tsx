@@ -221,6 +221,23 @@ const generateReportToken = () => {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
 };
 
+const formatAppBuildTime = (buildTime: string) => {
+  const date = new Date(buildTime);
+  if (Number.isNaN(date.getTime())) {
+    return buildTime;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).format(date);
+};
+
 const normalizeAutoSwitchAccountScopeMode = (
   value?: string | null,
 ): AutoSwitchAccountScopeMode =>
@@ -471,6 +488,7 @@ export function SettingsPage() {
   const [autoInstall, setAutoInstall] = useState(false);
   const [autoInstallLoaded, setAutoInstallLoaded] = useState(false);
   const autoInstallTouchedRef = useRef(false);
+  const appBuildTimeLabel = useMemo(() => formatAppBuildTime(__APP_BUILD_TIME__), []);
   const [updateRemindersEnabled, setUpdateRemindersEnabled] = useState(true);
   const [updateRemindersLoaded, setUpdateRemindersLoaded] = useState(false);
   const updateRemindersTouchedRef = useRef(false);
@@ -5258,8 +5276,11 @@ export function SettingsPage() {
               </div>
               <div className="app-info">
                 <h2>{t('settings.about.appName')}</h2>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                <div className="version-meta-row">
                   <div className="version-tag">{appVersion}</div>
+                  <div className="build-time-tag" title={__APP_BUILD_TIME__}>
+                    {t('settings.about.buildTime', '构建时间 {{time}}', { time: appBuildTimeLabel })}
+                  </div>
                   <button 
                     className="btn btn-sm btn-ghost"
                     onClick={handleCheckUpdate}

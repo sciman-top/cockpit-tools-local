@@ -1,0 +1,18 @@
+{
+  "status": "started",
+  "processId": 39948,
+  "exe": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe",
+  "command": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\codex-local-access-gateway.exe\" --serve",
+  "baseUrl": "http://127.0.0.1:45335/v1",
+  "port": 45335,
+  "dataRoot": "C:\\Users\\sciman\\.antigravity_cockpit",
+  "stdoutPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-001910-debug-replace\\stable-local-access-gateway-20260531-001946096\\gateway.stdout.log",
+  "stderrPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-001910-debug-replace\\stable-local-access-gateway-20260531-001946096\\gateway.stderr.log",
+  "pidPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-001910-debug-replace\\stable-local-access-gateway-20260531-001946096\\gateway.pid.txt",
+  "health": {
+    "ok": true,
+    "statusCode": 200,
+    "error": null
+  },
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260531-001910-debug-replace\\stable-local-access-gateway-20260531-001946096"
+}

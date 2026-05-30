@@ -1,0 +1,19 @@
+{
+  "startedAt": "2026-05-31T00:40:22.1635347+08:00",
+  "pid": 14360,
+  "repoRoot": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\watchdog-replace-gates\\20260531-003333\\watchdog-enable-release-fallback-stop-dry",
+  "pollIntervalSeconds": 5,
+  "launchCooldownSeconds": 45,
+  "desiredInstance": "Any",
+  "debugSwitchMode": "PrebuildThenStop",
+  "releaseFallbackEnabled": true,
+  "releaseFallbackCooldownSeconds": 10,
+  "stableLocalAccessGatewayEnabled": true,
+  "debugStartupGraceSeconds": 120,
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "releaseExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+  "stopSignalFile": "reports\\watchdog-replace-gates\\20260531-003333\\watchdog-enable-release-fallback-stop-dry\\stop.signal",
+  "trigger": "launch npm run tauri dev only when no cockpit-tools*.exe app process exists",
+  "stopSemantics": "create stop.signal; do not kill app/codex/cockpit processes"
+}
