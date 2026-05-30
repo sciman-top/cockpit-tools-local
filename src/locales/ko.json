@@ -210,13 +210,6 @@
       "loginSuccess": "로그인 성공",
       "switchAccount": "계정 전환"
     },
-    "topRightAd": {
-      "ariaLabel": "전역 우측 상단 광고 영역",
-      "badge": "광고",
-      "title": "우측 상단 광고 영역",
-      "desc": "이 영역은 모든 페이지의 우측 상단에 고정되어 캠페인 또는 브랜드 광고 노출에 적합합니다.",
-      "action": "자세히 보기"
-    },
     "appName": "Cockpit Tools",
     "collapse": "접기",
     "confirmDelete": "삭제 확인",
@@ -801,8 +794,6 @@
       "github": "GitHub 저장소",
       "alipay": "알리페이",
       "wechatpay": "위챗페이",
-      "sponsor": "후원",
-      "sponsorDesc": "개발 지원",
       "feedback": "피드백",
       "feedbackDesc": "문제/제안사항 보고",
       "supportDev": "개발 지원",

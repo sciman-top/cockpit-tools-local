@@ -110,6 +110,7 @@ import {
   type AccountOrderMove,
 } from "../utils/accountOrder";
 import {
+  buildCodexAccountIdSortMeta,
   CODEX_RECOMMENDED_SORT_BY,
   compareCodexAccountTieBreak,
   compareCodexAccountsBySort,
@@ -5550,15 +5551,9 @@ export function CodexAccountsPage() {
     return map;
   }, [localAccessDisplayAccountIds]);
   const apiServiceHealthSortMeta = useMemo(() => {
-    const map = new Map<string, number>();
-    const effectiveAccountIds = localAccessState?.effectiveAccountIds ?? [];
-    effectiveAccountIds.forEach((accountId) => {
-      if (!localAccessAccountIdSet.has(accountId) || map.has(accountId)) {
-        return;
-      }
-      map.set(accountId, map.size);
+    return buildCodexAccountIdSortMeta(localAccessState?.effectiveAccountIds, {
+      allowedAccountIds: localAccessAccountIdSet,
     });
-    return map;
   }, [localAccessAccountIdSet, localAccessState?.effectiveAccountIds]);
   useEffect(() => {
     if (!localAccessRuntimeActive && !showLocalAccessModal) {

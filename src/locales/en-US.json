@@ -21,13 +21,6 @@
     "detail": "Details",
     "editable": "Editable",
     "preview": "Preview",
-    "topRightAd": {
-      "ariaLabel": "Global top-right ad slot",
-      "badge": "AD",
-      "title": "Top-right ad slot",
-      "desc": "This area is fixed at the top-right across all pages for campaigns or brand ads.",
-      "action": "View details"
-    },
     "shared": {
       "addAccount": "Add Account",
       "columns": {
@@ -945,8 +938,6 @@
       "github": "GitHub",
       "alipay": "Alipay",
       "wechatpay": "WeChat Pay",
-      "sponsor": "Sponsor",
-      "sponsorDesc": "Support development",
       "feedback": "Feedback",
       "feedbackDesc": "Report issues/suggestions",
       "supportDev": "Support Development",

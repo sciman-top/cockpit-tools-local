@@ -210,13 +210,6 @@
       "loginSuccess": "Logowanie powiodło się",
       "switchAccount": "Przełącz konto"
     },
-    "topRightAd": {
-      "ariaLabel": "Globalne miejsce reklamowe w prawym górnym rogu",
-      "badge": "REKLAMA",
-      "title": "Miejsce reklamowe w prawym górnym rogu",
-      "desc": "Ten obszar jest przypięty w prawym górnym rogu na wszystkich stronach i nadaje się do kampanii lub reklam marki.",
-      "action": "Zobacz szczegóły"
-    },
     "appName": "Cockpit Tools",
     "collapse": "Zwiń",
     "confirmDelete": "Potwierdź usunięcie",
@@ -801,8 +794,6 @@
       "github": "Repozytorium GitHub",
       "alipay": "Alipay",
       "wechatpay": "Płatność WeChat",
-      "sponsor": "Sponsor",
-      "sponsorDesc": "Wspieraj rozwój",
       "feedback": "Informacje zwrotne",
       "feedbackDesc": "Zgłoś problemy/sugestie",
       "supportDev": "Wesprzyj rozwój",

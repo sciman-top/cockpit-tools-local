@@ -611,6 +611,35 @@ assert.deepEqual(
 );
 
 assert.deepEqual(
+  Array.from(
+    sort.buildCodexAccountIdSortMeta(
+      ['missing-account', 'used-recovered', 'used-recovered', 'new-reserve'],
+      { allowedAccountIds: new Set(['used-recovered', 'new-reserve']) },
+    ).entries(),
+  ),
+  [
+    ['used-recovered', 0],
+    ['new-reserve', 1],
+  ],
+  'API service health sort meta should ignore missing and duplicate ids without reintroducing saved membership order',
+);
+
+assert.deepEqual(
+  sort
+    .sortCodexLocalAccessAccountsForScheduling(
+      [
+        codexAccount('new-reserve', quota(100, 100), { created_at: 20 }),
+        codexAccount('used-recovered', quota(100, 100), { created_at: 10 }),
+      ],
+      null,
+      sort.buildCodexAccountIdSortMeta(['used-recovered', 'new-reserve']),
+    )
+    .map((account) => account.id),
+  ['used-recovered', 'new-reserve'],
+  'API service member list scheduling should use backend health order when quota ties before falling back to newer account tie-breaks',
+);
+
+assert.deepEqual(
   [
     codexAccount('group-saved-first', quota(60, 60), { created_at: 10 }),
     codexAccount('group-newer', quota(60, 60), { created_at: 20 }),

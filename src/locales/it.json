@@ -210,13 +210,6 @@
       "loginSuccess": "Accesso riuscito",
       "switchAccount": "Cambia account"
     },
-    "topRightAd": {
-      "ariaLabel": "Slot pubblicitario globale in alto a destra",
-      "badge": "ANNUNCIO",
-      "title": "Slot pubblicitario in alto a destra",
-      "desc": "Quest’area è fissata in alto a destra su tutte le pagine per campagne o annunci del brand.",
-      "action": "Vedi dettagli"
-    },
     "appName": "Cockpit Tools",
     "collapse": "Comprimi",
     "confirmDelete": "Conferma eliminazione",
@@ -801,8 +794,6 @@
       "github": "Repository GitHub",
       "alipay": "Alipay",
       "wechatpay": "WeChat paga",
-      "sponsor": "Sponsor",
-      "sponsorDesc": "Sostenere lo sviluppo",
       "feedback": "Feedback",
       "feedbackDesc": "Segnalare problemi/suggerimenti",
       "supportDev": "Supporta lo Sviluppo",

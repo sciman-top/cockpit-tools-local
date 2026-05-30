@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-05-30T18:32:59.2666898+08:00",
+  "pid": 9696,
+  "desiredInstance": "Debug",
+  "debugSwitchMode": "PrebuildThenStop",
+  "releaseFallbackEnabled": true,
+  "releaseFallbackCooldownSeconds": 10,
+  "debugExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\debug\\cockpit-tools.exe",
+  "releaseExePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+  "runningCockpitProcessCount": 1,
+  "runningCockpitProcesses": [
+    {
+      "ProcessId": 1172,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe\" "
+    }
+  ],
+  "runningDebugProcessCount": 0,
+  "runningDebugProcesses": [],
+  "runningNonDebugProcessCount": 1,
+  "runningNonDebugProcesses": [
+    {
+      "ProcessId": 1172,
+      "Name": "cockpit-tools.exe",
+      "ExecutablePath": "D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe",
+      "CommandLine": "\"D:\\CODE\\external\\Cockpit-Tools-Local\\target\\release\\cockpit-tools.exe\" "
+    }
+  ],
+  "tauriDevLauncherCount": 0,
+  "tauriDevLaunchers": [],
+  "launchCount": 2,
+  "prebuildCount": 2,
+  "releaseFallbackCount": 2,
+  "lastLaunchAt": null,
+  "lastPrebuildAt": "2026-05-30T18:32:34.9712165+08:00",
+  "lastReleaseFallbackAt": "2026-05-30T18:32:48.7621026+08:00",
+  "debugPrebuild": null,
+  "debugMissingSince": "2026-05-30T18:32:54.0870987+08:00",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-183132-debug-release-fallback-patched\\stop.signal"
+}

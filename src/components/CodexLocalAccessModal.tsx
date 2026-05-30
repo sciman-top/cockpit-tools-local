@@ -71,6 +71,7 @@ import {
   normalizeSelectedAccountOrder,
 } from '../utils/accountOrder';
 import {
+  buildCodexAccountIdSortMeta,
   sortCodexLocalAccessAccountsForStableDisplay,
   sortCodexLocalAccessAccountsForScheduling,
 } from '../utils/codexAccountSort';
@@ -688,6 +689,13 @@ export function CodexLocalAccessModal({
     () => new Set(serviceAccounts.map((account) => account.id)),
     [serviceAccounts],
   );
+  const serviceAccountHealthSortMeta = useMemo(
+    () =>
+      buildCodexAccountIdSortMeta(state?.effectiveAccountIds, {
+        allowedAccountIds: serviceAccountIdSet,
+      }),
+    [serviceAccountIdSet, state?.effectiveAccountIds],
+  );
   const normalizedInitialSelectedIds = useMemo(
     () => initialSelectedIds.filter((accountId) => serviceAccountIdSet.has(accountId)),
     [initialSelectedIds, serviceAccountIdSet],
@@ -895,6 +903,7 @@ export function CodexLocalAccessModal({
     const sorted = sortCodexLocalAccessAccountsForScheduling(
       serviceAccounts,
       currentAccountId,
+      serviceAccountHealthSortMeta,
     );
     const selectedTags = new Set(tagFilter.map(normalizeTag));
     const selectedGroups = new Set(groupFilter);
@@ -946,7 +955,7 @@ export function CodexLocalAccessModal({
 
       return true;
     });
-  }, [accountHealthById, currentAccountId, filterTypes, groupFilter, groupIdsByAccountId, groupNameByAccountId, query, serviceAccounts, t, tagFilter]);
+  }, [accountHealthById, currentAccountId, filterTypes, groupFilter, groupIdsByAccountId, groupNameByAccountId, query, serviceAccountHealthSortMeta, serviceAccounts, t, tagFilter]);
 
   const visibleSelectableAccounts = useMemo(
     () =>

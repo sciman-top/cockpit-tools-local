@@ -21,13 +21,6 @@
     "detail": "Detail",
     "editable": "Dapat Diedit",
     "preview": "Pratinjau",
-    "topRightAd": {
-      "ariaLabel": "Slot iklan kanan atas global",
-      "badge": "IKLAN",
-      "title": "Slot iklan kanan atas",
-      "desc": "Area ini ditampilkan secara tetap di kanan atas pada semua halaman untuk kampanye atau iklan merek.",
-      "action": "Lihat detail"
-    },
     "shared": {
       "addAccount": "Tambah Akun",
       "columns": {
@@ -847,8 +840,6 @@
       "github": "GitHub",
       "alipay": "Alipay",
       "wechatpay": "WeChat Pay",
-      "sponsor": "Sponsor",
-      "sponsorDesc": "Dukung pengembangan",
       "feedback": "Umpan Balik",
       "feedbackDesc": "Laporkan masalah/saran",
       "supportDev": "Dukung Pengembangan",

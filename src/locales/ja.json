@@ -210,13 +210,6 @@
       "loginSuccess": "ログイン成功",
       "switchAccount": "アカウント切替"
     },
-    "topRightAd": {
-      "ariaLabel": "全ページ共通の右上広告枠",
-      "badge": "広告",
-      "title": "右上広告枠",
-      "desc": "このエリアは全ページの右上に固定表示され、キャンペーン情報やブランド広告の掲載に適しています。",
-      "action": "詳細を見る"
-    },
     "appName": "Cockpit Tools",
     "collapse": "折りたたむ",
     "confirmDelete": "削除を確認",
@@ -801,8 +794,6 @@
       "github": "GitHub リポジトリ",
       "alipay": "アリペイ",
       "wechatpay": "ウィーチャットペイ",
-      "sponsor": "スポンサー",
-      "sponsorDesc": "サポート開発",
       "feedback": "フィードバック",
       "feedbackDesc": "問題点/提案を報告する",
       "supportDev": "開発を支援する",

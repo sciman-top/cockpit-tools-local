@@ -1,0 +1,15 @@
+{
+  "startedAt": "2026-05-30T18:45:04.0602087+08:00",
+  "pid": 8016,
+  "cwd": "D:\\CODE\\external\\Cockpit-Tools-Local",
+  "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File D:\\CODE\\external\\Cockpit-Tools-Local\\scripts\\monitor-live-codex-app-cockpit-acceptance.ps1 -DurationSeconds 1800 -PollIntervalSeconds 2 -AuditPath C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl -AuditSinceTimestampMs 1780137904034 -RequireQuotaFallback -RequireStreamCompletion -RequireCliConfigUntouched -RequireAppStable -RequireApiServiceRuntimeAvailable -RequiredFallbackCycles 1 -RequiredDistinctHealthyAccounts 1 -RequiredCompletedStreams 1 -StopWhenSatisfied -WriteReport -CaptureCliConfigProjectionSummary -ReportDir D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar -CheckpointPath D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar\\monitor-checkpoint.json -ExitCodeFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar\\monitor-exit-code.txt -StopSignalFile D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar\\monitor-stop.signal",
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar",
+  "stdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar\\monitor-stdout.txt",
+  "stderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar\\monitor-stderr.txt",
+  "exitCodeFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar\\monitor-exit-code.txt",
+  "checkpointPath": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar\\monitor-checkpoint.json",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\local-hardened-api-realrun\\20260530-184504-stop-when-satisfied-sidecar\\monitor-stop.signal",
+  "auditPath": "C:\\Users\\sciman\\.antigravity_cockpit\\codex_local_access_audit.jsonl",
+  "auditSinceTimestampMs": 1780137904034,
+  "mode": "StopWhenSatisfied sidecar live monitor; read-only observer"
+}

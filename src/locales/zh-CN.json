@@ -21,13 +21,6 @@
     "detail": "详情",
     "editable": "可编辑",
     "preview": "预览",
-    "topRightAd": {
-      "ariaLabel": "全局右上角广告位",
-      "badge": "广告",
-      "title": "右上角广告位",
-      "desc": "该区域在所有页面右上角固定展示，适合投放活动信息或品牌广告。",
-      "action": "查看详情"
-    },
     "shared": {
       "addAccount": "添加账号",
       "columns": {
@@ -945,8 +938,6 @@
       "github": "开源仓库",
       "alipay": "支付宝",
       "wechatpay": "微信支付",
-      "sponsor": "赞助支持",
-      "sponsorDesc": "支持项目持续开发",
       "feedback": "意见反馈",
       "feedbackDesc": "报告问题或提交建议",
       "supportDev": "支持开发",

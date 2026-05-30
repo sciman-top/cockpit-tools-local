@@ -210,13 +210,6 @@
       "loginSuccess": "登入成功",
       "switchAccount": "切換帳號"
     },
-    "topRightAd": {
-      "ariaLabel": "全域右上角廣告位",
-      "badge": "廣告",
-      "title": "右上角廣告位",
-      "desc": "此區域會固定顯示於所有頁面的右上角，適合投放活動資訊或品牌廣告。",
-      "action": "查看詳情"
-    },
     "appName": "Cockpit Tools",
     "collapse": "收合",
     "confirmDelete": "確認刪除",
@@ -801,8 +794,6 @@
       "github": "開源倉庫",
       "alipay": "支付寶",
       "wechatpay": "微信支付",
-      "sponsor": "贊助支持",
-      "sponsorDesc": "支持項目持續開發",
       "feedback": "意見反饋",
       "feedbackDesc": "回報問題或提交建議",
       "supportDev": "支持開發",

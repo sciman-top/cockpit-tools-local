@@ -210,13 +210,6 @@
       "loginSuccess": "Connexion réussie",
       "switchAccount": "Changer de compte"
     },
-    "topRightAd": {
-      "ariaLabel": "Emplacement publicitaire global en haut à droite",
-      "badge": "PUB",
-      "title": "Emplacement publicitaire en haut à droite",
-      "desc": "Cette zone est fixée en haut à droite sur toutes les pages pour les campagnes ou publicités de marque.",
-      "action": "Voir les détails"
-    },
     "appName": "Cockpit Tools",
     "collapse": "Réduire",
     "confirmDelete": "Confirmer la suppression",
@@ -801,8 +794,6 @@
       "github": "Dépôt GitHub",
       "alipay": "Alipay",
       "wechatpay": "Paiement WeChat",
-      "sponsor": "Soutenir",
-      "sponsorDesc": "Accompagner le développement",
       "feedback": "Retour",
       "feedbackDesc": "Signaler des problèmes/suggestions",
       "supportDev": "Soutenir le développement",

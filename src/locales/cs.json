@@ -210,13 +210,6 @@
       "loginSuccess": "Přihlášení úspěšné",
       "switchAccount": "Přepnout účet"
     },
-    "topRightAd": {
-      "ariaLabel": "Globální reklamní slot vpravo nahoře",
-      "badge": "REKLAMA",
-      "title": "Reklamní slot vpravo nahoře",
-      "desc": "Tato oblast je pevně umístěná vpravo nahoře na všech stránkách pro kampaně nebo brandové reklamy.",
-      "action": "Zobrazit podrobnosti"
-    },
     "appName": "Cockpit Tools",
     "collapse": "Sbalit",
     "confirmDelete": "Potvrdit smazání",
@@ -801,8 +794,6 @@
       "github": "GitHub repozitář",
       "alipay": "Alipay",
       "wechatpay": "WeChat Pay",
-      "sponsor": "Sponzorovat",
-      "sponsorDesc": "Podpora rozvoje",
       "feedback": "Zpětná vazba",
       "feedbackDesc": "Hlásit problémy/návrhy",
       "supportDev": "Podpořit vývoj",

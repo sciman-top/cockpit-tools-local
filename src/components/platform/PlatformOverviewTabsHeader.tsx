@@ -11,7 +11,6 @@ import { QoderIcon } from '../icons/QoderIcon';
 import { WorkbuddyIcon } from '../icons/WorkbuddyIcon';
 import { ZedIcon } from '../icons/ZedIcon';
 import { ManualHelpIconButton } from '../ManualHelpIconButton';
-import { TopCenterPromoBanner } from '../TopCenterPromoBanner';
 import { PlatformId } from '../../types/platform';
 import {
   findGroupByPlatform,
@@ -184,7 +183,6 @@ export function PlatformOverviewTabsHeader({
           </span>
           <ManualHelpIconButton className="platform-header-help" />
         </div>
-        <TopCenterPromoBanner />
         <div className="page-top-strip-right-placeholder" aria-hidden="true" />
       </div>
       <div className="page-tabs-row page-tabs-center page-tabs-row-with-leading">

@@ -210,13 +210,6 @@
       "loginSuccess": "Inicio de sesión exitoso",
       "switchAccount": "Cambiar cuenta"
     },
-    "topRightAd": {
-      "ariaLabel": "Espacio publicitario global en la esquina superior derecha",
-      "badge": "ANUNCIO",
-      "title": "Espacio publicitario superior derecho",
-      "desc": "Esta zona se fija en la esquina superior derecha de todas las páginas para campañas o anuncios de marca.",
-      "action": "Ver detalles"
-    },
     "appName": "Cockpit Tools",
     "collapse": "Contraer",
     "confirmDelete": "Confirmar eliminación",
@@ -801,8 +794,6 @@
       "github": "Depósito GitHub",
       "alipay": "alipay",
       "wechatpay": "Pago WeChat",
-      "sponsor": "Patrocinar",
-      "sponsorDesc": "Apoyar el desarrollo",
       "feedback": "Comentarios",
       "feedbackDesc": "Informar problemas/sugerencias",
       "supportDev": "Apoyar Desarrollo",

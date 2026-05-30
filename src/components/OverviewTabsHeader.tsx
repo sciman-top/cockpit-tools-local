@@ -4,7 +4,6 @@ import { AlarmClock, Fingerprint, Layers, ShieldCheck } from 'lucide-react';
 import { Page } from '../types/navigation';
 import { RobotIcon } from './icons/RobotIcon';
 import { ManualHelpIconButton } from './ManualHelpIconButton';
-import { TopCenterPromoBanner } from './TopCenterPromoBanner';
 import { PlatformId } from '../types/platform';
 import {
   findGroupByPlatform,
@@ -101,7 +100,6 @@ export function OverviewTabsHeader({
           </span>
           <ManualHelpIconButton className="platform-header-help" onClick={onOpenManual} />
         </div>
-        <TopCenterPromoBanner />
         <div className="page-top-strip-right-placeholder" aria-hidden="true" />
       </div>
       <div className="page-tabs-row page-tabs-center page-tabs-row-with-leading">

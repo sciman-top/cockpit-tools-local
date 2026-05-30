@@ -210,13 +210,6 @@
       "loginSuccess": "Anmeldung erfolgreich",
       "switchAccount": "Konto wechseln"
     },
-    "topRightAd": {
-      "ariaLabel": "Globaler Anzeigenplatz oben rechts",
-      "badge": "ANZEIGE",
-      "title": "Anzeigenplatz oben rechts",
-      "desc": "Dieser Bereich ist auf allen Seiten oben rechts fixiert und eignet sich für Kampagnen oder Markenanzeigen.",
-      "action": "Details ansehen"
-    },
     "appName": "Cockpit Tools",
     "collapse": "Einklappen",
     "confirmDelete": "Löschen bestätigen",
@@ -801,8 +794,6 @@
       "github": "GitHub Repository",
       "alipay": "Alipay",
       "wechatpay": "WeChat-Bezahlung",
-      "sponsor": "Sponsoren",
-      "sponsorDesc": "Unterstützen Sie die Entwicklung",
       "feedback": "Rückmeldung",
       "feedbackDesc": "Melden Sie Probleme/Vorschläge",
       "supportDev": "Entwicklung unterstützen",

@@ -261,11 +261,13 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 - [x] 保留 `collection.accountIds` 只表达成员集合，不把成员插入顺序重新引入推荐排序。
 - [x] 从 `CodexLocalAccessState.effectiveAccountIds` 派生只读 `apiServiceHealthSortMeta`，仅在后端返回 effective order 时参与 tie-break。
 - [x] API service 成员在 quota 打平时优先使用后端 health order：曾成功使用并已恢复的账号排在从未使用的新 reserve 账号前面。
+- [x] API 服务成员弹窗复用同一 health order：成员列表只在 quota 打平后按后端 effective order 排序，保存顺序仍只表达成员集合。
 - [x] 没有后端 effective order 时继续使用 quota/reset/created_at 稳定排序，避免把旧成员集合顺序误当成调度偏好。
 
 验收：
 
 - [x] focused comparator test 覆盖“周配额相同、成员顺序中新账号在前，但后端 health order 中老账号恢复在前”的场景。
+- [x] focused scheduling test 覆盖“API 服务成员列表在 quota tie 时优先使用 health order，而不是 created_at 新账号优先”。
 - [x] `scripts/test-codex-account-sort.mjs` 通过。
 - [x] `npm run typecheck` 通过。
 
@@ -277,6 +279,7 @@ AI 推荐默认策略：`sticky_process + fill_first + capped fallback`。
 
 - [x] 保持 `scripts/accept-local-hardened-api-continuity.ps1` 作为最高价值入口。
 - [x] 在 acceptance summary 中同时输出两半结论：同任务是否 `429 -> cooldown -> fallback_blocked(hard_affinity)` 后真实 terminal，还是被本地 `in_band_local_completion` 提前闭合；新请求是否避开 exhausted/cooldown 账号。
+- [x] 明确 `auto-compaction` / `previous_response_id` continuation 仍属于 hard-affinity：旧任务继续使用原账号自然跑完；只有独立新请求才可选择 replacement account。
 - [x] 继续要求 `-AppSafeIsolatedProbe` 和 `-AssertCodexAppProcessStable` 覆盖 App 不断线场景。
 - [x] 对没有真实 429 的 run 标记 `blocked`，不能当作 quota exhaustion continuity 通过。
 

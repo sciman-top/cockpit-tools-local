@@ -210,13 +210,6 @@
       "loginSuccess": "Giriş başarılı",
       "switchAccount": "Hesap Değiştir"
     },
-    "topRightAd": {
-      "ariaLabel": "Genel sağ üst reklam alanı",
-      "badge": "REKLAM",
-      "title": "Sağ üst reklam alanı",
-      "desc": "Bu alan tüm sayfalarda sağ üstte sabitlenir ve kampanya ya da marka reklamları için uygundur.",
-      "action": "Ayrıntıları görüntüle"
-    },
     "appName": "Cockpit Tools",
     "collapse": "Daralt",
     "confirmDelete": "Silmeyi Onayla",
@@ -801,8 +794,6 @@
       "github": "GitHub Deposu",
       "alipay": "Alipay",
       "wechatpay": "WeChat Pay",
-      "sponsor": "Sponsor",
-      "sponsorDesc": "Geliştirmeyi destekleyin",
       "feedback": "Geri bildirim",
       "feedbackDesc": "Sorunları/önerileri bildirin",
       "supportDev": "Geliştirmeyi Destekle",

@@ -1,0 +1,9 @@
+{
+  "startedAt": "2026-05-30T18:33:19.1197425+08:00",
+  "processId": 14620,
+  "reportDir": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-183318-debug-release-fallback-patched2",
+  "stdout": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-183318-debug-release-fallback-patched2\\watchdog.stdout.log",
+  "stderr": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-183318-debug-release-fallback-patched2\\watchdog.stderr.log",
+  "stopSignalFile": "D:\\CODE\\external\\Cockpit-Tools-Local\\reports\\cockpit-dev-watchdog\\20260530-183318-debug-release-fallback-patched2\\stop.signal",
+  "stillRunning": true
+}

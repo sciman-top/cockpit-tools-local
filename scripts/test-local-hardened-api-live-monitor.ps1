@@ -113,10 +113,17 @@ try {
   Assert-Equal $passSummary.audit.quotaMetadataCoverage.hasPlanMetadata $true "expected quota metadata plan coverage"
   Assert-Equal $passSummary.audit.quotaMetadataCoverage.hasResetMetadata $true "expected quota metadata reset coverage"
   Assert-Equal $passSummary.audit.quotaMetadataCoverage.hasLimitMetadata $true "expected quota metadata limit coverage"
+  Assert-Equal $passSummary.audit.auditFieldCoverage.hardAffinityBoundaryCount 1 "expected x-codex-turn-state sticky boundary to count as hard-affinity diagnostics"
+  Assert-Equal $passSummary.audit.auditFieldCoverage.stickyContinuationTrueCount 1 "expected sticky continuation flag coverage"
+  Assert-Equal $passSummary.audit.auditFieldCoverage.continuationDiagnosticReady $true "expected hard-affinity diagnostics to be ready without previous_response_id"
+  Assert-Equal $passSummary.audit.auditFieldCoverage.previousResponseIdHashCount 0 "expected pass fixture to prove turn-state diagnostics do not require previous_response_id"
   Assert-Equal $passSummary.audit.quotaMetadataCoverage.planTypes[0] "plus" "expected plan type sample"
   Assert-Equal (($passSummary.results | Where-Object name -eq "quota_metadata_fields_present").status) "pass" "expected quota metadata coverage result pass"
   Assert-Equal $passSummary.audit.newRequestAvoidanceCount 1 "expected one new request to avoid the exhausted account"
   Assert-Equal $passSummary.audit.newRequestBlockedReuseCount 0 "expected no new request to reuse the exhausted account"
+  Assert-Equal $passSummary.audit.postQuotaReplacementSuccessCount 1 "expected one post-quota replacement success"
+  Assert-Equal (($passSummary.results | Where-Object name -eq "post_quota_replacement_success").status) "pass" "expected post-quota replacement success result pass"
+  Assert-Equal $passSummary.continuitySummary.postQuotaReplacementSuccess.status "pass" "expected post-quota replacement continuity summary pass"
   Assert-Equal $passSummary.temporaryConfig.restored "not_applicable" "expected live monitor not to manage temp config"
   Assert-Equal (($passSummary.results | Where-Object name -eq "audit_lineage_fields_present").status) "pass" "expected lineage field coverage pass"
   $currentTimeline = $passSummary.audit.requestTimelines | Where-Object requestId -eq "turn:sha256:current"
@@ -157,7 +164,7 @@ secret_token = "before-secret"
   )
   $modifier = Start-Job -ScriptBlock {
     param([string]$Path)
-    Start-Sleep -Milliseconds 800
+    Start-Sleep -Milliseconds 2000
     @"
 model = "gpt-5.5"
 model_provider = "direct-oauth"
@@ -172,7 +179,7 @@ secret_token = "after-secret"
 "@ | Set-Content -LiteralPath $Path -Encoding UTF8
   } -ArgumentList $driftConfigPath
   $projectionDriftOutput = & pwsh -NoProfile -ExecutionPolicy Bypass -File $monitorScript `
-    -DurationSeconds 2 `
+    -DurationSeconds 6 `
     -PollIntervalSeconds 1 `
     -CheckpointIntervalSeconds 1 `
     -DataRoot $dataRootProjectionDrift `
@@ -368,8 +375,8 @@ secret_token = "after-secret"
     [ordered]@{ schemaVersion = 1; timestamp = 4; requestId = "turn:sha256:observed"; phase = "classifier"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "failover"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; plan_type = "free"; provider_plan_type = "free"; reset_after_seconds = "604293"; active_limit = "weekly"; rate_limit_reached_type = "weekly"; promo_message_present = "true"; retry_after_ms = "604293000" } },
     [ordered]@{ schemaVersion = 1; timestamp = 5; requestId = "turn:sha256:observed"; phase = "quota_classification"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "classified"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; reset_hint_present = "true"; plan_type = "free"; provider_plan_type = "free"; reset_after_seconds = "604293"; active_limit = "weekly"; rate_limit_reached_type = "weekly"; promo_message_present = "true"; retry_after_ms = "604293000" } },
     [ordered]@{ schemaVersion = 1; timestamp = 6; requestId = "turn:sha256:observed"; phase = "model_cooldown_applied"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "recorded"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; plan_type = "free"; provider_plan_type = "free"; reset_after_seconds = "604293"; active_limit = "weekly"; rate_limit_reached_type = "weekly"; retry_after_ms = "604293000" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:observed"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; plan_type = "free"; provider_plan_type = "free"; reset_after_seconds = "604293"; active_limit = "weekly"; rate_limit_reached_type = "weekly"; retry_after_ms = "604293000"; hard_affinity_inline_retry_wait_limit_ms = "3000" } },
-    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:observed"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "rate_limited"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; retry_after_ms = "604293000"; message = "上游返回使用额度冷却，请稍后重试" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 7; requestId = "turn:sha256:observed"; phase = "fallback_blocked"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "usage_limit_reached"; outcome = "hard_affinity"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; provider_code = "usage_limit_reached"; plan_type = "free"; provider_plan_type = "free"; reset_after_seconds = "604293"; active_limit = "weekly"; rate_limit_reached_type = "weekly"; retry_after_ms = "604293000"; hard_affinity_inline_retry_wait_limit_ms = "3000"; admission_outcome = "terminal_quota_before_stream" } },
+    [ordered]@{ schemaVersion = 1; timestamp = 8; requestId = "turn:sha256:observed"; phase = "final_response"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:old"; status = 429; errorType = "rate_limited"; outcome = "error"; detail = [ordered]@{ gateway_request_id = "gw-observed-1"; turn_lineage_id = "turn:sha256:observed"; retry_after_ms = "604293000"; admission_outcome = "terminal_quota_before_stream"; message = "上游返回使用额度冷却，请稍后重试" } },
     [ordered]@{ schemaVersion = 1; timestamp = 9; requestId = "turn:sha256:next-observed"; phase = "listener"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "-"; outcome = "accepted"; detail = [ordered]@{ gateway_request_id = "gw-observed-2"; turn_lineage_id = "turn:sha256:next-observed" } },
     [ordered]@{ schemaVersion = 1; timestamp = 10; requestId = "turn:sha256:next-observed"; phase = "lease_granted"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; outcome = "active"; detail = [ordered]@{ gateway_request_id = "gw-observed-2"; turn_lineage_id = "turn:sha256:next-observed" } },
     [ordered]@{ schemaVersion = 1; timestamp = 11; requestId = "turn:sha256:next-observed"; phase = "stream_terminal"; route = "/v1/responses"; model = "gpt-5.5"; accountHash = "sha256:healthy"; status = 200; outcome = "ok"; streamState = "finished"; detail = [ordered]@{ gateway_request_id = "gw-observed-2"; turn_lineage_id = "turn:sha256:next-observed"; response_completed_seen = "true" } }
@@ -390,8 +397,11 @@ secret_token = "after-secret"
   $structuredQuotaFromBlockSummary = Convert-JsonOutput $structuredQuotaFromBlockOutput "structured quota terminal from block fixture"
   Assert-Equal $structuredQuotaFromBlockSummary.overall "pass" "expected structured quota terminal from block fixture overall"
   Assert-Equal $structuredQuotaFromBlockSummary.audit.sameTaskAffinityStructuredQuotaTerminal429Count 1 "expected hard-affinity quota terminal to be recovered from block classification"
+  Assert-Equal $structuredQuotaFromBlockSummary.audit.sameTaskAffinityTerminalQuotaBeforeStreamCount 1 "expected terminal quota before stream to be counted"
   Assert-Equal $structuredQuotaFromBlockSummary.audit.sameTaskAffinityUnstructuredTerminal429Count 0 "expected no unstructured terminal 429 after block correlation"
+  Assert-Equal $structuredQuotaFromBlockSummary.audit.postQuotaReplacementSuccessCount 1 "expected independent replacement request to be counted after terminal quota"
   Assert-Equal (($structuredQuotaFromBlockSummary.results | Where-Object name -eq "same_task_affinity_fallback_blocked").status) "pass" "expected same-task quota terminal to pass"
+  Assert-Equal (($structuredQuotaFromBlockSummary.results | Where-Object name -eq "post_quota_replacement_success").status) "pass" "expected post-quota replacement result pass"
   Assert-Equal $structuredQuotaFromBlockSummary.quotaContinuityVerdict.status "terminal_quota" "expected separate quota verdict to distinguish terminal quota from plus-like behavior"
   Assert-Equal $structuredQuotaFromBlockSummary.quotaContinuityVerdict.plusLike $false "expected terminal quota not to be plus-like"
   Assert-Equal $structuredQuotaFromBlockSummary.quotaContinuityVerdict.terminalQuota $true "expected terminal quota flag"
@@ -406,6 +416,7 @@ secret_token = "after-secret"
     -CodexAppProcessNames "__cockpit_no_such_process__" `
     -IncludeExistingAudit `
     -RequireQuotaFallback `
+    -RequirePostQuotaReplacementSuccess `
     -StopWhenSatisfied `
     -Quiet 2>$null
 

@@ -104,7 +104,6 @@ function Test-IsDebugCockpitProcess {
 }
 
 function Get-TauriDevLauncherProcesses {
-  $repoPrefix = ([System.IO.Path]::GetFullPath($RepoRoot)).TrimEnd("\")
   Get-CimInstance Win32_Process |
     Where-Object {
       if ($_.ProcessId -eq $PID) {
@@ -114,17 +113,12 @@ function Get-TauriDevLauncherProcesses {
       if ([string]::IsNullOrWhiteSpace($cmd)) {
         return $false
       }
-      $hasRepo = $cmd.IndexOf($repoPrefix, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
       $isNpmTauriDev = (
         $cmd -match '(?i)npm(\.cmd)?["\s].*run\s+tauri\s+dev' -or
-        $cmd -match '(?i)npm-cli\.js.*run\s+tauri\s+dev' -or
-        $cmd -match '(?i)\brun\s+tauri\s+dev\b'
+        $cmd -match '(?i)npm-cli\.js.*run\s+tauri\s+dev'
       )
-      $hasTauriDev = (
-        $cmd.IndexOf("tauri", [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-        $cmd.IndexOf("dev", [System.StringComparison]::OrdinalIgnoreCase) -ge 0
-      )
-      return $isNpmTauriDev -or ($hasRepo -and $hasTauriDev)
+      $isTauriCliDev = $cmd -match '(?i)(@tauri-apps[\\/]+cli[\\/]+tauri\.js|tauri(\.cmd|\.exe|\.js)?)["\s]+dev\b'
+      return $isNpmTauriDev -or $isTauriCliDev
     } |
     Select-Object ProcessId, Name, ExecutablePath, CommandLine
 }
@@ -450,7 +444,9 @@ while ($true) {
       $DebugSwitchMode -eq "PrebuildThenStop" -and
       -not [bool]$DisableReleaseFallback -and
       $debugProcesses.Count -eq 0 -and
-      $nonDebugProcesses.Count -eq 0
+      $nonDebugProcesses.Count -eq 0 -and
+      $tauriDevLaunchers.Count -eq 0 -and
+      -not $hasPrebuildRunning
     )
     $needsDebugPrebuild = $canStartDebugWork -and $usePrebuildSwitch
     $needsTauriDev = $canStartDebugWork -and -not $usePrebuildSwitch
@@ -577,17 +573,7 @@ while ($true) {
     }
   } elseif ($DesiredInstance -eq "Debug" -and $debugProcesses.Count -eq 0 -and $tauriDevLaunchers.Count -gt 0) {
     $missingSeconds = if ($debugMissingSince) { [int]((Get-Date) - $debugMissingSince).TotalSeconds } else { 0 }
-    if ($DebugSwitchMode -eq "PrebuildThenStop" -and $nonDebugProcesses.Count -gt 0) {
-      $stopResults = Stop-ProcessTrees -Processes $tauriDevLaunchers
-      Write-LogLine @{
-        event = "tauri_dev_launchers_stopped_for_release_fallback_prebuild"
-        missingSeconds = $missingSeconds
-        launcherCount = $tauriDevLaunchers.Count
-        processes = $stopResults
-      }
-      $lastLaunchAt = $null
-      $debugMissingSince = Get-Date
-    } elseif ($missingSeconds -ge $DebugStartupGraceSeconds) {
+    if ($missingSeconds -ge $DebugStartupGraceSeconds) {
       $stopResults = Stop-ProcessTrees -Processes $tauriDevLaunchers
       Write-LogLine @{
         event = "stale_tauri_dev_launchers_stopped"

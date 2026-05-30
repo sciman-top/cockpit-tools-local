@@ -210,13 +210,6 @@
       "loginSuccess": "تسجيل الدخول ناجح",
       "switchAccount": "تبديل الحساب"
     },
-    "topRightAd": {
-      "ariaLabel": "موضع إعلان عام أعلى اليمين",
-      "badge": "إعلان",
-      "title": "موضع الإعلان أعلى اليمين",
-      "desc": "تُثبَّت هذه المنطقة في أعلى يمين جميع الصفحات لعرض الحملات أو إعلانات العلامة التجارية.",
-      "action": "عرض التفاصيل"
-    },
     "appName": "Cockpit Tools",
     "collapse": "طي",
     "confirmDelete": "تأكيد الحذف",
@@ -847,8 +840,6 @@
       "github": "مستودع GitHub",
       "alipay": "أليباي",
       "wechatpay": "وي شات الدفع",
-      "sponsor": "رعاية المشروع",
-      "sponsorDesc": "دعم التنمية",
       "feedback": "تعليقات",
       "feedbackDesc": "الإبلاغ عن المشكلات/الاقتراحات",
       "supportDev": "دعم التطوير",

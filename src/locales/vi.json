@@ -210,13 +210,6 @@
       "loginSuccess": "Đăng nhập thành công",
       "switchAccount": "Chuyển tài khoản"
     },
-    "topRightAd": {
-      "ariaLabel": "Vị trí quảng cáo toàn cục góc trên bên phải",
-      "badge": "QUẢNG CÁO",
-      "title": "Vị trí quảng cáo góc trên bên phải",
-      "desc": "Khu vực này được cố định ở góc trên bên phải trên mọi trang, phù hợp cho chiến dịch hoặc quảng cáo thương hiệu.",
-      "action": "Xem chi tiết"
-    },
     "appName": "Cockpit Tools",
     "collapse": "Thu gọn",
     "confirmDelete": "Xác nhận xóa",
@@ -801,8 +794,6 @@
       "github": "Kho lưu trữ mã nguồn",
       "alipay": "Alipay",
       "wechatpay": "WeChat trả tiền",
-      "sponsor": "Tài trợ dự án",
-      "sponsorDesc": "Hỗ trợ phát triển",
       "feedback": "Phản hồi",
       "feedbackDesc": "Báo cáo vấn đề/đề xuất",
       "supportDev": "Hỗ trợ phát triển",

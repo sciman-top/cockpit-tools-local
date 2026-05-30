@@ -35,6 +35,9 @@ param(
   [int]$RequiredDistinctHealthyAccounts = 1,
   [ValidateRange(1, 100)]
   [int]$RequiredCompletedStreams = 1,
+  [switch]$RequirePostQuotaReplacementSuccess,
+  [ValidateRange(0, 600)]
+  [int]$StopWhenSatisfiedTerminalQuotaGraceSeconds = 0,
   [switch]$RequireApiServiceRuntimeAvailable,
   [string]$StopSignalFile,
   [switch]$StopWhenSatisfied,
@@ -1537,6 +1540,13 @@ function Get-AuditAcceptanceSummary {
           "fallback_blocked"
         }
       }
+      $blockedAdmissionOutcome = Get-AuditDetailValue -Event $event -Name "admission_outcome"
+      $terminal429AdmissionOutcome = if ($terminal429) { Get-AuditDetailValue -Event $terminal429 -Name "admission_outcome" } else { $null }
+      $quotaAdmissionOutcome = if (-not [string]::IsNullOrWhiteSpace($terminal429AdmissionOutcome)) {
+        $terminal429AdmissionOutcome
+      } else {
+        $blockedAdmissionOutcome
+      }
 
       $sameTaskAffinityBlockTransitions += [ordered]@{
         requestId = $event.requestId
@@ -1560,6 +1570,10 @@ function Get-AuditAcceptanceSummary {
         unrecoveredTerminal429 = [bool]($null -ne $terminal429)
         structuredQuotaTerminal429 = [bool]$structuredQuotaTerminal429
         structuredQuotaTerminalSource = $structuredQuotaTerminalSource
+        blockedAdmissionOutcome = $blockedAdmissionOutcome
+        terminal429AdmissionOutcome = $terminal429AdmissionOutcome
+        quotaAdmissionOutcome = $quotaAdmissionOutcome
+        terminalQuotaBeforeStream = [bool]($structuredQuotaTerminal429 -and $quotaAdmissionOutcome -eq "terminal_quota_before_stream")
       }
     }
   }
@@ -1869,6 +1883,13 @@ function Get-AuditAcceptanceSummary {
   }
 
   $accountExhaustionContinuitySummaries = @()
+  $postQuotaReplacementSuccess = @()
+  $sameTaskAffinityBlockedRequestIds = @(
+    $sameTaskAffinityBlockTransitions |
+      ForEach-Object { $_.requestId } |
+      Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne "-" } |
+      Sort-Object -Unique
+  )
   foreach ($accountHash in @($accountExhaustionRecords.Keys | Sort-Object)) {
     $exhaustion = $accountExhaustionRecords[$accountHash]
     $exhaustedAt = [int64]$exhaustion.firstExhaustionTimestamp
@@ -1955,6 +1976,44 @@ function Get-AuditAcceptanceSummary {
       allInFlightCompleted = [bool]($inFlightStreams.Count -gt 0 -and $completedAfterExhaustion.Count -eq $inFlightStreams.Count)
       allFirstChunkInFlightCompleted = [bool]($firstChunkInFlightAtExhaustion.Count -gt 0 -and $completedAfterFirstChunkAtExhaustion.Count -eq $firstChunkInFlightAtExhaustion.Count)
       inFlightStreams = @($inFlightStreams)
+    }
+
+    foreach ($group in @($newRequestGroups.Values | Sort-Object firstTimestamp)) {
+      if ($null -eq $group.firstTimestamp -or [int64]$group.firstTimestamp -le $exhaustedAt) {
+        continue
+      }
+      if ($sameTaskAffinityBlockedRequestIds -contains $group.requestId) {
+        continue
+      }
+      $replacementEvents = @(
+        $parsedEvents | Where-Object {
+          $_.requestId -eq $group.requestId -and
+          (Test-ValidAccountHash $_.accountHash) -and
+          $_.accountHash -ne $accountHash -and
+          (Get-AuditEventTimestampMs $_) -gt $exhaustedAt -and
+          -not (Test-LocalPoolUnavailableEvent $_) -and
+          ($_.status -eq 200 -or (Test-AuditStreamTerminalCompleted $_))
+        } | Sort-Object timestamp
+      )
+      if ($replacementEvents.Count -eq 0) {
+        continue
+      }
+      $firstReplacement = $replacementEvents[0]
+      $postQuotaReplacementSuccess += [ordered]@{
+        exhaustedAccountHash = $accountHash
+        replacementAccountHash = $firstReplacement.accountHash
+        requestId = $group.requestId
+        firstRequestTimestamp = $group.firstTimestamp
+        firstSuccessTimestamp = Get-AuditEventTimestampMs $firstReplacement
+        firstSuccessPhase = $firstReplacement.phase
+        firstSuccessStatus = $firstReplacement.status
+        firstSuccessStreamState = $firstReplacement.streamState
+        firstSuccessGatewayRequestId = Get-AuditGatewayRequestId $firstReplacement
+        exhaustedAt = $exhaustedAt
+        exhaustedRequestId = $exhaustion.firstExhaustionRequestId
+        exhaustedGatewayRequestId = $exhaustion.firstExhaustionGatewayRequestId
+      }
+      break
     }
   }
   $totalInFlightAtAccountExhaustion = [int]($accountExhaustionContinuitySummaries | ForEach-Object { [int]$_.inFlightAtExhaustionCount } | Measure-Object -Sum).Sum
@@ -2267,17 +2326,45 @@ function Get-AuditAcceptanceSummary {
   $eventsWithPreviousResponseIdHash = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditPreviousResponseIdHash $_)) })
   $eventsWithUpstreamResponseIdHash = @($parsedEvents | Where-Object { -not [string]::IsNullOrWhiteSpace((Get-AuditUpstreamResponseIdHash $_)) })
   $eventsWithContinuationFlag = @($parsedEvents | Where-Object { $null -ne (Get-AuditDetailValue -Event $_ -Name "is_continuation") })
+  $eventsWithStickyContinuationFlag = @($parsedEvents | Where-Object { $null -ne (Get-AuditDetailValue -Event $_ -Name "is_sticky_continuation") })
+  $eventsWithStickyContinuationTrue = @($parsedEvents | Where-Object { Get-AuditDetailBool -Event $_ -Name "is_sticky_continuation" })
   $eventsWithAutoCompactFlag = @($parsedEvents | Where-Object { $null -ne (Get-AuditDetailValue -Event $_ -Name "is_auto_compact_candidate") })
   $autoCompactCandidateEvents = @($parsedEvents | Where-Object { Get-AuditDetailBool -Event $_ -Name "is_auto_compact_candidate" })
-  $lineageRequiredFieldNames = @("gateway_request_id", "turn_lineage_id", "previous_response_id_hash", "upstream_response_id_hash", "is_continuation", "is_auto_compact_candidate")
+  $hardAffinityBoundaryEvents = @($parsedEvents | Where-Object {
+    Test-HardAffinityLineageSource (Get-AuditDetailValue -Event $_ -Name "sticky_boundary")
+  })
+  $turnStateLineageEvents = @($parsedEvents | Where-Object {
+    (Get-AuditLineageSource $_) -eq "codex_turn_state" -or
+    ([string]$_.requestId -match '^x-codex-turn-state:sha256:') -or
+    (Get-AuditDetailValue -Event $_ -Name "sticky_boundary") -eq "codex_turn_state"
+  })
+  $previousResponseLineageEvents = @($parsedEvents | Where-Object {
+    (Get-AuditLineageSource $_) -eq "previous_response_id" -or
+    -not [string]::IsNullOrWhiteSpace((Get-AuditPreviousResponseIdHash $_)) -or
+    (Get-AuditDetailValue -Event $_ -Name "sticky_boundary") -eq "previous_response_id"
+  })
+  $lineageRequiredFieldNames = @("gateway_request_id", "turn_lineage_id", "is_continuation", "is_auto_compact_candidate")
   $lineagePresentFieldNames = @()
   if ($eventsWithGatewayRequestId.Count -gt 0) { $lineagePresentFieldNames += "gateway_request_id" }
   if ($eventsWithTurnLineageId.Count -gt 0) { $lineagePresentFieldNames += "turn_lineage_id" }
   if ($eventsWithPreviousResponseIdHash.Count -gt 0) { $lineagePresentFieldNames += "previous_response_id_hash" }
   if ($eventsWithUpstreamResponseIdHash.Count -gt 0) { $lineagePresentFieldNames += "upstream_response_id_hash" }
   if ($eventsWithContinuationFlag.Count -gt 0) { $lineagePresentFieldNames += "is_continuation" }
+  if ($eventsWithStickyContinuationFlag.Count -gt 0) { $lineagePresentFieldNames += "is_sticky_continuation" }
+  if ($hardAffinityBoundaryEvents.Count -gt 0) { $lineagePresentFieldNames += "sticky_boundary" }
   if ($eventsWithAutoCompactFlag.Count -gt 0) { $lineagePresentFieldNames += "is_auto_compact_candidate" }
   $lineageMissingFieldNames = @($lineageRequiredFieldNames | Where-Object { $_ -notin $lineagePresentFieldNames })
+  $hardAffinityDiagnosticReady = (
+    $parsedEvents.Count -gt 0 -and
+    $eventsWithGatewayRequestId.Count -gt 0 -and
+    (
+      $hardAffinityBoundaryEvents.Count -gt 0 -or
+      $eventsWithStickyContinuationTrue.Count -gt 0 -or
+      $hardAffinityContinuityRequestTraceEvents.Count -gt 0
+    )
+  )
+  $previousResponseDiagnosticReady = ($eventsWithPreviousResponseIdHash.Count -gt 0)
+  $responseChainDiagnosticReady = ($eventsWithPreviousResponseIdHash.Count -gt 0 -and $eventsWithUpstreamResponseIdHash.Count -gt 0)
   $completedFallbackTransitions = @($fallbackTransitions | Where-Object { $_.completed -and $_.differentAccount })
   $distinctHealthyAccountHashesAfterFallback = @($healthyAccountHashesAfterFallback | Sort-Object -Unique)
   $completedSameTaskAffinityBlocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.completedLocally })
@@ -2285,6 +2372,8 @@ function Get-AuditAcceptanceSummary {
   $unrecoveredHardAffinityTerminal429Blocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.unrecoveredTerminal429 })
   $structuredHardAffinityTerminal429Blocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.structuredQuotaTerminal429 })
   $unstructuredHardAffinityTerminal429Blocks = @($sameTaskAffinityBlockTransitions | Where-Object { $_.unrecoveredTerminal429 -and -not $_.structuredQuotaTerminal429 })
+  $terminalQuotaBeforeStreamBlocks = @($structuredHardAffinityTerminal429Blocks | Where-Object { $_.terminalQuotaBeforeStream })
+  $terminalQuotaUnknownAdmissionBlocks = @($structuredHardAffinityTerminal429Blocks | Where-Object { [string]::IsNullOrWhiteSpace([string]$_.quotaAdmissionOutcome) })
   $distinctHealthyAccountHashesAfterBlock = @(
     $newRequestAvoidance |
       ForEach-Object { $_.healthyAccountHashes } |
@@ -2332,6 +2421,10 @@ function Get-AuditAcceptanceSummary {
     sameTaskAffinityUnrecoveredTerminal429RequestIds = @($unrecoveredHardAffinityTerminal429Blocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityStructuredQuotaTerminal429Count = $structuredHardAffinityTerminal429Blocks.Count
     sameTaskAffinityStructuredQuotaTerminal429RequestIds = @($structuredHardAffinityTerminal429Blocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sameTaskAffinityTerminalQuotaBeforeStreamCount = $terminalQuotaBeforeStreamBlocks.Count
+    sameTaskAffinityTerminalQuotaBeforeStreamRequestIds = @($terminalQuotaBeforeStreamBlocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    sameTaskAffinityTerminalQuotaUnknownAdmissionCount = $terminalQuotaUnknownAdmissionBlocks.Count
+    sameTaskAffinityTerminalQuotaAdmissionOutcomes = @($structuredHardAffinityTerminal429Blocks | ForEach-Object { $_.quotaAdmissionOutcome } | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) } | Sort-Object -Unique)
     sameTaskAffinityUnstructuredTerminal429Count = $unstructuredHardAffinityTerminal429Blocks.Count
     sameTaskAffinityUnstructuredTerminal429RequestIds = @($unstructuredHardAffinityTerminal429Blocks | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     sameTaskAffinityUnclosedBlockCount = $unclosedHardAffinityBlocks.Count
@@ -2380,6 +2473,10 @@ function Get-AuditAcceptanceSummary {
     newRequestBlockedReuseCount = $newRequestBlockedReuse.Count
     newRequestBlockedReuseRequestIds = @($newRequestBlockedReuse | ForEach-Object { $_.requestId } | Sort-Object -Unique)
     newRequestBlockedReuse = @($newRequestBlockedReuse)
+    postQuotaReplacementSuccessCount = $postQuotaReplacementSuccess.Count
+    postQuotaReplacementSuccessRequestIds = @($postQuotaReplacementSuccess | ForEach-Object { $_.requestId } | Sort-Object -Unique)
+    postQuotaReplacementSuccessAccountHashes = @($postQuotaReplacementSuccess | ForEach-Object { $_.replacementAccountHash } | Sort-Object -Unique)
+    postQuotaReplacementSuccess = @($postQuotaReplacementSuccess)
     retryLimitErrorFound = [bool]$retryLimitErrorCount
     retryLimitErrorCount = $retryLimitErrorCount
     retryLimitTextMatchCount = $retryLimitEvents.Count
@@ -2433,12 +2530,20 @@ function Get-AuditAcceptanceSummary {
       turnLineageIdCount = $eventsWithTurnLineageId.Count
       explicitTurnLineageIdCount = $eventsWithExplicitTurnLineageId.Count
       previousResponseIdHashCount = $eventsWithPreviousResponseIdHash.Count
+      previousResponseLineageCount = $previousResponseLineageEvents.Count
+      turnStateLineageCount = $turnStateLineageEvents.Count
       upstreamResponseIdHashCount = $eventsWithUpstreamResponseIdHash.Count
       continuationFlagCount = $eventsWithContinuationFlag.Count
+      stickyContinuationFlagCount = $eventsWithStickyContinuationFlag.Count
+      stickyContinuationTrueCount = $eventsWithStickyContinuationTrue.Count
+      hardAffinityBoundaryCount = $hardAffinityBoundaryEvents.Count
       autoCompactFlagCount = $eventsWithAutoCompactFlag.Count
       autoCompactCandidateCount = $autoCompactCandidateEvents.Count
       lineageDiagnosticReady = ($parsedEvents.Count -gt 0 -and $eventsWithGatewayRequestId.Count -gt 0 -and $eventsWithTurnLineageId.Count -gt 0)
-      continuationDiagnosticReady = ($eventsWithPreviousResponseIdHash.Count -gt 0 -and $eventsWithUpstreamResponseIdHash.Count -gt 0)
+      hardAffinityDiagnosticReady = $hardAffinityDiagnosticReady
+      previousResponseDiagnosticReady = $previousResponseDiagnosticReady
+      responseChainDiagnosticReady = $responseChainDiagnosticReady
+      continuationDiagnosticReady = ($hardAffinityDiagnosticReady -or $previousResponseDiagnosticReady)
       autoCompactDiagnosticReady = ($eventsWithAutoCompactFlag.Count -gt 0)
       presentFieldNames = @($lineagePresentFieldNames)
       missingFieldNames = @($lineageMissingFieldNames)
@@ -2698,6 +2803,23 @@ function New-AcceptanceResults {
     $results += Set-MonitorStatus $newRequest "blocked" "未观察到后续新请求避开 exhausted/cooldown 账号" $newRequestEvidence
   } else {
     $results += Set-MonitorStatus $newRequest "skipped" "未要求观察新请求避开 exhausted/cooldown 账号" $newRequestEvidence
+  }
+
+  $postQuotaReplacement = New-MonitorResult "post_quota_replacement_success"
+  $postQuotaReplacementEvidence = @{
+    blockedAccountCount = [int]$AuditSummary.blockedAccountCount
+    blockedAccountHashes = @($AuditSummary.blockedAccountHashes)
+    postQuotaReplacementSuccessCount = [int]$AuditSummary.postQuotaReplacementSuccessCount
+    postQuotaReplacementSuccessRequestIds = @($AuditSummary.postQuotaReplacementSuccessRequestIds)
+    postQuotaReplacementSuccessAccountHashes = @($AuditSummary.postQuotaReplacementSuccessAccountHashes)
+    postQuotaReplacementSuccess = @($AuditSummary.postQuotaReplacementSuccess)
+  }
+  if ($AuditSummary.postQuotaReplacementSuccessCount -gt 0) {
+    $results += Set-MonitorStatus $postQuotaReplacement "pass" $null $postQuotaReplacementEvidence
+  } elseif ($RequirePostQuotaReplacementSuccess) {
+    $results += Set-MonitorStatus $postQuotaReplacement "blocked" "未观察到 quota 后独立新请求由 replacement account 成功完成" $postQuotaReplacementEvidence
+  } else {
+    $results += Set-MonitorStatus $postQuotaReplacement "skipped" "未要求观察 quota 后 replacement account 成功接管" $postQuotaReplacementEvidence
   }
 
   $multi = New-MonitorResult "multi_account_fallback_observed"
@@ -3003,11 +3125,13 @@ function New-ContinuitySummary {
     sameTaskAffinityUnclosedBlockCount = [int]$AuditSummary.sameTaskAffinityUnclosedBlockCount
     sameTaskAffinityUnrecoveredTerminal429Count = [int]$AuditSummary.sameTaskAffinityUnrecoveredTerminal429Count
     sameTaskAffinityStructuredQuotaTerminal429Count = [int]$AuditSummary.sameTaskAffinityStructuredQuotaTerminal429Count
+    sameTaskAffinityTerminalQuotaBeforeStreamCount = [int]$AuditSummary.sameTaskAffinityTerminalQuotaBeforeStreamCount
     sameTaskAffinityUnstructuredTerminal429Count = [int]$AuditSummary.sameTaskAffinityUnstructuredTerminal429Count
     sameTaskAffinityFallbackBlockedRequestIds = @($AuditSummary.sameTaskAffinityFallbackBlockedRequestIds)
     sameTaskAffinityTerminalCompletionRequestIds = @($AuditSummary.sameTaskAffinityTerminalCompletionRequestIds)
     sameTaskAffinityUnclosedBlockRequestIds = @($AuditSummary.sameTaskAffinityUnclosedBlockRequestIds)
     sameTaskAffinityUnrecoveredTerminal429RequestIds = @($AuditSummary.sameTaskAffinityUnrecoveredTerminal429RequestIds)
+    sameTaskAffinityTerminalQuotaBeforeStreamRequestIds = @($AuditSummary.sameTaskAffinityTerminalQuotaBeforeStreamRequestIds)
     requiredFallbackCycles = [int]$RequiredFallbackCycles
     retryLimitErrorFound = [bool]$AuditSummary.retryLimitErrorFound
     first429AccountHash = $AuditSummary.first429AccountHash
@@ -3052,6 +3176,24 @@ function New-ContinuitySummary {
     $newRequestReason = "未要求观察新请求避开 exhausted/cooldown 账号"
   }
 
+  $postQuotaReplacementEvidence = [ordered]@{
+    blockedAccountCount = [int]$AuditSummary.blockedAccountCount
+    blockedAccountHashes = @($AuditSummary.blockedAccountHashes)
+    postQuotaReplacementSuccessCount = [int]$AuditSummary.postQuotaReplacementSuccessCount
+    postQuotaReplacementSuccessRequestIds = @($AuditSummary.postQuotaReplacementSuccessRequestIds)
+    postQuotaReplacementSuccessAccountHashes = @($AuditSummary.postQuotaReplacementSuccessAccountHashes)
+    postQuotaReplacementSuccess = @($AuditSummary.postQuotaReplacementSuccess)
+  }
+  $postQuotaReplacementStatus = "skipped"
+  $postQuotaReplacementReason = "未要求观察 quota 后 replacement account 成功接管"
+  if ($AuditSummary.postQuotaReplacementSuccessCount -gt 0) {
+    $postQuotaReplacementStatus = "pass"
+    $postQuotaReplacementReason = $null
+  } elseif ($RequirePostQuotaReplacementSuccess) {
+    $postQuotaReplacementStatus = "blocked"
+    $postQuotaReplacementReason = "未观察到 quota 后独立新请求由 replacement account 成功完成"
+  }
+
   $lineageEvidence = [ordered]@{
     lineageCount = [int]$AuditSummary.lineageCount
     lineageAccountSwitchCount = [int]$AuditSummary.lineageAccountSwitchCount
@@ -3088,6 +3230,11 @@ function New-ContinuitySummary {
       status = $newRequestStatus
       reason = $newRequestReason
       evidence = $newRequestEvidence
+    }
+    postQuotaReplacementSuccess = [ordered]@{
+      status = $postQuotaReplacementStatus
+      reason = $postQuotaReplacementReason
+      evidence = $postQuotaReplacementEvidence
     }
     turnLineageAccountSwitchAbsent = [ordered]@{
       status = $lineageStatus
@@ -3158,6 +3305,8 @@ function New-QuotaContinuityVerdict {
     sameTaskAffinityUnstructuredTerminal429Count = [int]$AuditSummary.sameTaskAffinityUnstructuredTerminal429Count
     newRequestAvoidanceCount = [int]$AuditSummary.newRequestAvoidanceCount
     newRequestBlockedReuseCount = [int]$AuditSummary.newRequestBlockedReuseCount
+    postQuotaReplacementSuccessCount = [int]$AuditSummary.postQuotaReplacementSuccessCount
+    sameTaskAffinityTerminalQuotaBeforeStreamCount = [int]$AuditSummary.sameTaskAffinityTerminalQuotaBeforeStreamCount
     upstreamStreamErrorCount = [int]$AuditSummary.upstreamStreamErrorCount
     quotaMetadataCoverage = $AuditSummary.quotaMetadataCoverage
   }
@@ -3388,6 +3537,8 @@ function New-MonitorReport {
     requireCliConfigUntouched = [bool]$RequireCliConfigUntouched
     requireAppStable = [bool]$RequireAppStable
     requireApiServiceRuntimeAvailable = [bool]$RequireApiServiceRuntimeAvailable
+    requirePostQuotaReplacementSuccess = [bool]$RequirePostQuotaReplacementSuccess
+    stopWhenSatisfiedTerminalQuotaGraceSeconds = [int]$StopWhenSatisfiedTerminalQuotaGraceSeconds
     requiredFallbackCycles = [int]$RequiredFallbackCycles
     requiredDistinctHealthyAccounts = [int]$RequiredDistinctHealthyAccounts
     requiredCompletedStreams = [int]$RequiredCompletedStreams
@@ -3476,6 +3627,7 @@ $appBefore = Get-CodexAppProcessState $CodexAppProcessNames $CodexAppPathInclude
 $script:InitialApiServiceRuntime = Get-ApiServiceRuntimeState
 $terminationReason = "deadline"
 $lastCheckpointAt = [datetime]::MinValue
+$terminalQuotaKeySignalFirstObservedAt = $null
 if ($WriteReport) {
   New-Item -ItemType Directory -Force -Path $ReportDir | Out-Null
   if ([string]::IsNullOrWhiteSpace($CheckpointPath)) {
@@ -3579,7 +3731,17 @@ do {
     }
     $quotaVerdictNow = New-QuotaContinuityVerdict $summaryNow
     $quotaKeySignalObserved = $RequireQuotaFallback -and ($quotaVerdictNow.status -in @("plus_like", "terminal_quota"))
+    if ($quotaKeySignalObserved -and $null -eq $terminalQuotaKeySignalFirstObservedAt) {
+      $terminalQuotaKeySignalFirstObservedAt = Get-Date
+    }
     $quotaSatisfied = (-not $RequireQuotaFallback) -or ($summaryNow.has429 -and $summaryNow.hasUsageLimitReached -and $summaryNow.hasModelCooldownApplied -and ($summaryNow.sameTaskAffinityTerminalCompletionCount + $summaryNow.sameTaskAffinityStructuredQuotaTerminal429Count) -ge $RequiredFallbackCycles -and $summaryNow.sameTaskAffinityLocalCompletionCount -eq 0 -and $summaryNow.newRequestAvoidanceCount -gt 0 -and $summaryNow.distinctHealthyAccountCountAfterBlock -ge $RequiredDistinctHealthyAccounts)
+    $postQuotaReplacementSatisfied = (-not $RequirePostQuotaReplacementSuccess) -or ($summaryNow.postQuotaReplacementSuccessCount -gt 0)
+    $terminalQuotaGraceExpired = [bool](
+      $quotaKeySignalObserved -and
+      $StopWhenSatisfiedTerminalQuotaGraceSeconds -gt 0 -and
+      $null -ne $terminalQuotaKeySignalFirstObservedAt -and
+      ((Get-Date) - $terminalQuotaKeySignalFirstObservedAt).TotalSeconds -ge $StopWhenSatisfiedTerminalQuotaGraceSeconds
+    )
     $streamSatisfied = (-not $RequireStreamCompletion) -or ($summaryNow.completedStreamCount -ge $RequiredCompletedStreams)
     $retrySatisfied = (-not $summaryNow.retryLimitErrorFound)
     $responses503Satisfied = (-not $summaryNow.responsesTransport503PoolUnavailableCount)
@@ -3589,11 +3751,14 @@ do {
     $poolWaitProgressSatisfied = (-not $summaryNow.openPoolWaitCount)
     $stickyResetSatisfied = (-not $summaryNow.stickyResetWaitKilledByLocalTimeoutCount) -and (-not $summaryNow.stickyResetWaitExceededInlineBudgetCount)
     $runtimeSatisfied = (-not $RequireApiServiceRuntimeAvailable) -or (Get-ApiServiceRuntimeState).available
-    if ($quotaKeySignalObserved -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied -and $stickyResetSatisfied -and $runtimeSatisfied) {
+    if ($quotaKeySignalObserved -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied -and $stickyResetSatisfied -and $runtimeSatisfied -and ($postQuotaReplacementSatisfied -or $terminalQuotaGraceExpired -or (-not $RequirePostQuotaReplacementSuccess -and $StopWhenSatisfiedTerminalQuotaGraceSeconds -le 0))) {
       $terminationReason = "stop_when_quota_key_signal"
+      if (-not $postQuotaReplacementSatisfied -and $terminalQuotaGraceExpired) {
+        $terminationReason = "stop_when_quota_key_signal_grace_expired"
+      }
       break
     }
-    if ($quotaSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied -and $stickyResetSatisfied -and $runtimeSatisfied) {
+    if ($quotaSatisfied -and $postQuotaReplacementSatisfied -and $streamSatisfied -and $retrySatisfied -and $responses503Satisfied -and $localCompletionSatisfied -and $failedStreamSatisfied -and $legacySyntheticTerminalSatisfied -and $poolWaitProgressSatisfied -and $stickyResetSatisfied -and $runtimeSatisfied) {
       $terminationReason = "stop_when_satisfied"
       break
     }

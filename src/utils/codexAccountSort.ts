@@ -36,6 +36,20 @@ export interface CodexLocalAccessRefreshSortOptions {
   nowMs?: number;
 }
 
+export function buildCodexAccountIdSortMeta(
+  accountIds: readonly string[] | null | undefined,
+  options: { allowedAccountIds?: ReadonlySet<string> | null } = {},
+): Map<string, number> {
+  const map = new Map<string, number>();
+  const allowedAccountIds = options.allowedAccountIds ?? null;
+  for (const accountId of accountIds ?? []) {
+    if (!accountId || map.has(accountId)) continue;
+    if (allowedAccountIds && !allowedAccountIds.has(accountId)) continue;
+    map.set(accountId, map.size);
+  }
+  return map;
+}
+
 function toNullableSortNumber(value: number | null | undefined): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
@@ -426,12 +440,20 @@ export function compareCodexAccountsByLocalAccessSchedule(
   left: CodexAccount,
   right: CodexAccount,
   currentAccountId: string | null | undefined,
+  apiServiceHealthSortMeta?: Map<string, number>,
 ): number {
   const currentDiff = compareCodexCurrentAccountFirst(left, right, currentAccountId);
   if (currentDiff !== 0) return currentDiff;
 
   const quotaDiff = compareCodexAccountsByQuotaAvailability(left, right, "desc");
   if (quotaDiff !== 0) return quotaDiff;
+
+  const healthSortDiff = compareCodexAccountsByOptionalSortMeta(
+    left,
+    right,
+    apiServiceHealthSortMeta,
+  );
+  if (healthSortDiff !== 0) return healthSortDiff;
 
   const resetDiff = compareNullableSortNumber(
     getCodexEarliestQuotaResetSortValue(left),
@@ -446,9 +468,15 @@ export function compareCodexAccountsByLocalAccessSchedule(
 export function sortCodexLocalAccessAccountsForScheduling(
   accounts: CodexAccount[],
   currentAccountId: string | null | undefined,
+  apiServiceHealthSortMeta?: Map<string, number>,
 ): CodexAccount[] {
   return [...accounts].sort((left, right) =>
-    compareCodexAccountsByLocalAccessSchedule(left, right, currentAccountId),
+    compareCodexAccountsByLocalAccessSchedule(
+      left,
+      right,
+      currentAccountId,
+      apiServiceHealthSortMeta,
+    ),
   );
 }
 
@@ -456,6 +484,7 @@ export function sortCodexLocalAccessAccountIdsForScheduling(
   accountIds: string[],
   accounts: CodexAccount[],
   currentAccountId: string | null | undefined,
+  apiServiceHealthSortMeta?: Map<string, number>,
 ): string[] {
   const accountById = new Map(accounts.map((account) => [account.id, account]));
   const knownAccounts = accountIds
@@ -464,6 +493,7 @@ export function sortCodexLocalAccessAccountIdsForScheduling(
   const sortedKnownIds = sortCodexLocalAccessAccountsForScheduling(
     knownAccounts,
     currentAccountId,
+    apiServiceHealthSortMeta,
   ).map((account) => account.id);
   const missingIds = accountIds
     .filter((accountId) => !accountById.has(accountId))

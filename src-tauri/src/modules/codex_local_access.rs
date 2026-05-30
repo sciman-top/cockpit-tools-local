@@ -31,7 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
-use std::time::{Instant, SystemTime};
+use std::time::Instant;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Mutex as TokioMutex};
@@ -715,24 +715,61 @@ fn load_concurrency_audit_rollup(now: i64, audit_window_ms: i64) -> ConcurrencyA
     rollup
 }
 
-fn recent_audit_activity() -> (bool, Option<u128>) {
-    let Ok(path) = local_access_audit_file_path() else {
+fn is_continuity_relevant_audit_event(event: &CodexLocalAccessAuditEvent) -> bool {
+    event.route.starts_with("/v1/")
+}
+
+fn latest_continuity_audit_timestamp_from_path(path: &Path, now: i64) -> Option<i64> {
+    if !path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(path).ok()?;
+    for line in content.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = serde_json::from_str::<CodexLocalAccessAuditEvent>(line) else {
+            continue;
+        };
+        if !is_continuity_relevant_audit_event(&event) {
+            continue;
+        }
+        if event.timestamp > now.saturating_add(60_000) {
+            continue;
+        }
+        return Some(event.timestamp);
+    }
+
+    None
+}
+
+fn recent_audit_activity_from_path(path: &Path, now: i64) -> (bool, Option<u128>) {
+    let rotated_path = audit_rotated_path(path);
+    let latest_timestamp = [
+        latest_continuity_audit_timestamp_from_path(&rotated_path, now),
+        latest_continuity_audit_timestamp_from_path(path, now),
+    ]
+    .into_iter()
+    .flatten()
+    .max();
+
+    let Some(timestamp) = latest_timestamp else {
         return (false, None);
     };
-    let Ok(metadata) = std::fs::metadata(path) else {
-        return (false, None);
-    };
-    let Ok(modified_at) = metadata.modified() else {
-        return (false, None);
-    };
-    let Ok(age) = SystemTime::now().duration_since(modified_at) else {
-        return (true, Some(0));
-    };
-    let age_ms = age.as_millis();
+    let age_ms = now.saturating_sub(timestamp).max(0) as u128;
     (
         age_ms <= RUNTIME_PROJECTION_RECENT_AUDIT_GRACE_MS,
         Some(age_ms),
     )
+}
+
+fn recent_audit_activity() -> (bool, Option<u128>) {
+    let Ok(path) = local_access_audit_file_path() else {
+        return (false, None);
+    };
+    recent_audit_activity_from_path(&path, now_ms())
 }
 
 fn collect_runtime_projection_continuity_risk() -> RuntimeProjectionContinuityRisk {
@@ -21540,6 +21577,48 @@ data: {"type":"response.completed","response":{"id":"resp_123","usage":{"input_t
             false,
             &no_risk,
         ));
+    }
+
+    #[test]
+    fn runtime_projection_audit_events_do_not_extend_recent_audit_window() {
+        let root = std::env::temp_dir().join(format!(
+            "cockpit-local-access-runtime-projection-audit-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let path = root.join(super::CODEX_LOCAL_ACCESS_AUDIT_FILE);
+        let now = 1_000_000_i64;
+        let grace = super::RUNTIME_PROJECTION_RECENT_AUDIT_GRACE_MS as i64;
+
+        let old_api_event = test_concurrency_audit_event(now - grace - 1, "final_response", None);
+        append_audit_event_to_path(&path, &old_api_event, usize::MAX)
+            .expect("old API audit event should write");
+
+        let mut projection_event =
+            test_concurrency_audit_event(now - 1, "runtime_mode_transition", None);
+        projection_event.request_id = "runtime_projection".to_string();
+        projection_event.route = "runtime_projection".to_string();
+        projection_event.model = "-".to_string();
+        projection_event.account_hash = "-".to_string();
+        projection_event.outcome = Some("blocked".to_string());
+        append_audit_event_to_path(&path, &projection_event, usize::MAX)
+            .expect("runtime projection audit event should write");
+
+        let (recent, age_ms) = super::recent_audit_activity_from_path(&path, now);
+        assert!(!recent);
+        assert_eq!(
+            age_ms,
+            Some(super::RUNTIME_PROJECTION_RECENT_AUDIT_GRACE_MS + 1)
+        );
+
+        let recent_api_event = test_concurrency_audit_event(now - 1_000, "listener", None);
+        append_audit_event_to_path(&path, &recent_api_event, usize::MAX)
+            .expect("recent API audit event should write");
+        let (recent, age_ms) = super::recent_audit_activity_from_path(&path, now);
+        assert!(recent);
+        assert_eq!(age_ms, Some(1_000));
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]
