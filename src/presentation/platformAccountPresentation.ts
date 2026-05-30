@@ -3,7 +3,7 @@ import type {
   CodebuddyAccount,
   CodebuddyOfficialQuotaResource,
 } from "../types/codebuddy";
-import type { CodexAccount } from "../types/codex";
+import type { CodexAccount, CodexQuota } from "../types/codex";
 import type { GitHubCopilotAccount } from "../types/githubCopilot";
 import type { WindsurfAccount } from "../types/windsurf";
 import type { CursorAccount } from "../types/cursor";
@@ -40,6 +40,7 @@ import {
   getCodexQuotaClass,
   getCodexQuotaWindows,
   isCodexApiKeyAccount,
+  isCodexExplicitFreePlanType,
   isCodexNewApiAccount,
 } from "../types/codex";
 import {
@@ -625,6 +626,33 @@ function buildCodexNewApiQuotaItems(
   ];
 }
 
+function resolveCodexQuotaForPresentation(
+  account: CodexAccount,
+): CodexQuota | undefined {
+  const quota = account.quota;
+  if (!quota || !isCodexExplicitFreePlanType(account.plan_type)) {
+    return quota;
+  }
+
+  const raw = toJsonRecord(quota.raw_data);
+  if (
+    readString(raw, "source") !== "codex_local_access_health_registry" ||
+    !readBoolean(raw, "reset_unknown")
+  ) {
+    return quota;
+  }
+
+  return {
+    ...quota,
+    hourly_percentage: 100,
+    hourly_reset_time: undefined,
+    hourly_window_minutes: undefined,
+    hourly_window_present: false,
+    weekly_percentage: 0,
+    weekly_window_present: true,
+  };
+}
+
 export function buildCodexAccountPresentation(
   account: CodexAccount,
   t: Translate,
@@ -636,7 +664,8 @@ export function buildCodexAccountPresentation(
       : isCodexNewApiAccount(account)
         ? "Codex API"
       : account.email;
-  const effectiveQuota = getCodexEffectiveQuotaPercentages(account.quota);
+  const presentationQuota = resolveCodexQuotaForPresentation(account);
+  const effectiveQuota = getCodexEffectiveQuotaPercentages(presentationQuota);
   const weeklyBlocksHourlyHint = effectiveQuota.weeklyBlocksHourly
     ? t("codex.quota.weeklyBlocksHourly", "周额度为 0，5小时额度已不可用")
     : "";
@@ -646,7 +675,7 @@ export function buildCodexAccountPresentation(
   const quotaItems: UnifiedQuotaMetric[] =
     newApiQuotaItems.length > 0
       ? newApiQuotaItems
-      : getCodexQuotaWindows(account.quota).map((window) => ({
+      : getCodexQuotaWindows(presentationQuota).map((window) => ({
           key: window.id,
           label: window.label,
           percentage: window.percentage,
@@ -672,7 +701,7 @@ export function buildCodexAccountPresentation(
               ? weeklyBlocksHourlyHint
               : undefined,
         }));
-  const codeReviewMetric = getCodexCodeReviewQuotaMetric(account.quota);
+  const codeReviewMetric = getCodexCodeReviewQuotaMetric(presentationQuota);
   if (codeReviewMetric) {
     quotaItems.push({
       key: "code_review",

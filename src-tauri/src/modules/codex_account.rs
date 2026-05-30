@@ -79,6 +79,7 @@ const CODEX_MODEL_PROVIDERS_FILE_NAME: &str = "codex_model_providers.json";
 const CODEX_LOCAL_ACCESS_FILE_NAME: &str = "codex_local_access.json";
 const CODEX_STARTUP_QUOTA_SCAN_DELAY_SECONDS: u64 = 5;
 const CODEX_STARTUP_QUOTA_SCAN_MIN_INTERVAL_MS: i64 = 10 * 60 * 1000;
+const CODEX_WEEK_WINDOW_MINUTES: i64 = 7 * 24 * 60;
 const WEEKLY_WINDOW_MINUTES_THRESHOLD: i64 = 6 * 24 * 60;
 const CODEX_PROACTIVE_REFRESH_INTERVAL_SECONDS: i64 = 8 * 24 * 60 * 60;
 const CODEX_AUTH_PROJECTION_FILE_NAME: &str = ".cockpit_codex_auth.json";
@@ -2189,6 +2190,12 @@ fn effective_codex_quota_remaining(quota: &CodexQuota) -> Option<i32> {
     percentages.into_iter().min()
 }
 
+fn is_explicit_free_codex_plan(plan_type: Option<&str>) -> bool {
+    plan_type
+        .map(|value| value.trim().eq_ignore_ascii_case("free"))
+        .unwrap_or(false)
+}
+
 fn future_quota_reset_from_account(account: &CodexAccount, now_seconds: i64) -> Option<i64> {
     let mut quota = account.quota.clone()?;
     quota.normalize_window_slots();
@@ -2444,6 +2451,7 @@ fn repair_account_quota_from_local_access_health(
         .unwrap_or_else(|| chrono::Utc::now().timestamp_millis())
         .div_euclid(1000);
 
+    let is_free_plan = is_explicit_free_codex_plan(account.plan_type.as_deref());
     account.quota = Some(if let Some(reset_at) = reset_at {
         CodexQuota {
             hourly_percentage: 100,
@@ -2452,11 +2460,12 @@ fn repair_account_quota_from_local_access_health(
             hourly_window_present: Some(false),
             weekly_percentage: 0,
             weekly_reset_time: Some(reset_at),
-            weekly_window_minutes: Some(WEEKLY_WINDOW_MINUTES_THRESHOLD),
+            weekly_window_minutes: Some(CODEX_WEEK_WINDOW_MINUTES),
             weekly_window_present: Some(true),
             raw_data: Some(serde_json::json!({
                 "source": "codex_local_access_health_registry",
                 "error_type": error_code,
+                "plan_type": account.plan_type,
                 "health_updated_at_ms": health.updated_at,
                 "previous_remaining_percentage": current_remaining,
             })),
@@ -2464,17 +2473,26 @@ fn repair_account_quota_from_local_access_health(
     } else {
         let previous = account.quota.as_ref();
         CodexQuota {
-            hourly_percentage: 0,
+            hourly_percentage: if is_free_plan { 100 } else { 0 },
             hourly_reset_time: None,
-            hourly_window_minutes: previous.and_then(|quota| quota.hourly_window_minutes),
-            hourly_window_present: Some(true),
+            hourly_window_minutes: if is_free_plan {
+                None
+            } else {
+                previous.and_then(|quota| quota.hourly_window_minutes)
+            },
+            hourly_window_present: Some(!is_free_plan),
             weekly_percentage: 0,
             weekly_reset_time: None,
-            weekly_window_minutes: previous.and_then(|quota| quota.weekly_window_minutes),
+            weekly_window_minutes: if is_free_plan {
+                Some(CODEX_WEEK_WINDOW_MINUTES)
+            } else {
+                previous.and_then(|quota| quota.weekly_window_minutes)
+            },
             weekly_window_present: Some(true),
             raw_data: Some(serde_json::json!({
                 "source": "codex_local_access_health_registry",
                 "error_type": error_code,
+                "plan_type": account.plan_type,
                 "health_updated_at_ms": health.updated_at,
                 "previous_remaining_percentage": current_remaining,
                 "reset_unknown": true,
@@ -4879,7 +4897,8 @@ mod tests {
         CODEX_AUTO_COMPACT_DEFAULT_LIMIT, CODEX_CONTEXT_WINDOW_1M_VALUE,
         CODEX_LOCAL_ACCESS_FILE_NAME, CODEX_LOCAL_ACCESS_HEALTH_FILE,
         CODEX_MODEL_PROVIDERS_FILE_NAME, CODEX_PROFILE_SHARED_COCKPIT_API,
-        CODEX_RUNTIME_MODEL_PROVIDER_ID, WEEKLY_WINDOW_MINUTES_THRESHOLD,
+        CODEX_RUNTIME_MODEL_PROVIDER_ID, CODEX_WEEK_WINDOW_MINUTES,
+        WEEKLY_WINDOW_MINUTES_THRESHOLD,
     };
     use crate::models::codex::{
         CodexAccount, CodexApiProviderMode, CodexAuthMode, CodexQuota, CodexTokens,
@@ -4980,10 +4999,7 @@ mod tests {
         assert_eq!(quota.hourly_window_present, Some(false));
         assert_eq!(quota.weekly_percentage, 0);
         assert_eq!(quota.weekly_reset_time, Some(reset_at));
-        assert_eq!(
-            quota.weekly_window_minutes,
-            Some(WEEKLY_WINDOW_MINUTES_THRESHOLD)
-        );
+        assert_eq!(quota.weekly_window_minutes, Some(CODEX_WEEK_WINDOW_MINUTES));
         assert_eq!(
             account
                 .quota_error
@@ -5045,6 +5061,7 @@ mod tests {
                 raw_data: None,
             },
         );
+        account.plan_type = Some("free".to_string());
         let mut registry = CodexLocalAccessHealthRegistry::default();
         registry.accounts.insert(
             account.id.clone(),
@@ -5065,10 +5082,13 @@ mod tests {
         ));
 
         let quota = account.quota.expect("quota should be repaired");
-        assert_eq!(quota.hourly_percentage, 0);
+        assert_eq!(quota.hourly_percentage, 100);
         assert_eq!(quota.weekly_percentage, 0);
         assert_eq!(quota.hourly_reset_time, None);
         assert_eq!(quota.weekly_reset_time, None);
+        assert_eq!(quota.hourly_window_present, Some(false));
+        assert_eq!(quota.weekly_window_present, Some(true));
+        assert_eq!(quota.weekly_window_minutes, Some(10_080));
         assert_eq!(
             quota
                 .raw_data
@@ -5313,6 +5333,7 @@ mod tests {
         let quota = repaired.quota.expect("repaired account should have quota");
         assert_eq!(quota.weekly_percentage, 0);
         assert_eq!(quota.weekly_reset_time, Some(reset_at));
+        assert_eq!(quota.weekly_window_minutes, Some(10_080));
         assert_eq!(quota.hourly_window_present, Some(false));
     }
 

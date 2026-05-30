@@ -19,6 +19,7 @@ await esbuild.build({
     codexLocalAccessUiState: path.join(root, 'src/utils/codexLocalAccessUiState.ts'),
     codexLocalAccessHealth: path.join(root, 'src/utils/codexLocalAccessHealth.ts'),
     codexTypes: path.join(root, 'src/types/codex.ts'),
+    platformPresentation: path.join(root, 'src/presentation/platformAccountPresentation.ts'),
   },
   outdir,
   bundle: true,
@@ -35,6 +36,7 @@ const sort = await import(pathToFileURL(path.join(outdir, 'codexAccountSort.mjs'
 const localAccessUiState = await import(pathToFileURL(path.join(outdir, 'codexLocalAccessUiState.mjs')).href);
 const localAccessHealth = await import(pathToFileURL(path.join(outdir, 'codexLocalAccessHealth.mjs')).href);
 const codexTypes = await import(pathToFileURL(path.join(outdir, 'codexTypes.mjs')).href);
+const platformPresentation = await import(pathToFileURL(path.join(outdir, 'platformPresentation.mjs')).href);
 
 function codexAccount(id, quota, extra = {}) {
   return {
@@ -61,6 +63,15 @@ function quota(hourly, weekly, extra = {}) {
   };
 }
 
+function translate(_key, optionsOrDefault, maybeOptions) {
+  const options = typeof optionsOrDefault === 'object' ? optionsOrDefault : maybeOptions;
+  if (typeof options?.defaultValue === 'string') return options.defaultValue;
+  if (typeof optionsOrDefault === 'string') return optionsOrDefault;
+  if (typeof options?.count === 'number') return String(options.count);
+  if (typeof options?.value === 'string') return options.value;
+  return '';
+}
+
 assert.deepEqual(
   accountOrder.normalizeAccountOrder(['pool-member'], ['candidate-a', 'pool-member', 'candidate-b']),
   ['pool-member', 'candidate-a', 'candidate-b'],
@@ -75,6 +86,36 @@ assert.deepEqual(
   ['pool-member'],
   'API service member persistence must not append every available candidate account',
 );
+
+assert.equal(
+  codexTypes.getCodexQuotaWindowLabel(6 * 24 * 60, 'weekly'),
+  'Weekly',
+  'Weekly quota labels should not render API-service 6d threshold snapshots as a custom 6d window',
+);
+
+{
+  const presentation = platformPresentation.buildCodexAccountPresentation(
+    codexAccount(
+      'free-health-reset-unknown',
+      quota(0, 0, {
+        hourly_window_minutes: 300,
+        weekly_window_minutes: 10080,
+        raw_data: {
+          source: 'codex_local_access_health_registry',
+          reset_unknown: true,
+        },
+      }),
+      { plan_type: 'free' },
+    ),
+    translate,
+  );
+
+  assert.deepEqual(
+    presentation.quotaItems.map((item) => item.label),
+    ['Weekly'],
+    'Free reset-unknown health snapshots should collapse to the actual weekly quota row',
+  );
+}
 
 const exhaustedWeeklyButRecentlyUsed = codexAccount(
   'exhausted-weekly',

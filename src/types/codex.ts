@@ -1103,6 +1103,13 @@ export function getCodexQuotaWindowLabel(
     return weeks <= 1 ? "Weekly" : `${weeks} Week`;
   }
 
+  if (
+    fallback === "weekly" &&
+    safeMinutes >= CODEX_WEEKLY_WINDOW_MINUTES_THRESHOLD
+  ) {
+    return "Weekly";
+  }
+
   if (safeMinutes >= DAY_MINUTES - 1) {
     return `${Math.ceil(safeMinutes / DAY_MINUTES)}d`;
   }
