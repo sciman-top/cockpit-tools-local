@@ -133,6 +133,14 @@ interface CodexLocalAccessModalProps {
 type StatsRangeKey = 'daily' | 'weekly' | 'monthly';
 type CopyableField = 'apiPortUrl' | 'baseUrl' | 'apiKey' | 'modelId';
 type LocalAccessAccountIssueIcon = 'alert' | 'clock' | 'info' | 'pause';
+type ConcurrencyDiagnosisTone = 'neutral' | 'warning' | 'danger';
+
+interface ConcurrencyDiagnosisView {
+  tone: ConcurrencyDiagnosisTone;
+  text: string;
+  recommendation?: string;
+  recommendedPreset?: CodexLocalApiSafetyPresetId;
+}
 
 interface LocalAccessAccountIssueMeta {
   badge: string;
@@ -507,7 +515,7 @@ export function CodexLocalAccessModal({
       },
     ];
   }, [concurrencyDiagnostics, t]);
-  const concurrencyDiagnosis = useMemo(() => {
+  const concurrencyDiagnosis = useMemo<ConcurrencyDiagnosisView | null>(() => {
     if (!concurrencyDiagnostics) return null;
     if (concurrencyDiagnostics.auditLoadError) {
       return {
@@ -516,6 +524,24 @@ export function CodexLocalAccessModal({
           error: concurrencyDiagnostics.auditLoadError,
           defaultValue: '审计日志读取降级：{{error}}',
         }),
+      };
+    }
+    if (
+      concurrencyDiagnostics.recentLocalBackpressureCount > 0 &&
+      concurrencyDiagnostics.maxConcurrentRequests === 1 &&
+      concurrencyDiagnostics.minRequestIntervalSeconds >= 60
+    ) {
+      return {
+        tone: 'warning',
+        text: t(
+          'codex.localAccess.diagnostics.hintMaximumSafetyBackpressure',
+          '当前更像是最高安全 preset 触发本地排队；这会保护上游，但会让多任务启动显著变慢。',
+        ),
+        recommendation: t(
+          'codex.localAccess.diagnostics.recommendBalanced',
+          'AI 推荐：切换到自用均衡，仍保持 1 并发，但把启动间隔降到 20s；先减少本地排队，不直接拉高并发。',
+        ),
+        recommendedPreset: 'balanced_self_use',
       };
     }
     if (
@@ -2011,6 +2037,26 @@ export function CodexLocalAccessModal({
                     <Info size={14} />
                     <span>{concurrencyDiagnosis.text}</span>
                   </div>
+                  {concurrencyDiagnosis.recommendation && (
+                    <div className="codex-local-access-diagnostics-recommendation">
+                      <span>{concurrencyDiagnosis.recommendation}</span>
+                      {concurrencyDiagnosis.recommendedPreset && (
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() =>
+                            void handleApplySafetyPreset(
+                              concurrencyDiagnosis.recommendedPreset as CodexLocalApiSafetyPresetId,
+                            )
+                          }
+                          disabled={!collection || actionBusy}
+                        >
+                          <ShieldCheck size={14} />
+                          {t('codex.localAccess.diagnostics.applyRecommendation', '应用推荐')}
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div className="codex-local-access-diagnostics-meta">
                     <span>
                       {t('codex.localAccess.diagnostics.capacity', '剩余容量')}:{' '}

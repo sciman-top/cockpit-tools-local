@@ -973,6 +973,13 @@ fn write_api_provider_to_config_toml(
         }
     }
 
+    preserve_projectable_model_provider_sections(
+        &mut doc,
+        (provider_config.mode == CodexApiProviderMode::Custom)
+            .then(|| provider_config.provider_id.as_deref())
+            .flatten(),
+    )?;
+
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 config.toml 目录失败: {}", e))?;
     }
@@ -1017,6 +1024,91 @@ fn write_profile_provider_projection(
         None => {
             let _ = profile.remove(CODEX_CONFIG_OPENAI_BASE_URL_KEY);
         }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+fn has_test_accounts_data_dir_override() -> bool {
+    TEST_CODEX_ACCOUNTS_DATA_DIR_OVERRIDE.with(|value| value.borrow().is_some())
+        || std::env::var("COCKPIT_TOOLS_TEST_DATA_DIR").is_ok()
+}
+
+fn stored_provider_config_from_model_provider(
+    provider: StoredCodexModelProvider,
+) -> Option<ApiProviderConfig> {
+    let provider_id = provider.id?.trim().to_string();
+    if provider_id.is_empty() || provider_id == CODEX_OPENAI_PROVIDER_ID {
+        return None;
+    }
+    let base_url = normalize_api_base_url(provider.base_url.as_deref())?;
+    let provider_name = normalize_api_provider_name(provider.name.as_deref())
+        .or_else(|| derive_provider_name_from_base_url(&base_url))
+        .unwrap_or_else(|| provider_id.clone());
+
+    Some(ApiProviderConfig {
+        mode: CodexApiProviderMode::Custom,
+        base_url: Some(base_url),
+        provider_id: Some(provider_id),
+        provider_name: Some(provider_name),
+    })
+}
+
+fn load_saved_model_provider_configs() -> Vec<ApiProviderConfig> {
+    #[cfg(test)]
+    if !has_test_accounts_data_dir_override() {
+        return Vec::new();
+    }
+
+    let path = get_codex_accounts_data_dir().join(CODEX_MODEL_PROVIDERS_FILE_NAME);
+    let Ok(content) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let Ok(providers) = serde_json::from_str::<Vec<StoredCodexModelProvider>>(&content) else {
+        return Vec::new();
+    };
+
+    providers
+        .into_iter()
+        .filter_map(stored_provider_config_from_model_provider)
+        .collect()
+}
+
+fn load_local_access_provider_config() -> Option<ApiProviderConfig> {
+    #[cfg(test)]
+    if !has_test_accounts_data_dir_override() {
+        return None;
+    }
+
+    let path = get_codex_accounts_data_dir().join(CODEX_LOCAL_ACCESS_FILE_NAME);
+    let content = fs::read_to_string(path).ok()?;
+    let collection = serde_json::from_str::<StoredLocalAccessConfig>(&content).ok()?;
+    let port = collection.port.filter(|port| *port > 0)?;
+
+    Some(ApiProviderConfig {
+        mode: CodexApiProviderMode::Custom,
+        base_url: Some(format!("http://127.0.0.1:{}/v1", port)),
+        provider_id: Some(CODEX_RUNTIME_MODEL_PROVIDER_ID.to_string()),
+        provider_name: Some("Cockpit API Service".to_string()),
+    })
+}
+
+fn preserve_projectable_model_provider_sections(
+    doc: &mut Document,
+    protected_provider_id: Option<&str>,
+) -> Result<(), String> {
+    let mut seen = HashSet::new();
+    for provider_config in load_saved_model_provider_configs()
+        .into_iter()
+        .chain(load_local_access_provider_config())
+    {
+        let Some(provider_id) = provider_config.provider_id.as_deref() else {
+            continue;
+        };
+        if Some(provider_id) == protected_provider_id || !seen.insert(provider_id.to_string()) {
+            continue;
+        }
+        write_model_provider_section(doc, &provider_config)?;
     }
     Ok(())
 }
@@ -1127,6 +1219,7 @@ fn write_api_key_provider_to_config_toml(
     doc[CODEX_CONFIG_OPENAI_BASE_URL_KEY] = value(base_url);
     doc[CODEX_CONFIG_FORCED_LOGIN_METHOD_KEY] = value("api");
     remove_managed_api_key_model_providers_from_doc(&mut doc);
+    preserve_projectable_model_provider_sections(&mut doc, None)?;
 
     if let Some(parent) = config_path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("创建 config.toml 目录失败: {}", e))?;
@@ -4784,7 +4877,8 @@ mod tests {
         write_quick_config_to_config_toml, ApiProviderConfig, CodexAccountIndex,
         CodexAccountSummary, CodexAuthFile, CodexAuthTokens, LocalCodexOAuthSnapshot,
         CODEX_AUTO_COMPACT_DEFAULT_LIMIT, CODEX_CONTEXT_WINDOW_1M_VALUE,
-        CODEX_LOCAL_ACCESS_HEALTH_FILE, CODEX_PROFILE_SHARED_COCKPIT_API,
+        CODEX_LOCAL_ACCESS_FILE_NAME, CODEX_LOCAL_ACCESS_HEALTH_FILE,
+        CODEX_MODEL_PROVIDERS_FILE_NAME, CODEX_PROFILE_SHARED_COCKPIT_API,
         CODEX_RUNTIME_MODEL_PROVIDER_ID, WEEKLY_WINDOW_MINUTES_THRESHOLD,
     };
     use crate::models::codex::{
@@ -6220,6 +6314,10 @@ mod tests {
         fn codex_home(&self) -> std::path::PathBuf {
             self.home_dir.join(".codex")
         }
+
+        fn accounts_data_dir(&self) -> std::path::PathBuf {
+            self.home_dir.join(".antigravity_cockpit")
+        }
     }
 
     impl Drop for TestEnvGuard {
@@ -6811,6 +6909,104 @@ supports_websockets = false
         assert!(content.contains("[model_providers.cmp_stale_remote]"));
 
         fs::remove_dir_all(&base_dir).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn config_toml_preserves_saved_and_local_access_providers_for_resume() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-config-preserve-resume-providers-test");
+        fs::write(
+            guard
+                .accounts_data_dir()
+                .join(CODEX_MODEL_PROVIDERS_FILE_NAME),
+            serde_json::json!([
+                {
+                    "id": "cmp_1778165666417_1",
+                    "name": "35.213.82.91",
+                    "baseUrl": "http://35.213.82.91:8003/v1",
+                    "apiKeys": []
+                },
+                {
+                    "id": "cmp_1778246510288_1",
+                    "name": "RightCode",
+                    "baseUrl": "https://right.codes/codex/v1",
+                    "apiKeys": []
+                }
+            ])
+            .to_string(),
+        )
+        .expect("write saved providers");
+        fs::write(
+            guard.accounts_data_dir().join(CODEX_LOCAL_ACCESS_FILE_NAME),
+            serde_json::json!({
+                "enabled": true,
+                "port": 45336,
+                "apiKey": "agt_test",
+                "accountIds": ["acc-a"],
+                "createdAt": 1,
+                "updatedAt": 2
+            })
+            .to_string(),
+        )
+        .expect("write local access config");
+
+        let provider_config = resolve_api_provider_config(
+            None,
+            Some(CodexApiProviderMode::OpenaiBuiltin),
+            None,
+            None,
+        )
+        .expect("resolve provider config");
+        write_api_provider_to_config_toml(&guard.codex_home(), &provider_config)
+            .expect("write config");
+
+        let content =
+            fs::read_to_string(guard.codex_home().join("config.toml")).expect("read config");
+        assert!(content.contains("model_provider = \"openai\""));
+        assert!(content.contains("[model_providers.cmp_1778165666417_1]"));
+        assert!(content.contains("base_url = \"http://35.213.82.91:8003/v1\""));
+        assert!(content.contains("[model_providers.cmp_1778246510288_1]"));
+        assert!(content.contains("base_url = \"https://right.codes/codex/v1\""));
+        assert!(content.contains("[model_providers.codex_local_access]"));
+        assert!(content.contains("base_url = \"http://127.0.0.1:45336/v1\""));
+    }
+
+    #[test]
+    fn api_key_config_toml_preserves_saved_provider_sections_after_official_switch() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+        let guard = TestEnvGuard::new("codex-api-key-preserve-provider-sections-test");
+        fs::write(
+            guard
+                .accounts_data_dir()
+                .join(CODEX_MODEL_PROVIDERS_FILE_NAME),
+            serde_json::json!([
+                {
+                    "id": "cmp_1778165666417_1",
+                    "name": "35.213.82.91",
+                    "baseUrl": "http://35.213.82.91:8003/v1",
+                    "apiKeys": []
+                }
+            ])
+            .to_string(),
+        )
+        .expect("write saved providers");
+        let provider_config = resolve_api_provider_config(
+            Some("https://api.openai.com/v1/"),
+            Some(CodexApiProviderMode::OpenaiBuiltin),
+            None,
+            None,
+        )
+        .expect("resolve provider config");
+
+        write_api_key_provider_to_config_toml(&guard.codex_home(), &provider_config)
+            .expect("write config");
+
+        let content =
+            fs::read_to_string(guard.codex_home().join("config.toml")).expect("read config");
+        assert!(content.contains("model_provider = \"openai\""));
+        assert!(content.contains("openai_base_url = \"https://api.openai.com/v1\""));
+        assert!(content.contains("[model_providers.cmp_1778165666417_1]"));
+        assert!(content.contains("base_url = \"http://35.213.82.91:8003/v1\""));
     }
 
     #[test]

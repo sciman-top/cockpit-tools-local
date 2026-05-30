@@ -723,6 +723,31 @@
   flex: 0 0 auto;
 }
 
+.codex-local-access-diagnostics-recommendation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 11px;
+  border-radius: 12px;
+  border: 1px solid rgba(37, 99, 235, 0.16);
+  background: rgba(255, 255, 255, 0.55);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.codex-local-access-diagnostics-recommendation > span {
+  min-width: 0;
+}
+
+.codex-local-access-diagnostics-recommendation .btn {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .codex-local-access-diagnostics-meta {
   flex-wrap: wrap;
   gap: 8px 14px;
@@ -2097,6 +2122,11 @@
 }
 
 [data-theme="dark"] .codex-local-access-diagnostics-metric {
+  background: rgba(15, 23, 42, 0.48);
+  border-color: rgba(148, 163, 184, 0.16);
+}
+
+[data-theme="dark"] .codex-local-access-diagnostics-recommendation {
   background: rgba(15, 23, 42, 0.48);
   border-color: rgba(148, 163, 184, 0.16);
 }
